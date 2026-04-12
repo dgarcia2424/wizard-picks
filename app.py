@@ -1488,16 +1488,51 @@ with tab_performance:
         st.markdown("## 📊 2026 Season Performance Dashboard")
         st.caption("All completed games · Updated nightly")
 
+        # ── Signal filter buttons ─────────────────────────────────────────────
+        if "perf_filter" not in st.session_state:
+            st.session_state.perf_filter = "all"
+
+        _fb1, _fb2, _fb3, _fb_spacer = st.columns([1, 1, 1, 3])
+        if _fb1.button("All Signals",   use_container_width=True, key="pf_all"):
+            st.session_state.perf_filter = "all"
+        if _fb2.button("★★ Strong",     use_container_width=True, key="pf_strong"):
+            st.session_state.perf_filter = "strong"
+        if _fb3.button("★ Lean",        use_container_width=True, key="pf_lean"):
+            st.session_state.perf_filter = "lean"
+
+        _pf = st.session_state.perf_filter
+
+        # Apply filter to create _bt_view — used for all metrics & charts below
         if _has_bt and not _bt_bets.empty:
-            _w  = int(_bt_bets["bet_win"].sum())
-            _l  = len(_bt_bets) - _w
-            _roi = (_w * (100/110) - _l) / len(_bt_bets) * 100
+            if _pf == "strong":
+                _bt_view = _bt_bets[_bt_bets["signal"].str.contains(r"\*\*", na=False)].copy()
+                _pf_label = "★★ Strong signals only"
+            elif _pf == "lean":
+                _bt_view = _bt_bets[
+                    _bt_bets["signal"].str.contains(r"\*", na=False) &
+                    ~_bt_bets["signal"].str.contains(r"\*\*", na=False)
+                ].copy()
+                _pf_label = "★ Lean signals only"
+            else:
+                _bt_view = _bt_bets.copy()
+                _pf_label = "All signals"
+            st.caption(f"Showing: **{_pf_label}**  ·  {len(_bt_view)} bets")
+        else:
+            _bt_view = pd.DataFrame()
+            _pf_label = "All signals"
+
+        st.divider()
+
+        if _has_bt and not _bt_view.empty:
+            _w  = int(_bt_view["bet_win"].sum())
+            _l  = len(_bt_view) - _w
+            _roi = (_w * (100/110) - _l) / len(_bt_view) * 100
             _h1, _h2, _h3, _h4 = st.columns(4)
             _h1.metric("RL Record",  f"{_w}–{_l}")
-            _h2.metric("Win Rate",   f"{_w/len(_bt_bets):.1%}")
+            _h2.metric("Win Rate",   f"{_w/len(_bt_view):.1%}")
             _h3.metric("ROI (−110)", f"{_roi:+.1f}%",
                        delta="vs 52.4% break-even", delta_color="normal" if _roi > 0 else "inverse")
-            _h4.metric("Total Bets", len(_bt_bets))
+            _h4.metric("Total Bets", len(_bt_view))
 
         st.divider()
 
@@ -1516,10 +1551,10 @@ with tab_performance:
         # SUB-TAB 1 — RUN LINE
         # ══════════════════════════════════════════════════════════════════════
         with _ptabs[0]:
-            if not _has_bt or _bt_bets.empty:
+            if not _has_bt or _bt_view.empty:
                 st.info("No run-line bet data yet.")
             else:
-                _rl = _bt_bets.copy()
+                _rl = _bt_view.copy()
                 _rl["unit_pl"]  = _rl["bet_win"].apply(lambda x: 100/110 if x == 1 else -1.0)
                 _rl["cum_pl"]   = _rl["unit_pl"].cumsum()
                 _rl["cum_bets"] = range(1, len(_rl) + 1)
@@ -1587,10 +1622,10 @@ with tab_performance:
         # SUB-TAB 2 — MONEYLINE
         # ══════════════════════════════════════════════════════════════════════
         with _ptabs[1]:
-            if not _has_bt or _bt_bets.empty or "home_score" not in _bt.columns:
+            if not _has_bt or _bt_view.empty or "home_score" not in _bt.columns:
                 st.info("Score data needed for moneyline tracking.")
             else:
-                _ml = _bt_bets.copy()
+                _ml = _bt_view.copy()
                 _ml = _ml[_ml["home_score"].notna() & _ml["away_score"].notna()]
                 if _ml.empty:
                     st.info("No completed score data yet.")
@@ -1626,7 +1661,7 @@ with tab_performance:
                     _comp_df = pd.DataFrame({
                         "Bet Type": ["Run Line (−1.5/+1.5)", "Moneyline (derived)"],
                         "Win Rate": [
-                            _bt_bets["bet_win"].mean() * 100,
+                            _bt_view["bet_win"].mean() * 100,
                             _ml_wr * 100,
                         ],
                         "Color": [_GREEN, _BLUE],
