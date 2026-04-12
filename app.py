@@ -118,6 +118,38 @@ st.markdown("""
 
 /* Tracker date buttons */
 div[data-testid="column"] button { font-size:.8rem !important; }
+
+/* ─── Hover tooltips ──────────────────────────────────── */
+.tip {
+    border-bottom: 1px dotted #6b7280;
+    cursor: help;
+    position: relative;
+    display: inline-block;
+}
+.tip::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: 135%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #111827;
+    color: #e5e7eb;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    max-width: 280px;
+    width: max-content;
+    white-space: normal;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+    z-index: 9999;
+    border: 1px solid #374151;
+    box-shadow: 0 4px 16px rgba(0,0,0,.5);
+    text-align: left;
+}
+.tip:hover::after { opacity: 1; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -234,6 +266,21 @@ def load_tracker() -> pd.DataFrame:
 
 
 # ── Card helpers ──────────────────────────────────────────────────────────────
+
+def _tip(term: str, definition: str) -> str:
+    """Wrap a term in a hover tooltip span."""
+    # Escape quotes in definition for HTML attribute safety
+    defn = definition.replace('"', "&quot;")
+    return f'<span class="tip" data-tip="{defn}">{term}</span>'
+
+# Pre-built tooltip snippets for common terms
+T_XWOBA  = _tip("xwOBA", "Expected Weighted On-Base Average — pitcher quality metric. Lower = better. Elite: <0.280 | Avg: ~0.318 | Poor: >0.350")
+T_ML     = _tip("ML",    "Moneyline — bet on this team to win the game outright. No spread involved.")
+T_RL     = _tip("RL",    "Run Line — baseball's point spread. Standard is ±1.5 runs.")
+T_OU     = _tip("O/U",   "Over/Under — bet on whether total runs scored is above or below the listed number.")
+T_EDGE   = _tip("edge",  "How much better our model's probability is vs. what the market odds imply. Higher = more value.")
+T_IMPLIED= _tip("Market implied", "The win probability baked into the current betting odds.")
+T_CONF   = _tip("Model confidence", "Probability our model assigns to this bet winning, based on 50,000 simulated games.")
 
 def _safe_float(v, default=0.0):
     try:
@@ -366,9 +413,9 @@ def render_card(r: dict, n: int, tier: str):
     if market_odds is not None:
         implied = abs(float(market_odds)) / (abs(float(market_odds)) + 100) if float(market_odds) < 0 \
                   else 100 / (float(market_odds) + 100)
-        conf_detail = (f"Market implied: {implied:.0%}  ·  Your edge: {edge:+.1f}%")
+        conf_detail = (f"{T_IMPLIED}: {implied:.0%}  ·  Your {T_EDGE}: {edge:+.1f}%")
     else:
-        conf_detail = f"Breakeven at -110: 52.4%  ·  Model edge: {edge:+.1f}%"
+        conf_detail = f"Breakeven at -110: 52.4%  ·  Model {T_EDGE}: {edge:+.1f}%"
 
     # Predicted score
     hm = r.get("home_runs_mean")
@@ -392,13 +439,12 @@ def render_card(r: dict, n: int, tier: str):
     if bt and vt:
         diff   = _safe_float(bt) - _safe_float(vt)
         ou_dir = "OVER" if diff > 0 else "UNDER"
-        # If there's an explicit signal, make it a clear action
         if total_sig:
-            score_total = (f"Total: {_safe_float(bt):.1f} runs  ·  Market O/U: {vt}"
+            score_total = (f"Total: {_safe_float(bt):.1f} runs  ·  Market {T_OU}: {vt}"
                            f"  →  <b style='color:#fef08a'>Also play: {total_sig}</b>")
         else:
             score_total = (f"Total: {_safe_float(bt):.1f} runs  "
-                           f"(Market O/U: {vt}  ·  model leans {ou_dir})")
+                           f"(Market {T_OU}: {vt}  ·  model leans {ou_dir})")
     elif bt:
         score_total = f"Expected total: {_safe_float(bt):.1f} runs"
     else:
@@ -421,8 +467,8 @@ def render_card(r: dict, n: int, tier: str):
     # SP flags
     hf = f" [{r['home_sp_flag']}]" if r.get("home_sp_flag") not in ("NORMAL","UNKNOWN","","None",None) else ""
     af = f" [{r['away_sp_flag']}]" if r.get("away_sp_flag") not in ("NORMAL","UNKNOWN","","None",None) else ""
-    sp_str = (f"{home} SP: {r.get('home_sp','').title()}{hf} xwOBA {_safe_float(r.get('home_sp_xwoba')):.3f}  "
-              f"|  {away} SP: {r.get('away_sp','').title()}{af} xwOBA {_safe_float(r.get('away_sp_xwoba')):.3f}")
+    sp_str = (f"{home} SP: {r.get('home_sp','').title()}{hf} {T_XWOBA} {_safe_float(r.get('home_sp_xwoba')):.3f}  "
+              f"|  {away} SP: {r.get('away_sp','').title()}{af} {T_XWOBA} {_safe_float(r.get('away_sp_xwoba')):.3f}")
 
     score_range_html = f'<div class="score-range">{score_range}</div>' if score_range else ""
     score_total_html = f'<div class="score-total">{score_total}</div>' if score_total else ""
@@ -440,11 +486,6 @@ def render_card(r: dict, n: int, tier: str):
   </div>
 
   <div class="conf-wrap">
-    <div class="conf-label">Model confidence</div>
-    <div class="conf-row">
-      <div class="conf-bar"><div class="{fill_cls}" style="width:{conf_pct}%"></div></div>
-      <div class="conf-pct">{conf_pct}%</div>
-    </div>
     <div class="conf-detail">{conf_detail}</div>
   </div>
 
