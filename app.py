@@ -128,23 +128,28 @@ USE_SUPABASE = _supabase() is not None
 def load_card(date_str: str) -> list[dict]:
     """Load picks — Supabase if hosted, local run_card() if local."""
     if USE_SUPABASE:
+        # Hosted mode: read from Supabase only
         client = _supabase()
-        resp = client.table("wizard_daily_card").select("*").eq("game_date", date_str).execute()
-        if resp.data:
-            rows = []
-            for row in resp.data:
-                r = row.get("data", {}) or {}
-                # Ensure top-level fields are present
-                for col in ["game","home_team","away_team","rl_signal","total_signal",
-                            "blended_rl","mc_rl","xgb_rl","mc_total","blended_total",
-                            "vegas_total","vegas_ml_home","home_sp","away_sp",
-                            "home_sp_xwoba","away_sp_xwoba","home_sp_flag","away_sp_flag",
-                            "temp_f","lineup_confirmed"]:
-                    if col not in r:
-                        r[col] = row.get(col)
-                rows.append(r)
-            return rows
-    # Local fallback
+        try:
+            resp = client.table("wizard_daily_card").select("*").eq("game_date", date_str).execute()
+        except Exception as e:
+            st.error(f"Supabase error: {e}")
+            return []
+        if not resp.data:
+            return []  # No data yet — show "pipeline hasn't run" message
+        rows = []
+        for row in resp.data:
+            r = row.get("data", {}) or {}
+            for col in ["game","home_team","away_team","rl_signal","total_signal",
+                        "blended_rl","mc_rl","xgb_rl","mc_total","blended_total",
+                        "vegas_total","vegas_ml_home","home_sp","away_sp",
+                        "home_sp_xwoba","away_sp_xwoba","home_sp_flag","away_sp_flag",
+                        "temp_f","lineup_confirmed"]:
+                if col not in r:
+                    r[col] = row.get(col)
+            rows.append(r)
+        return rows
+    # Local dev fallback
     try:
         from run_today import run_card
         return run_card(date_str)
