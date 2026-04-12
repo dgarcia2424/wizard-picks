@@ -1445,6 +1445,7 @@ with tab_performance:
                 marker_color=_colors,
                 text=[r["Win %"] for r in _season_rows],
                 textposition="outside",
+                textfont=dict(color="#ffffff", size=14, family="Arial Black"),
             ))
             _fig_multi.add_hline(y=0.5245, line_dash="dash",
                                   line_color="#f59e0b",
