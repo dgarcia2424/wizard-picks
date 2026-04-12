@@ -480,6 +480,8 @@ def predict_game(
     verbose: bool = True,
     home_team_stats: pd.Series | None = None,   # row from team_stats_2026
     away_team_stats: pd.Series | None = None,
+    home_lineup_wrc: float | None = None,   # today's lineup wRC+ (100 = league avg)
+    away_lineup_wrc: float | None = None,
 ) -> dict:
     """
     Full prediction pipeline for one game.
@@ -537,6 +539,15 @@ def predict_game(
     away_rs_pg = float(away_team_stats["team_rs_per_game"]) \
         if away_team_stats is not None and pd.notna(away_team_stats.get("team_rs_per_game")) \
         else None
+
+    # Lineup wRC+ overrides team RS/G if available (more precise: accounts for
+    # today's actual starters, injuries, rest days — not just season average)
+    # Convert wRC+ to implied RS/G: wRC+/100 * LEAGUE_RS_PER_GAME
+    if home_lineup_wrc is not None and not pd.isna(float(home_lineup_wrc)):
+        home_rs_pg = float(home_lineup_wrc) / 100.0 * LEAGUE_RS_PER_GAME
+    if away_lineup_wrc is not None and not pd.isna(float(away_lineup_wrc)):
+        away_rs_pg = float(away_lineup_wrc) / 100.0 * LEAGUE_RS_PER_GAME
+
     home_bp_xwoba = float(home_team_stats["bullpen_xwoba"]) \
         if home_team_stats is not None and pd.notna(home_team_stats.get("bullpen_xwoba")) \
         else DEFAULT_BULLPEN_XWOBA
@@ -596,6 +607,8 @@ def predict_game(
         "away_sp_expected_ip": round(away_ip, 1),
         "park_elevation_ft":   elev,
         "temp_f":              temp_f,
+        "home_lineup_wrc":     home_lineup_wrc,
+        "away_lineup_wrc":     away_lineup_wrc,
         # Moneyline probabilities
         "mc_home_win_prob":    round(float(mc_home_win), 4),
         "mc_away_win_prob":    round(float(mc_away_cvr_rl), 4),

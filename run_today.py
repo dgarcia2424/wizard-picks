@@ -285,6 +285,20 @@ def _load_team_stats() -> pd.DataFrame:
     return pd.read_parquet(path, engine="pyarrow").set_index("batting_team")
 
 
+def _load_lineup_quality(date_str: str) -> dict:
+    """
+    Load today's lineup wRC+ quality scores per (game_pk, team).
+    Returns dict: {(game_pk, team): wrc_plus} or {} if not available.
+    Falls back gracefully — team RS/G is still used if lineup data missing.
+    """
+    try:
+        from build_lineup_quality import build as _build_lq
+        return _build_lq(date_str, verbose=False)
+    except Exception as e:
+        print(f"  [WARN] Lineup quality unavailable: {e}")
+        return {}
+
+
 def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
     from monte_carlo_runline import predict_game, load_profiles
 
@@ -298,6 +312,8 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
     except Exception as e:
         print(f"  [WARN] Could not load team stats: {e} — using pitcher-only model")
         team_stats = None
+
+    lineup_quality = _load_lineup_quality(date_str)
 
     if len(lineups) == 0:
         print("  No games found for today.")
@@ -359,6 +375,10 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
         home_ts = team_stats.loc[home] if (team_stats is not None and home in team_stats.index) else None
         away_ts = team_stats.loc[away] if (team_stats is not None and away in team_stats.index) else None
 
+        game_pk = game.get("game_pk")
+        home_lq = lineup_quality.get((game_pk, home)) or lineup_quality.get((str(game_pk), home))
+        away_lq = lineup_quality.get((game_pk, away)) or lineup_quality.get((str(game_pk), away))
+
         try:
             res = predict_game(
                 home_team=home, away_team=away,
@@ -367,6 +387,8 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
                 verbose=False,
                 home_team_stats=home_ts,
                 away_team_stats=away_ts,
+                home_lineup_wrc=home_lq,   # NEW
+                away_lineup_wrc=away_lq,   # NEW
             )
         except Exception as e:
             print(f"  {away} @ {home}: ERROR — {e}")
@@ -466,6 +488,8 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
             "total_signal":   total_signal,
             "lineup_confirmed": bool(game.get("home_lineup_confirmed", False)
                                      and game.get("away_lineup_confirmed", False)),
+            "home_lineup_wrc": round(home_lq, 1) if home_lq else None,
+            "away_lineup_wrc": round(away_lq, 1) if away_lq else None,
         })
 
     return results
