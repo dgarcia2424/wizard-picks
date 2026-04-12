@@ -491,6 +491,151 @@ def save_historical_year(year: int, records: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Boxscore lineup fetcher (completed games)
+# ---------------------------------------------------------------------------
+
+def fetch_boxscore_lineups(game_pk: int, game_date: str,
+                            home_abbr: str, away_abbr: str,
+                            game_time_et: str = "",
+                            verbose: bool = False) -> dict | None:
+    """
+    Fetch actual batting orders from the boxscore endpoint for a completed game.
+    Returns a record dict compatible with parse_game() output, or None on failure.
+
+    The boxscore endpoint has the real confirmed batting orders for any game
+    that has started or completed — unlike the schedule/lineups hydration which
+    only works pre-game.
+    """
+    url = f"https://statsapi.mlb.com/api/v1/game/{game_pk}/boxscore"
+    try:
+        resp = requests.get(url, timeout=REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        if verbose:
+            print(f"  [WARN] Boxscore fetch failed for game {game_pk}: {exc}")
+        return None
+
+    teams = data.get("teams", {})
+
+    def extract_side(side_key: str) -> tuple[list[dict], str, str]:
+        """Return (slots, starter_name, starter_id) for home or away."""
+        side = teams.get(side_key, {})
+        batters = side.get("batters", [])
+        players = side.get("players", {})
+        pitchers = side.get("pitchers", [])
+
+        slots = []
+        for order_idx, pid in enumerate(batters, start=1):
+            player = players.get(f"ID{pid}", {})
+            name = player.get("person", {}).get("fullName", "")
+            pos_obj = player.get("position", {})
+            pos = pos_obj.get("abbreviation", "")
+            batting_order = player.get("battingOrder", order_idx * 100)
+            # battingOrder from boxscore is like 100,200,...900 (multiply of 100)
+            real_order = int(batting_order) // 100 if batting_order else order_idx
+            slots.append({
+                "batting_order": real_order,
+                "player_id":     pid,
+                "player_name":   name,
+                "position":      pos,
+            })
+
+        # Starting pitcher = first pitcher listed
+        sp_id, sp_name = None, ""
+        if pitchers:
+            sp_pid = pitchers[0]
+            sp_player = players.get(f"ID{sp_pid}", {})
+            sp_name = sp_player.get("person", {}).get("fullName", "")
+            sp_id = sp_pid
+
+        return slots, sp_name, sp_id
+
+    home_slots, home_sp_name, home_sp_id = extract_side("home")
+    away_slots, away_sp_name, away_sp_id = extract_side("away")
+
+    home_confirmed = len(home_slots) >= 8
+    away_confirmed  = len(away_slots) >= 8
+
+    def slots_to_order(slots):
+        return json.dumps([{
+            "order":    s["batting_order"],
+            "id":       s["player_id"],
+            "name":     s["player_name"],
+            "position": s["position"],
+        } for s in slots])
+
+    return {
+        "game_date":             game_date,
+        "game_pk":               game_pk,
+        "game_status":           "Final",
+        "game_time_et":          game_time_et,
+        "home_team":             home_abbr,
+        "away_team":             away_abbr,
+        "home_starter_id":       home_sp_id,
+        "home_starter_name":     home_sp_name,
+        "away_starter_id":       away_sp_id,
+        "away_starter_name":     away_sp_name,
+        "home_lineup_confirmed": home_confirmed,
+        "away_lineup_confirmed": away_confirmed,
+        "home_batting_order":    slots_to_order(home_slots),
+        "away_batting_order":    slots_to_order(away_slots),
+        "_home_slots":           home_slots,
+        "_away_slots":           away_slots,
+    }
+
+
+def pull_date_with_boxscore(date_str: str, verbose: bool = True) -> list[dict]:
+    """
+    Pull lineups for date_str. For completed games, enriches with actual
+    batting orders from the boxscore endpoint. For future/live games, falls
+    back to the schedule hydration (probable pitchers only).
+    """
+    if verbose:
+        print(f"Fetching lineups for {date_str} ...")
+
+    data = fetch_schedule(date_str, use_cache=False)
+    if data is None:
+        print(f"  [ERROR] No schedule data returned for {date_str}.")
+        return []
+
+    records = parse_schedule_response(data)
+    if not records:
+        return []
+
+    enriched = []
+    for r in records:
+        status = r.get("game_status", "")
+        game_pk = r.get("game_pk")
+
+        # For completed or in-progress games, fetch real lineups from boxscore
+        if status in ("Final", "Live", "In Progress") and game_pk:
+            if verbose:
+                print(f"  Fetching boxscore for {r['away_team']} @ {r['home_team']} (pk={game_pk})")
+            bs = fetch_boxscore_lineups(
+                game_pk=game_pk,
+                game_date=date_str,
+                home_abbr=r["home_team"],
+                away_abbr=r["away_team"],
+                game_time_et=r.get("game_time_et", ""),
+                verbose=verbose,
+            )
+            if bs:
+                enriched.append(bs)
+                time.sleep(SLEEP_BETWEEN_REQUESTS)
+                continue
+
+        # Future/preview games — use schedule data as-is
+        enriched.append(r)
+
+    if verbose:
+        confirmed = sum(1 for r in enriched if r.get("home_lineup_confirmed") or r.get("away_lineup_confirmed"))
+        print(f"  {len(enriched)} games  |  {confirmed} with confirmed lineups")
+
+    return enriched
+
+
+# ---------------------------------------------------------------------------
 # Single-date pull
 # ---------------------------------------------------------------------------
 
@@ -615,6 +760,10 @@ def parse_args() -> argparse.Namespace:
         "--historical", action="store_true",
         help="Backfill historical lineups over a date range.",
     )
+    mode.add_argument(
+        "--recent", action="store_true",
+        help="Pull lineups for today + last 72 hours using boxscore data for completed games.",
+    )
 
     # Historical options
     parser.add_argument(
@@ -649,6 +798,25 @@ def main() -> None:
         pull_historical_lineups(args.start, args.end)
         return
 
+    if args.recent:
+        # --- Last 72 hours + today ---
+        today_d = date.today()
+        dates = [(today_d - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(3, -1, -1)]
+        print(f"=== Pulling lineups for last 72h + today: {dates[0]} to {dates[-1]} ===")
+        for date_str in dates:
+            print(f"\n--- {date_str} ---")
+            records = pull_date_with_boxscore(date_str, verbose=True)
+            if not records:
+                print(f"  No games found for {date_str}.")
+                continue
+            wide_df = records_to_wide(records)
+            long_df = records_to_long(records)
+            save_today_outputs(wide_df, long_df, date_str=date_str)
+            # Also update canonical today files
+            if date_str == today_d.strftime("%Y-%m-%d"):
+                save_today_outputs(wide_df, long_df, date_str=None)
+        return
+
     # --- Single-date or today ---
     if args.date:
         try:
@@ -661,7 +829,7 @@ def main() -> None:
         date_str = date.today().strftime("%Y-%m-%d")
 
     print(f"=== Pulling lineups for {date_str} ===")
-    records = pull_date(date_str, verbose=True)
+    records = pull_date_with_boxscore(date_str, verbose=True)
 
     if not records:
         print("No games found. Nothing to save.")

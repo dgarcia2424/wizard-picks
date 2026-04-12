@@ -162,8 +162,8 @@ def morning_run() -> None:
         log_header("MORNING RUN — lineups + odds (today + tomorrow)")
         tomorrow = (date.today() + __import__("datetime").timedelta(days=1)).isoformat()
 
-        # Today
-        run_step("lineup_pull.py", "lineups_today")
+        # Last 72h + today — uses boxscore for completed games, schedule for future
+        run_step("lineup_pull.py --recent", "lineups_recent")
         run_step("odds_current_pull.py", "odds_today")
 
         # Tomorrow — probable pitchers + next-day odds (best-effort)
