@@ -1,0 +1,39 @@
+# Secrets
+.env
+env
+wizard_agents/env
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Data files (too large / sensitive for GitHub)
+statcast_data/
+*.parquet
+*.log
+
+# Local pipeline outputs (regenerated daily)
+games.csv
+model_scores.csv
+model_report.html
+tracker_dashboard.html
+checkpoints/
+feature_matrix.csv
+pitcher_profiles_2026.csv
+daily_card.csv
+xgb_val_predictions.csv
+calibration_edge_results.csv
+calibration_pitcher_results.csv
+calibration_results.csv
+
+# Anaconda / venv
+env/
+venv/
+.venv/
