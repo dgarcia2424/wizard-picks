@@ -172,8 +172,11 @@ def load_backtest() -> pd.DataFrame:
 def load_tracker() -> pd.DataFrame:
     if USE_SUPABASE:
         client = _supabase()
-        resp = client.table("bet_tracker").select("*").order("date", desc=True).execute()
-        return pd.DataFrame(resp.data) if resp.data else pd.DataFrame()
+        try:
+            resp = client.table("bet_tracker").select("*").order("date", desc=True).execute()
+            return pd.DataFrame(resp.data) if resp.data else pd.DataFrame()
+        except Exception:
+            return pd.DataFrame()
     path = Path(__file__).parent / "data" / "raw" / "bet_tracker.csv"
     return pd.read_csv(path).sort_values("date", ascending=False) if path.exists() else pd.DataFrame()
 
