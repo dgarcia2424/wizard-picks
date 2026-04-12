@@ -76,12 +76,19 @@ st.markdown("""
 
 /* Score prediction */
 .score-section { background:rgba(255,255,255,.04); border-radius:8px;
-                 padding:12px 16px; margin:12px 0; }
+                 padding:14px 18px; margin:12px 0; }
 .score-label   { font-size:.72rem; color:#6b7280; text-transform:uppercase;
-                 letter-spacing:.08em; margin-bottom:6px; }
-.score-main    { font-size:1.25rem; font-weight:700; color:#f9fafb; }
-.score-range   { font-size:.82rem; color:#6b7280; margin-top:3px; }
-.score-total   { font-size:.85rem; color:#9ca3af; margin-top:4px; }
+                 letter-spacing:.08em; margin-bottom:8px; }
+.score-main    { font-size:1.3rem; font-weight:700; color:#f9fafb; margin-bottom:8px; }
+.score-bands   { display:flex; gap:10px; margin:6px 0; }
+.score-band    { flex:1; background:rgba(255,255,255,.06); border-radius:6px;
+                 padding:7px 12px; text-align:center; }
+.score-band-team { font-size:.72rem; color:#9ca3af; text-transform:uppercase;
+                   letter-spacing:.06em; margin-bottom:3px; }
+.score-band-range { font-size:1rem; font-weight:700; color:#f9fafb; }
+.score-band-label { font-size:.7rem; color:#6b7280; margin-top:2px; }
+.score-total   { font-size:.85rem; color:#9ca3af; margin-top:8px;
+                 border-top:1px solid rgba(255,255,255,.06); padding-top:7px; }
 
 /* Why */
 .why-section { margin:12px 0; }
@@ -418,14 +425,26 @@ def render_card(r: dict, n: int, tier: str):
     hl = r.get("home_runs_lo"); hh = r.get("home_runs_hi")
     al = r.get("away_runs_lo"); ah = r.get("away_runs_hi")
     if hm is not None and am is not None:
-        score_main  = f"{away} {_safe_float(am):.1f} — {home} {_safe_float(hm):.1f}"
-        score_range = ""
+        score_main = f"{away} {_safe_float(am):.1f} — {home} {_safe_float(hm):.1f}"
         if al is not None:
-            score_range = (f"Typical range: {away} {int(al)}–{int(ah)}  |  "
-                           f"{home} {int(hl)}–{int(hh)}")
+            bands_html = f"""
+<div class="score-bands">
+  <div class="score-band">
+    <div class="score-band-team">{away}</div>
+    <div class="score-band-range">{int(al)} – {int(ah)}</div>
+    <div class="score-band-label">likely range</div>
+  </div>
+  <div class="score-band">
+    <div class="score-band-team">{home}</div>
+    <div class="score-band-range">{int(hl)} – {int(hh)}</div>
+    <div class="score-band-label">likely range</div>
+  </div>
+</div>"""
+        else:
+            bands_html = ""
     else:
-        score_main  = "Score prediction: re-run pipeline for latest"
-        score_range = ""
+        score_main = "Re-run pipeline to get score prediction"
+        bands_html = ""
 
     bt = r.get("blended_total") or r.get("mc_total")
     vt = r.get("vegas_total")
@@ -465,7 +484,6 @@ def render_card(r: dict, n: int, tier: str):
     sp_str = (f"{home} SP: {r.get('home_sp','').title()}{hf} {T_XWOBA} {_safe_float(r.get('home_sp_xwoba')):.3f}  "
               f"|  {away} SP: {r.get('away_sp','').title()}{af} {T_XWOBA} {_safe_float(r.get('away_sp_xwoba')):.3f}")
 
-    score_range_html = f'<div class="score-range">{score_range}</div>' if score_range else ""
     score_total_html = f'<div class="score-total">{score_total}</div>' if score_total else ""
 
     st.markdown(f"""
@@ -487,7 +505,7 @@ def render_card(r: dict, n: int, tier: str):
   <div class="score-section">
     <div class="score-label">Predicted score</div>
     <div class="score-main">{score_main}</div>
-    {score_range_html}
+    {bands_html}
     {score_total_html}
   </div>
 
