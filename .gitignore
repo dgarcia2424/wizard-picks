@@ -32,6 +32,7 @@ xgb_val_predictions.csv
 calibration_edge_results.csv
 calibration_pitcher_results.csv
 calibration_results.csv
+backtest_2026_results.csv
 
 # Anaconda / venv
 env/
