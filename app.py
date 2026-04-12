@@ -932,7 +932,7 @@ st.caption("Picks updated daily after 8:30 AM ET  ·  Sorted by strongest edge f
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 tab_picks, tab_season, tab_history, tab_performance = st.tabs([
     "📋 Today's Picks", "📈 Season Tracker",
-    "🔬 Model History", "📊 2026 Performance"
+    "🔬 Model History", "📊 Model Performance"
 ])
 
 
@@ -1330,11 +1330,41 @@ with tab_history:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — 2026 PERFORMANCE
+# TAB 4 — MODEL PERFORMANCE
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_performance:
     import plotly.graph_objects as go
     import plotly.express as px
+
+    # ── Signal filter — sits at top, affects EVERYTHING below ─────────────────
+    if "perf_filter" not in st.session_state:
+        st.session_state.perf_filter = "all"
+
+    _fb1, _fb2, _fb3, _fb_spacer = st.columns([1, 1, 1, 3])
+    if _fb1.button("All Signals",  use_container_width=True, key="pf_all"):
+        st.session_state.perf_filter = "all"
+    if _fb2.button("★★ Strong",    use_container_width=True, key="pf_strong"):
+        st.session_state.perf_filter = "strong"
+    if _fb3.button("★ Lean",       use_container_width=True, key="pf_lean"):
+        st.session_state.perf_filter = "lean"
+
+    _pf = st.session_state.perf_filter
+
+    def _apply_signal_filter(df, pf):
+        """Filter a dataframe's bet rows by signal tier."""
+        base = df[df["signal"].notna() & (df["signal"] != "") & df["bet_win"].notna()]
+        if pf == "strong":
+            return base[base["signal"].str.contains(r"\*\*", na=False)]
+        elif pf == "lean":
+            return base[
+                base["signal"].str.contains(r"\*", na=False) &
+                ~base["signal"].str.contains(r"\*\*", na=False)
+            ]
+        return base
+
+    _pf_label = {"all": "All signals", "strong": "★★ Strong only", "lean": "★ Lean only"}[_pf]
+    st.caption(f"Filter: **{_pf_label}**")
+    st.divider()
 
     # ── Multi-Season Overview ─────────────────────────────────────────────────
     st.subheader("📅 Multi-Season Overview")
@@ -1345,7 +1375,7 @@ with tab_performance:
     # Historical years (2023-2025)
     if not _hist_df.empty:
         for _yr, _grp in _hist_df.groupby("season"):
-            _bets = _grp[_grp["signal"].notna() & (_grp["signal"] != "") & _grp["bet_win"].notna()]
+            _bets = _apply_signal_filter(_grp, _pf)
             if len(_bets) > 0:
                 _w = int(_bets["bet_win"].sum())
                 _l = len(_bets) - _w
@@ -1361,7 +1391,7 @@ with tab_performance:
                 })
     # Current year 2026
     if not _curr_df.empty:
-        _bets_26 = _curr_df[_curr_df["signal"].notna() & (_curr_df["signal"] != "") & _curr_df["bet_win"].notna()]
+        _bets_26 = _apply_signal_filter(_curr_df, _pf)
         if len(_bets_26) > 0:
             _w26 = int(_bets_26["bet_win"].sum())
             _l26 = len(_bets_26) - _w26
@@ -1488,40 +1518,12 @@ with tab_performance:
         st.markdown("## 📊 2026 Season Performance Dashboard")
         st.caption("All completed games · Updated nightly")
 
-        # ── Signal filter buttons ─────────────────────────────────────────────
-        if "perf_filter" not in st.session_state:
-            st.session_state.perf_filter = "all"
-
-        _fb1, _fb2, _fb3, _fb_spacer = st.columns([1, 1, 1, 3])
-        if _fb1.button("All Signals",   use_container_width=True, key="pf_all"):
-            st.session_state.perf_filter = "all"
-        if _fb2.button("★★ Strong",     use_container_width=True, key="pf_strong"):
-            st.session_state.perf_filter = "strong"
-        if _fb3.button("★ Lean",        use_container_width=True, key="pf_lean"):
-            st.session_state.perf_filter = "lean"
-
-        _pf = st.session_state.perf_filter
-
         # Apply filter to create _bt_view — used for all metrics & charts below
         if _has_bt and not _bt_bets.empty:
-            if _pf == "strong":
-                _bt_view = _bt_bets[_bt_bets["signal"].str.contains(r"\*\*", na=False)].copy()
-                _pf_label = "★★ Strong signals only"
-            elif _pf == "lean":
-                _bt_view = _bt_bets[
-                    _bt_bets["signal"].str.contains(r"\*", na=False) &
-                    ~_bt_bets["signal"].str.contains(r"\*\*", na=False)
-                ].copy()
-                _pf_label = "★ Lean signals only"
-            else:
-                _bt_view = _bt_bets.copy()
-                _pf_label = "All signals"
-            st.caption(f"Showing: **{_pf_label}**  ·  {len(_bt_view)} bets")
+            _bt_view = _apply_signal_filter(_bt_bets, _pf)
+            _bt_view = _bt_view.copy()
         else:
             _bt_view = pd.DataFrame()
-            _pf_label = "All signals"
-
-        st.divider()
 
         if _has_bt and not _bt_view.empty:
             _w  = int(_bt_view["bet_win"].sum())
