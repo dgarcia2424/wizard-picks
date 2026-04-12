@@ -265,6 +265,58 @@ def upload_model_history(csv_path: Path = None) -> int:
     return success
 
 
+def upload_historical_backtest() -> int:
+    """Upload multi-year historical backtest results to wizard_backtest_historical table.
+
+    For each year in [2023, 2024, 2025], reads backtest_{year}_results.csv and
+    upserts all rows (delete-then-insert per season) into the table.
+    """
+    years = [2023, 2024, 2025]
+    total_uploaded = 0
+
+    for year in years:
+        csv_path = BASE_DIR / f"backtest_{year}_results.csv"
+        if not csv_path.exists():
+            logger.warning(f"  [SKIP] backtest_{year}_results.csv not found")
+            continue
+
+        df = pd.read_csv(csv_path)
+        if df.empty:
+            logger.warning(f"  [SKIP] backtest_{year}_results.csv is empty")
+            continue
+
+        df["season"] = year
+
+        # Pre-convert bool/numeric columns
+        for _col in ["bet_win", "home_covers_rl"]:
+            if _col in df.columns:
+                df[_col] = df[_col].map(
+                    lambda x: None if (x is None or (isinstance(x, float) and x != x)) else int(x)
+                )
+
+        client = _get_client()
+
+        # Delete all rows for this season first (upsert pattern)
+        try:
+            client.table("wizard_backtest_historical").delete().eq("season", year).execute()
+        except Exception as e:
+            logger.warning(f"  [WARN] Could not delete {year} rows: {e}")
+
+        success = 0
+        for _, row in df.iterrows():
+            record = _clean(row.to_dict())
+            try:
+                client.table("wizard_backtest_historical").insert(record).execute()
+                success += 1
+            except Exception as e:
+                logger.error(f"  [ERROR] historical_backtest {year} row: {e}")
+
+        logger.info(f"  wizard_backtest_historical ({year}): {success}/{len(df)} rows uploaded")
+        total_uploaded += success
+
+    return total_uploaded
+
+
 def upload_pipeline_health(status: dict = None) -> int:
     """Upload pipeline health status to wizard_pipeline_health table.
 
@@ -324,10 +376,11 @@ def main():
     # Each upload runs independently — one missing table won't stop the others
     results = {}
     for name, fn in [
-        ("daily_card",      upload_daily_card),
-        ("backtest",        upload_backtest),
-        ("model_history",   upload_model_history),
-        ("pipeline_health", upload_pipeline_health),
+        ("daily_card",          upload_daily_card),
+        ("backtest",            upload_backtest),
+        ("model_history",       upload_model_history),
+        ("historical_backtest", upload_historical_backtest),
+        ("pipeline_health",     upload_pipeline_health),
     ]:
         try:
             results[name] = fn()

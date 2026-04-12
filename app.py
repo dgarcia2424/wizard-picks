@@ -280,6 +280,26 @@ def load_backtest() -> pd.DataFrame:
     return pd.read_csv(path) if path.exists() else pd.DataFrame()
 
 
+@st.cache_data(ttl=300)
+def load_historical_backtest() -> pd.DataFrame:
+    """Load multi-year historical backtest from wizard_backtest_historical."""
+    if USE_SUPABASE:
+        client = _supabase()
+        try:
+            resp = client.table("wizard_backtest_historical").select("*").execute()
+            return pd.DataFrame(resp.data) if resp.data else pd.DataFrame()
+        except Exception:
+            return pd.DataFrame()
+    # Local fallback: concatenate all year CSVs
+    dfs = []
+    for yr in [2023, 2024, 2025]:
+        p = Path(__file__).parent / f"backtest_{yr}_results.csv"
+        if p.exists():
+            df = pd.read_csv(p)
+            df["season"] = yr
+            dfs.append(df)
+    return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+
 
 @st.cache_data(ttl=300)
 def load_model_history() -> pd.DataFrame:
@@ -1132,6 +1152,98 @@ with tab_history:
 with tab_performance:
     import plotly.graph_objects as go
     import plotly.express as px
+
+    # ── Multi-Season Overview ─────────────────────────────────────────────────
+    st.subheader("📅 Multi-Season Overview")
+    _hist_df = load_historical_backtest()
+    _curr_df = load_backtest()
+
+    _season_rows = []
+    # Historical years (2023-2025)
+    if not _hist_df.empty:
+        for _yr, _grp in _hist_df.groupby("season"):
+            _bets = _grp[_grp["signal"].notna() & (_grp["signal"] != "") & _grp["bet_win"].notna()]
+            if len(_bets) > 0:
+                _w = int(_bets["bet_win"].sum())
+                _l = len(_bets) - _w
+                _wr = _w / len(_bets)
+                _roi = (_w * 0.909 - _l) / len(_bets)
+                _season_rows.append({
+                    "Season": int(_yr),
+                    "Bets": len(_bets),
+                    "Record": f"{_w}-{_l}",
+                    "Win %": f"{_wr:.1%}",
+                    "ROI": f"{_roi:+.1%}",
+                    "_win_rate": _wr,
+                })
+    # Current year 2026
+    if not _curr_df.empty:
+        _bets_26 = _curr_df[_curr_df["signal"].notna() & (_curr_df["signal"] != "") & _curr_df["bet_win"].notna()]
+        if len(_bets_26) > 0:
+            _w26 = int(_bets_26["bet_win"].sum())
+            _l26 = len(_bets_26) - _w26
+            _wr26 = _w26 / len(_bets_26)
+            _roi26 = (_w26 * 0.909 - _l26) / len(_bets_26)
+            _season_rows.append({
+                "Season": 2026,
+                "Bets": len(_bets_26),
+                "Record": f"{_w26}-{_l26}",
+                "Win %": f"{_wr26:.1%}",
+                "ROI": f"{_roi26:+.1%}",
+                "_win_rate": _wr26,
+            })
+
+    if _season_rows:
+        _season_rows = sorted(_season_rows, key=lambda x: x["Season"])
+
+        # Plotly dark-mode color constants (defined here for use before _pl_layout)
+        _DARK_BG_PRE  = "rgba(0,0,0,0)"
+        _GREEN_PRE    = "#22c55e"
+        _RED_PRE      = "#ef4444"
+        _BLUE_PRE     = "#3b82f6"
+
+        def _pl_layout_pre(fig, title="", height=280):
+            fig.update_layout(
+                title=title, height=height,
+                paper_bgcolor=_DARK_BG_PRE, plot_bgcolor=_DARK_BG_PRE,
+                font=dict(color="#e5e7eb", size=12),
+                xaxis=dict(gridcolor="#374151", showgrid=True, zeroline=False),
+                yaxis=dict(gridcolor="#374151", showgrid=True, zeroline=True,
+                           zerolinecolor="#6b7280"),
+                margin=dict(l=40, r=20, t=40 if title else 20, b=40),
+                showlegend=False,
+            )
+            return fig
+
+        _col1, _col2 = st.columns([2, 3])
+        with _col1:
+            _tbl_data = [{k: v for k, v in r.items() if not k.startswith("_")}
+                         for r in _season_rows]
+            st.dataframe(pd.DataFrame(_tbl_data), use_container_width=True, hide_index=True)
+
+        with _col2:
+            _fig_multi = go.Figure()
+            _colors = [_GREEN_PRE if r["_win_rate"] > 0.525 else
+                       (_RED_PRE if r["_win_rate"] < 0.475 else _BLUE_PRE)
+                       for r in _season_rows]
+            _fig_multi.add_trace(go.Bar(
+                x=[str(r["Season"]) for r in _season_rows],
+                y=[r["_win_rate"] for r in _season_rows],
+                marker_color=_colors,
+                text=[r["Win %"] for r in _season_rows],
+                textposition="outside",
+            ))
+            _fig_multi.add_hline(y=0.5245, line_dash="dash",
+                                  line_color="#f59e0b",
+                                  annotation_text="Break-even (~52.4%)",
+                                  annotation_position="top left")
+            _fig_multi.update_yaxes(tickformat=".0%", range=[0.40, 0.80])
+            _pl_layout_pre(_fig_multi, title="Win Rate by Season", height=260)
+            st.plotly_chart(_fig_multi, use_container_width=True)
+    else:
+        st.info("No multi-season data available yet. Run backtest_historical.py to generate historical results.")
+
+    st.markdown("---")
 
     # Load data — wizard_backtest has scores/totals; wizard_model_history has F1/F5/K
     _bt   = load_backtest()
