@@ -606,24 +606,15 @@ tab_picks, tab_season, tab_log = st.tabs(["📋 Today's Picks", "📈 Season Tra
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_picks:
     today = datetime.date.today()
-    if "pick_date" not in st.session_state:
-        st.session_state.pick_date = today
+    st.session_state.pick_date = today
 
-    qc1, qc2, qc3 = st.columns([1, 1, 1])
-    if qc1.button("Today",        use_container_width=True, key="picks_today"):
-        st.session_state.pick_date = today
-        st.rerun()
-    if qc2.button("◀ Prior Day", use_container_width=True, key="picks_prior"):
-        st.session_state.pick_date = max(
-            st.session_state.pick_date - datetime.timedelta(days=1),
-            datetime.date(2026, 3, 28))
-        st.rerun()
-    if qc3.button("🔄 Refresh",  use_container_width=True, key="picks_refresh"):
+    col_refresh, = st.columns([1])
+    if st.button("🔄 Refresh picks", key="picks_refresh"):
         st.cache_data.clear()
         st.rerun()
 
-    date_str = st.session_state.pick_date.isoformat()
-    st.caption(f"Showing picks for **{st.session_state.pick_date.strftime('%A, %B %d, %Y')}**")
+    date_str = today.isoformat()
+    st.caption(f"Showing picks for **{today.strftime('%A, %B %d, %Y')}**")
 
     with st.expander("📖 How to read this — terms & definitions"):
         st.markdown("""
@@ -662,11 +653,8 @@ with tab_picks:
         results = load_card(date_str)
 
     if not results:
-        st.warning(f"No predictions for {st.session_state.pick_date.strftime('%B %d, %Y')} — "
-                   "pipeline may not have run yet.")
-        if st.session_state.pick_date == today:
-            st.info("Run `python run_today.py --csv && python supabase_upload.py` "
-                    "to generate today's card.")
+        st.warning(f"No predictions for {today.strftime('%B %d, %Y')} — pipeline may not have run yet.")
+        st.info("Run `python run_today.py --csv && python supabase_upload.py` to generate today's card.")
         st.stop()
 
     def _sort_key(r):
