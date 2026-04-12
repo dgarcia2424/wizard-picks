@@ -4,9 +4,10 @@ supabase_upload.py
 Pushes daily pipeline outputs to Supabase so the hosted dashboard can read them.
 
 Uploads:
-  daily_card.csv          → wizard_daily_card  (today's predictions)
-  backtest_2026_results.csv → wizard_backtest  (season tracker)
-  data/raw/bet_tracker.csv  → bet_tracker      (manually logged bets)
+  daily_card.csv               → wizard_daily_card   (today's predictions)
+  backtest_2026_results.csv    → wizard_backtest     (season tracker)
+  backtest_mc_2026_results.csv → wizard_model_history (enriched backtest w/ F5/NRFI/K actuals)
+  data/raw/bet_tracker.csv     → bet_tracker         (manually logged bets)
 
 Run automatically by mlb_model_run.bat after run_today.py.
 """
@@ -117,6 +118,16 @@ def upload_daily_card(csv_path: Path = None) -> int:
             "away_sp_flag": row.get("away_sp_flag", ""),
             "temp_f":       row.get("temp_f"),
             "lineup_confirmed": bool(row.get("lineup_confirmed", False)),
+            # --- New queryable fields added by run_today.py ---
+            "home_lineup_wrc":      row.get("home_lineup_wrc"),
+            "away_lineup_wrc":      row.get("away_lineup_wrc"),
+            "mc_nrfi_prob":         row.get("mc_nrfi_prob"),
+            "mc_f5_total":          row.get("mc_f5_total"),
+            "mc_f5_home_win_prob":  row.get("mc_f5_home_win_prob"),
+            "home_sp_expected_ip":  row.get("home_sp_expected_ip"),
+            "away_sp_expected_ip":  row.get("away_sp_expected_ip"),
+            "market_deviation":     row.get("market_deviation"),
+            "best_tier_capped":     row.get("best_tier_capped"),
             "data":         full_data,   # all fields including new ones
         })
         try:
@@ -185,6 +196,63 @@ def upload_bet_tracker(csv_path: Path = None) -> int:
     return success
 
 
+def upload_model_history(csv_path: Path = None) -> int:
+    """Upload enriched backtest (with F5/NRFI/K actuals) to wizard_model_history table.
+
+    Schema expected in wizard_model_history:
+      date, home_team, away_team, home_sp, away_sp,
+      blended_rl, mc_rl,
+      home_covers_rl (int 0/1), bet_win (int 0/1), signal,
+      mc_f5_total, f5_total_actual,
+      mc_nrfi_prob, f1_nrfi_actual,
+      mc_home_sp_k_mean, home_sp_k_actual,
+      mc_away_sp_k_mean, away_sp_k_actual
+
+    Strategy: full replace — the CSV is the source of truth.
+    """
+    csv_path = csv_path or BASE_DIR / "backtest_mc_2026_results.csv"
+    if not csv_path.exists():
+        logger.warning(f"  [SKIP] {csv_path.name} not found")
+        return 0
+
+    df = pd.read_csv(csv_path)
+    if df.empty:
+        logger.warning("  [SKIP] backtest_mc_2026_results.csv is empty")
+        return 0
+
+    client = _get_client()
+
+    # Full replace — delete all existing rows then re-insert
+    client.table("wizard_model_history").delete().neq("date", "1900-01-01").execute()
+
+    # Columns to promote to top-level (all others are silently ignored)
+    TOP_LEVEL_COLS = [
+        "date", "home_team", "away_team", "home_sp", "away_sp",
+        "blended_rl", "mc_rl",
+        "home_covers_rl", "bet_win", "signal",
+        "mc_f5_total", "f5_total_actual",
+        "mc_nrfi_prob", "f1_nrfi_actual",
+        "mc_home_sp_k_mean", "home_sp_k_actual",
+        "mc_away_sp_k_mean", "away_sp_k_actual",
+    ]
+
+    success = 0
+    for _, row in df.iterrows():
+        # Build record with only the schema columns present in the CSV
+        record = _clean({col: row.get(col) for col in TOP_LEVEL_COLS})
+        try:
+            client.table("wizard_model_history").insert(record).execute()
+            success += 1
+        except Exception as e:
+            logger.error(
+                f"  [ERROR] model_history row "
+                f"{row.get('date', '?')} {row.get('home_team', '?')}: {e}"
+            )
+
+    logger.info(f"  wizard_model_history: {success}/{len(df)} rows uploaded")
+    return success
+
+
 # ---------------------------------------------------------------------------
 # MAIN
 # ---------------------------------------------------------------------------
@@ -198,7 +266,8 @@ def main():
         n1 = upload_daily_card()
         n2 = upload_backtest()
         n3 = upload_bet_tracker()
-        total = n1 + n2 + n3
+        n4 = upload_model_history()
+        total = n1 + n2 + n3 + n4
         print(f"\n  Done. {total} total rows uploaded to Supabase.")
         sys.exit(0)
     except RuntimeError as e:

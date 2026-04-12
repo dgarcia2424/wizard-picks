@@ -490,6 +490,29 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
                                      and game.get("away_lineup_confirmed", False)),
             "home_lineup_wrc": round(home_lq, 1) if home_lq else None,
             "away_lineup_wrc": round(away_lq, 1) if away_lq else None,
+            # F5 predictions
+            "mc_f5_home_runs":      res.get("mc_f5_home_runs"),
+            "mc_f5_away_runs":      res.get("mc_f5_away_runs"),
+            "mc_f5_total":          res.get("mc_f5_total"),
+            "mc_f5_home_win_prob":  res.get("mc_f5_home_win_prob"),
+            "mc_f5_home_covers_rl": res.get("mc_f5_home_covers_rl"),
+            # F1 / NRFI
+            "mc_nrfi_prob":         res.get("mc_nrfi_prob"),
+            "mc_p_home_scores_f1":  res.get("mc_p_home_scores_f1"),
+            "mc_p_away_scores_f1":  res.get("mc_p_away_scores_f1"),
+            "mc_f1_home_runs":      res.get("mc_f1_home_runs"),
+            "mc_f1_away_runs":      res.get("mc_f1_away_runs"),
+            # K props
+            "mc_home_sp_k_mean":    res.get("mc_home_sp_k_mean"),
+            "mc_away_sp_k_mean":    res.get("mc_away_sp_k_mean"),
+            "mc_home_sp_k_over_35": res.get("mc_home_sp_k_over_35"),
+            "mc_home_sp_k_over_45": res.get("mc_home_sp_k_over_45"),
+            "mc_home_sp_k_over_55": res.get("mc_home_sp_k_over_55"),
+            "mc_home_sp_k_over_65": res.get("mc_home_sp_k_over_65"),
+            "mc_away_sp_k_over_35": res.get("mc_away_sp_k_over_35"),
+            "mc_away_sp_k_over_45": res.get("mc_away_sp_k_over_45"),
+            "mc_away_sp_k_over_55": res.get("mc_away_sp_k_over_55"),
+            "mc_away_sp_k_over_65": res.get("mc_away_sp_k_over_65"),
         })
 
     return results

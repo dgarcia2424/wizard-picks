@@ -247,7 +247,14 @@ def load_card(date_str: str) -> list[dict]:
                         "market_deviation",
                         "mc_home_win","mc_home_cvr25","mc_away_cvr25",
                         "home_runs_mean","away_runs_mean",
-                        "home_runs_lo","home_runs_hi","away_runs_lo","away_runs_hi"]:
+                        "home_runs_lo","home_runs_hi","away_runs_lo","away_runs_hi",
+                        "home_lineup_wrc","away_lineup_wrc",
+                        "mc_nrfi_prob","mc_f5_total","mc_f5_home_win_prob",
+                        "mc_f5_home_runs","mc_f5_away_runs",
+                        "mc_home_sp_k_mean","mc_away_sp_k_mean",
+                        "mc_home_sp_k_over_45","mc_away_sp_k_over_45",
+                        "home_sp_expected_ip","away_sp_expected_ip",
+                        "mc_p_home_scores_f1","mc_p_away_scores_f1"]:
                 if col not in r:
                     r[col] = row.get(col)
             rows.append(r)
@@ -283,6 +290,19 @@ def load_tracker() -> pd.DataFrame:
         except Exception:
             return pd.DataFrame()
     path = Path(__file__).parent / "data" / "raw" / "bet_tracker.csv"
+    return pd.read_csv(path).sort_values("date", ascending=False) if path.exists() else pd.DataFrame()
+
+
+@st.cache_data(ttl=300)
+def load_model_history() -> pd.DataFrame:
+    if USE_SUPABASE:
+        client = _supabase()
+        try:
+            resp = client.table("wizard_model_history").select("*").order("date", desc=True).execute()
+            return pd.DataFrame(resp.data) if resp.data else pd.DataFrame()
+        except Exception:
+            return pd.DataFrame()
+    path = Path(__file__).parent / "backtest_mc_2026_results.csv"
     return pd.read_csv(path).sort_values("date", ascending=False) if path.exists() else pd.DataFrame()
 
 
@@ -583,6 +603,33 @@ def render_card(r: dict, n: int, tier: str):
 
     score_total_html = f'<div class="score-total">{score_total}</div>' if score_total else ""
 
+    # Props snapshot (F5, NRFI, K)
+    nrfi_prob  = _safe_float(r.get("mc_nrfi_prob"), 0.0)
+    f5_total   = _safe_float(r.get("mc_f5_total"))
+    f5_hw      = _safe_float(r.get("mc_f5_home_win_prob"), 0.0)
+    home_k     = _safe_float(r.get("mc_home_sp_k_mean"))
+    away_k     = _safe_float(r.get("mc_away_sp_k_mean"))
+    home_ip    = _safe_float(r.get("home_sp_expected_ip"), 5.5)
+    away_ip    = _safe_float(r.get("away_sp_expected_ip"), 5.5)
+
+    props_parts = []
+    if nrfi_prob > 0:
+        nrfi_color = "#4ade80" if nrfi_prob >= 0.65 else "#fde047" if nrfi_prob >= 0.55 else "#9ca3af"
+        props_parts.append(f'<span style="color:{nrfi_color}">NRFI: {nrfi_prob:.0%}</span>')
+    if f5_total > 0:
+        props_parts.append(f'F5 total: {f5_total:.1f} runs')
+    if f5_hw > 0:
+        props_parts.append(f'F5 {home} win: {f5_hw:.0%}')
+    if home_k > 0:
+        props_parts.append(f'{home} SP K: {home_k:.1f} ({home_ip:.1f}ip)')
+    if away_k > 0:
+        props_parts.append(f'{away} SP K: {away_k:.1f} ({away_ip:.1f}ip)')
+
+    props_html = ""
+    if props_parts:
+        props_inner = "  &nbsp;·&nbsp;  ".join(props_parts)
+        props_html = f'<div style="font-size:.8rem;color:#9ca3af;margin-top:6px;padding:6px 0;border-top:1px solid rgba(255,255,255,.06)">{props_inner}</div>'
+
     st.markdown(f"""
 <div class="{card_cls}">
 
@@ -605,6 +652,7 @@ def render_card(r: dict, n: int, tier: str):
     <div class="score-main">{score_main}</div>
     {bands_html}
     {score_total_html}
+    {props_html}
   </div>
 
   <div class="why-section">
@@ -628,7 +676,10 @@ st.markdown("## 🧙 The Wizard — MLB Picks")
 st.caption("Picks updated daily after 9 AM ET  ·  Sorted by strongest edge first")
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_picks, tab_season, tab_log = st.tabs(["📋 Today's Picks", "📈 Season Tracker", "📓 Bet Log"])
+tab_picks, tab_season, tab_log, tab_history, tab_performance = st.tabs([
+    "📋 Today's Picks", "📈 Season Tracker", "📓 Bet Log",
+    "🔬 Model History", "📊 2026 Performance"
+])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1072,6 +1123,151 @@ with tab_log:
                         st.dataframe(pdf[["date","game","bet_type","team","odds","units",
                                          "result","profit_loss"]],
                                      hide_index=True, use_container_width=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 4 — MODEL HISTORY
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_history:
+    mh = load_model_history()
+    if mh.empty:
+        st.info("Model history populates as the backtest runs. Check back after running backtest_mc_2026.py.")
+    else:
+        mh["date"] = pd.to_datetime(mh["date"], errors="coerce")
+        mh = mh.dropna(subset=["date"])
+
+        st.caption(f"Showing {len(mh)} games with completed MC model predictions")
+
+        # Summary metrics
+        col_a, col_b, col_c, col_d = st.columns(4)
+
+        if "mc_nrfi_prob" in mh.columns and "f1_nrfi_actual" in mh.columns:
+            nrfi_sub = mh[mh["mc_nrfi_prob"].notna() & mh["f1_nrfi_actual"].notna()]
+            if len(nrfi_sub) > 0:
+                nrfi_pred = (nrfi_sub["mc_nrfi_prob"] > 0.5).astype(int)
+                nrfi_acc  = (nrfi_pred == nrfi_sub["f1_nrfi_actual"]).mean()
+                col_a.metric("NRFI Accuracy", f"{nrfi_acc:.1%}", f"{len(nrfi_sub)} games")
+
+        if "mc_f5_total" in mh.columns and "f5_total_actual" in mh.columns:
+            f5_sub = mh[mh["mc_f5_total"].notna() & mh["f5_total_actual"].notna()]
+            if len(f5_sub) > 0:
+                f5_mae = (f5_sub["mc_f5_total"] - f5_sub["f5_total_actual"]).abs().mean()
+                col_b.metric("F5 Total MAE", f"{f5_mae:.2f} runs", f"{len(f5_sub)} games")
+
+        if "mc_home_sp_k_mean" in mh.columns and "home_sp_k_actual" in mh.columns:
+            k_sub = mh[mh["mc_home_sp_k_mean"].notna() & mh["home_sp_k_actual"].notna()]
+            if len(k_sub) > 0:
+                k_mae = (k_sub["mc_home_sp_k_mean"] - k_sub["home_sp_k_actual"]).abs().mean()
+                col_c.metric("SP K MAE", f"{k_mae:.2f} K/game", f"{len(k_sub)} games")
+
+        if "bet_win" in mh.columns:
+            bet_sub = mh[mh["bet_win"].notna()]
+            if len(bet_sub) > 0:
+                wr = bet_sub["bet_win"].mean()
+                col_d.metric("RL Win Rate", f"{wr:.1%}", f"{len(bet_sub)} bets")
+
+        st.divider()
+
+        # Show recent games table
+        display_cols = ["date","home_team","away_team","signal","bet_win",
+                        "mc_nrfi_prob","f1_nrfi_actual","mc_f5_total","f5_total_actual",
+                        "mc_home_sp_k_mean","home_sp_k_actual"]
+        show_cols = [c for c in display_cols if c in mh.columns]
+
+        if show_cols:
+            display_df = mh[show_cols].copy()
+            if "date" in display_df.columns:
+                display_df["date"] = display_df["date"].dt.strftime("%Y-%m-%d")
+            st.dataframe(display_df.head(50), hide_index=True, use_container_width=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 5 — 2026 PERFORMANCE
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_performance:
+    mh2 = load_model_history()
+
+    if mh2.empty:
+        st.info("2026 performance data will appear here once backtest_mc_2026.py has been run.")
+    else:
+        mh2["date"] = pd.to_datetime(mh2["date"], errors="coerce")
+        mh2 = mh2.dropna(subset=["date"])
+
+        st.markdown("### 2026 Season Model Performance")
+        st.caption("All completed games where the model generated predictions")
+
+        # RL Performance over time
+        if "bet_win" in mh2.columns and "signal" in mh2.columns:
+            bet_df = mh2[mh2["signal"].notna() & (mh2["signal"] != "") & mh2["bet_win"].notna()].copy()
+            if not bet_df.empty:
+                bet_df = bet_df.sort_values("date")
+                bet_df["cum_wins"]  = bet_df["bet_win"].cumsum()
+                bet_df["cum_bets"]  = range(1, len(bet_df) + 1)
+                bet_df["cum_wr"]    = bet_df["cum_wins"] / bet_df["cum_bets"]
+                bet_df["cum_roi"]   = (bet_df["cum_wins"] * (100/110) - (bet_df["cum_bets"] - bet_df["cum_wins"])) / bet_df["cum_bets"] * 100
+
+                st.subheader("Run Line Performance")
+                m1, m2, m3, m4 = st.columns(4)
+                wins   = int(bet_df["bet_win"].sum())
+                losses = len(bet_df) - wins
+                roi    = (wins * (100/110) - losses) / len(bet_df) * 100
+                m1.metric("Record", f"{wins}–{losses}")
+                m2.metric("Win Rate", f"{wins/len(bet_df):.1%}")
+                m3.metric("ROI", f"{roi:+.1f}%")
+                m4.metric("Total Bets", len(bet_df))
+
+                # Show cumulative win rate chart
+                try:
+                    import altair as alt
+                    chart_df = bet_df[["date","cum_wr","cum_roi"]].copy()
+                    chart_df["date_str"] = chart_df["date"].dt.strftime("%m/%d")
+                    line = alt.Chart(chart_df).mark_line(color="#22c55e").encode(
+                        x=alt.X("date_str:N", title="Date"),
+                        y=alt.Y("cum_wr:Q", title="Cumulative Win Rate",
+                                scale=alt.Scale(domain=[0.3, 0.8]))
+                    ).properties(height=200)
+                    st.altair_chart(line, use_container_width=True)
+                except Exception:
+                    st.dataframe(bet_df[["date","signal","bet_win","cum_wr"]].tail(20),
+                                 hide_index=True, use_container_width=True)
+
+        # NRFI Performance
+        if "mc_nrfi_prob" in mh2.columns and "f1_nrfi_actual" in mh2.columns:
+            nrfi_df = mh2[mh2["mc_nrfi_prob"].notna() & mh2["f1_nrfi_actual"].notna()].copy()
+            if len(nrfi_df) >= 5:
+                st.divider()
+                st.subheader("NRFI Prediction Accuracy")
+                nrfi_df["predicted_nrfi"] = (nrfi_df["mc_nrfi_prob"] > 0.5).astype(int)
+                nrfi_df["correct"] = (nrfi_df["predicted_nrfi"] == nrfi_df["f1_nrfi_actual"]).astype(int)
+
+                # Break into buckets
+                nrfi_df["prob_bucket"] = pd.cut(
+                    nrfi_df["mc_nrfi_prob"],
+                    bins=[0, 0.45, 0.55, 0.65, 0.75, 1.0],
+                    labels=["<45%", "45–55%", "55–65%", "65–75%", ">75%"]
+                )
+                nrfi_cal = nrfi_df.groupby("prob_bucket", observed=True).agg(
+                    Games=("correct", "count"),
+                    NRFI_Rate=("f1_nrfi_actual", "mean"),
+                    Accuracy=("correct", "mean"),
+                    Avg_Prob=("mc_nrfi_prob", "mean")
+                ).reset_index()
+                nrfi_cal["NRFI_Rate"] = nrfi_cal["NRFI_Rate"].map("{:.1%}".format)
+                nrfi_cal["Accuracy"]  = nrfi_cal["Accuracy"].map("{:.1%}".format)
+                nrfi_cal["Avg_Prob"]  = nrfi_cal["Avg_Prob"].map("{:.1%}".format)
+                st.dataframe(nrfi_cal, hide_index=True, use_container_width=True)
+
+        # K prop Performance
+        if "mc_home_sp_k_mean" in mh2.columns and "home_sp_k_actual" in mh2.columns:
+            k_df = mh2[mh2["mc_home_sp_k_mean"].notna() & mh2["home_sp_k_actual"].notna()].copy()
+            if len(k_df) >= 5:
+                st.divider()
+                st.subheader("SP Strikeout Prediction (K Props)")
+                k_err = (k_df["mc_home_sp_k_mean"] - k_df["home_sp_k_actual"]).abs().mean()
+                k_bias = (k_df["mc_home_sp_k_mean"] - k_df["home_sp_k_actual"]).mean()
+                ka, kb = st.columns(2)
+                ka.metric("K MAE", f"{k_err:.2f} strikeouts")
+                kb.metric("K Bias", f"{k_bias:+.2f} (+ = model over-predicts)")
 
 
 # ── Footer ────────────────────────────────────────────────────────────────────

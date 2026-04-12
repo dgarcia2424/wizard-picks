@@ -382,6 +382,220 @@ def get_odds_from_api(game_date: str, home_team: str, away_team: str) -> Optiona
 
 
 # ---------------------------------------------------------------------------
+# Pitcher strikeout props (per-event endpoint)
+# ---------------------------------------------------------------------------
+def fetch_pitcher_strikeout_props(target_date: str) -> pd.DataFrame:
+    """
+    Fetch pitcher strikeout over/under props from The Odds API.
+    Calls the per-event endpoint for each game on target_date.
+
+    Returns DataFrame with columns:
+        game_date, event_id, home_team, away_team,
+        pitcher_name, line, over_odds, under_odds, book, pull_timestamp
+
+    Saves to data/statcast/k_props_{target_date}.parquet
+    """
+    global _odds_api_quota_remaining, _odds_api_quota_used
+
+    if not ODDS_API_KEY:
+        log.warning("ODDS_API_KEY not set — skipping K props fetch")
+        return pd.DataFrame()
+
+    # Check quota before making per-event calls (each event = 1 request)
+    if (_odds_api_quota_remaining is not None
+            and _odds_api_quota_remaining < ODDS_API_QUOTA_THRESHOLD + 20):
+        log.warning("Odds API quota too low for K props (%d remaining)",
+                    _odds_api_quota_remaining or 0)
+        return pd.DataFrame()
+
+    # Check cache first
+    cache_path = OUTPUT_DIR / f"k_props_{target_date}.parquet"
+    if cache_path.exists():
+        age_hours = (datetime.utcnow().timestamp() - cache_path.stat().st_mtime) / 3600
+        if age_hours < 4:
+            log.info("Loading K props from cache: %s", cache_path)
+            return pd.read_parquet(cache_path, engine="pyarrow")
+
+    # Need game-level data to get event IDs
+    global _odds_api_data_cache
+    if _odds_api_data_cache is None:
+        _odds_api_data_cache = fetch_odds_api(target_date) or []
+
+    if not _odds_api_data_cache:
+        log.warning("No game-level odds available — cannot fetch K props")
+        return pd.DataFrame()
+
+    props_rows = []
+    events_tried = 0
+
+    for game in _odds_api_data_cache:
+        event_id = game.get("id", "")
+        if not event_id:
+            continue
+
+        home_raw = game.get("home_team", "")
+        away_raw = game.get("away_team", "")
+        home_team = normalize_team(home_raw)
+        away_team = normalize_team(away_raw)
+
+        # Per-event K props endpoint
+        url = f"https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{event_id}/odds"
+        params = {
+            "apiKey": ODDS_API_KEY,
+            "regions": "us",
+            "markets": "pitcher_strikeouts",
+            "bookmakers": "draftkings,fanduel,betmgm",
+            "oddsFormat": "american",
+        }
+
+        try:
+            resp = requests.get(url, params=params, timeout=15)
+            resp.raise_for_status()
+        except requests.RequestException as exc:
+            log.warning("K props fetch failed for %s @ %s: %s", away_team, home_team, exc)
+            continue
+
+        # Update quota tracking
+        remaining = resp.headers.get("x-requests-remaining")
+        used = resp.headers.get("x-requests-used")
+        if remaining is not None:
+            _odds_api_quota_remaining = int(remaining)
+        if used is not None:
+            _odds_api_quota_used = int(used)
+        events_tried += 1
+
+        # Stop if quota getting low
+        if (_odds_api_quota_remaining is not None
+                and _odds_api_quota_remaining < ODDS_API_QUOTA_THRESHOLD):
+            log.warning("K props: quota hit threshold after %d events", events_tried)
+            _log_quota(_odds_api_quota_remaining, _odds_api_quota_used)
+            break
+
+        try:
+            data = resp.json()
+        except Exception:
+            continue
+
+        bookmakers = data.get("bookmakers", [])
+        for bk in bookmakers:
+            book_key = bk.get("key", "")
+            for market in bk.get("markets", []):
+                if market.get("key") != "pitcher_strikeouts":
+                    continue
+                outcomes = market.get("outcomes", [])
+                # Group by pitcher: find over/under pairs
+                pitcher_lines: dict = {}
+                for out in outcomes:
+                    pitcher = out.get("description", out.get("name", ""))
+                    side = out.get("name", "").lower()  # "Over" or "Under"
+                    price = out.get("price")
+                    point = out.get("point")
+                    if not pitcher or price is None or point is None:
+                        continue
+                    if pitcher not in pitcher_lines:
+                        pitcher_lines[pitcher] = {"line": float(point)}
+                    if "over" in side:
+                        pitcher_lines[pitcher]["over_odds"] = int(price)
+                    elif "under" in side:
+                        pitcher_lines[pitcher]["under_odds"] = int(price)
+
+                for pitcher, info in pitcher_lines.items():
+                    props_rows.append({
+                        "game_date":      target_date,
+                        "event_id":       event_id,
+                        "home_team":      home_team,
+                        "away_team":      away_team,
+                        "pitcher_name":   pitcher,
+                        "line":           info.get("line"),
+                        "over_odds":      info.get("over_odds"),
+                        "under_odds":     info.get("under_odds"),
+                        "book":           book_key,
+                        "pull_timestamp": datetime.utcnow(),
+                    })
+
+        time.sleep(0.3)  # polite delay between event calls
+
+    _log_quota(_odds_api_quota_remaining, _odds_api_quota_used)
+    log.info("K props: fetched %d rows from %d events", len(props_rows), events_tried)
+
+    if not props_rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(props_rows)
+    # Deduplicate: keep best-odds book per pitcher per side
+    # For display, keep the row with tightest line (most common line across books)
+    df["line"] = pd.to_numeric(df["line"], errors="coerce")
+    df["over_odds"] = pd.to_numeric(df["over_odds"], errors="coerce")
+    df["under_odds"] = pd.to_numeric(df["under_odds"], errors="coerce")
+
+    try:
+        df.to_parquet(cache_path, engine="pyarrow", index=False)
+        log.info("K props saved: %s (%d rows)", cache_path, len(df))
+    except Exception as exc:
+        log.warning("Could not save K props: %s", exc)
+
+    return df
+
+
+def get_k_prop_for_pitcher(pitcher_name: str, target_date: str) -> Optional[dict]:
+    """
+    Look up the consensus K prop line for a specific pitcher on target_date.
+    Returns dict with: line, over_odds, under_odds, book — or None if not found.
+    Uses normalized name matching.
+    """
+    cache_path = OUTPUT_DIR / f"k_props_{target_date}.parquet"
+    if not cache_path.exists():
+        return None
+
+    try:
+        df = pd.read_parquet(cache_path, engine="pyarrow")
+    except Exception:
+        return None
+
+    if df.empty:
+        return None
+
+    # Normalize for matching
+    def _norm(s):
+        return str(s).upper().strip() if s else ""
+
+    pitcher_norm = _norm(pitcher_name)
+    df["name_norm"] = df["pitcher_name"].apply(_norm)
+
+    matches = df[df["name_norm"] == pitcher_norm]
+    if matches.empty:
+        # Try last name only
+        last = pitcher_norm.split()[-1] if pitcher_norm else ""
+        matches = df[df["name_norm"].str.contains(last, na=False)] if last else pd.DataFrame()
+
+    if matches.empty:
+        return None
+
+    # Use DraftKings first, then FanDuel, then any book
+    for book in ["draftkings", "fanduel", "betmgm"]:
+        book_rows = matches[matches["book"] == book]
+        if not book_rows.empty:
+            row = book_rows.iloc[0]
+            return {
+                "pitcher_name": row["pitcher_name"],
+                "line":         row["line"],
+                "over_odds":    row["over_odds"],
+                "under_odds":   row["under_odds"],
+                "book":         row["book"],
+            }
+
+    # Fall back to first available
+    row = matches.iloc[0]
+    return {
+        "pitcher_name": row["pitcher_name"],
+        "line":         row["line"],
+        "over_odds":    row["over_odds"],
+        "under_odds":   row["under_odds"],
+        "book":         row["book"],
+    }
+
+
+# ---------------------------------------------------------------------------
 # Source 3: ActionNetwork scraper
 # ---------------------------------------------------------------------------
 _actionnetwork_cache: Optional[list[dict]] = None
@@ -810,7 +1024,14 @@ def main() -> None:
         help="Date to pull odds for (YYYY-MM-DD). Defaults to today.",
     )
     args = parser.parse_args()
-    pull_odds_for_date(args.date)
+    date_str = args.date
+    pull_odds_for_date(date_str)
+
+    # Fetch pitcher K props (uses per-event endpoint — quota-aware)
+    k_props = fetch_pitcher_strikeout_props(date_str)
+    if not k_props.empty:
+        log.info("Pitcher K props: %d rows fetched for %d pitchers",
+                 len(k_props), k_props["pitcher_name"].nunique())
 
 
 if __name__ == "__main__":

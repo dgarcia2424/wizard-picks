@@ -250,6 +250,7 @@ def xwoba_to_runs_per_game(xwoba: np.ndarray) -> np.ndarray:
 
 
 LEAGUE_RS_PER_GAME = 4.38   # 2024 MLB average runs scored per team per game
+BF_PER_INNING      = 4.3    # Average batters faced per inning (for K prop model)
 
 
 def simulate_game(
@@ -590,6 +591,80 @@ def predict_game(
     mc_total        = (home_runs + away_runs).mean()
     mc_total_median = float(np.median(home_runs + away_runs))
 
+    # -----------------------------------------------------------------------
+    # SHARED HELPERS for F5 / F1 calculations
+    # -----------------------------------------------------------------------
+    env_factor = air_density_ratio(elev) * (1 + TEMP_RUN_FACTOR * (temp_f - TEMP_BASELINE_F))
+
+    def _off_factor(rs_pg):
+        if rs_pg is None:
+            return 1.0
+        return 0.50 * (float(rs_pg) / LEAGUE_RS_PER_GAME) + 0.50
+
+    # SP runs/game allowed (used by both F5 and F1)
+    away_sp_rpg = float(np.clip(XWOBA_INTERCEPT + XWOBA_SLOPE * away_mu, 0, 20))
+    home_sp_rpg = float(np.clip(XWOBA_INTERCEPT + XWOBA_SLOPE * home_mu, 0, 20))
+    bp_rpg_home = float(np.clip(XWOBA_INTERCEPT + XWOBA_SLOPE * home_bp_xwoba, 0, 20))
+    bp_rpg_away = float(np.clip(XWOBA_INTERCEPT + XWOBA_SLOPE * away_bp_xwoba, 0, 20))
+
+    # -----------------------------------------------------------------------
+    # F5 PREDICTIONS (First 5 Innings — analytical Poisson)
+    # -----------------------------------------------------------------------
+    home_f5_ip    = min(home_ip, 5.0)
+    away_f5_ip    = min(away_ip, 5.0)
+    home_f5_bp_ip = max(0.0, 5.0 - home_f5_ip)
+    away_f5_bp_ip = max(0.0, 5.0 - away_f5_ip)
+
+    # Home team's F5 expected runs = what away pitching gives up over 5 innings
+    home_f5_lambda = (
+        away_sp_rpg * away_f5_ip / 9.0
+        + bp_rpg_away * away_f5_bp_ip / 9.0
+    ) * env_factor * _off_factor(home_rs_pg)
+    # Away team's F5 expected runs = what home pitching gives up over 5 innings
+    away_f5_lambda = (
+        home_sp_rpg * home_f5_ip / 9.0
+        + bp_rpg_home * home_f5_bp_ip / 9.0
+    ) * env_factor * _off_factor(away_rs_pg)
+
+    f5_home_runs = rng.poisson(max(home_f5_lambda, 0.05), size=N_SIMS).astype(float)
+    f5_away_runs = rng.poisson(max(away_f5_lambda, 0.05), size=N_SIMS).astype(float)
+    f5_margin    = f5_home_runs - f5_away_runs
+
+    # -----------------------------------------------------------------------
+    # F1 / NRFI PREDICTIONS (First Inning — analytical Poisson)
+    # -----------------------------------------------------------------------
+    import math as _math
+
+    home_f1_lambda = (away_sp_rpg / 9.0) * env_factor * _off_factor(home_rs_pg)
+    away_f1_lambda = (home_sp_rpg / 9.0) * env_factor * _off_factor(away_rs_pg)
+
+    p_home_scoreless_f1 = _math.exp(-home_f1_lambda)
+    p_away_scoreless_f1 = _math.exp(-away_f1_lambda)
+    p_nrfi = p_home_scoreless_f1 * p_away_scoreless_f1
+
+    f1_home_runs = rng.poisson(max(home_f1_lambda, 0.01), size=N_SIMS).astype(float)
+    f1_away_runs = rng.poisson(max(away_f1_lambda, 0.01), size=N_SIMS).astype(float)
+
+    # -----------------------------------------------------------------------
+    # PITCHER K PREDICTIONS (Strikeout props — binomial model)
+    # -----------------------------------------------------------------------
+    home_k_rate = float(home_prof.get("blended_k_pct") or 0.225)
+    away_k_rate = float(away_prof.get("blended_k_pct") or 0.225)
+    if pd.isna(home_k_rate): home_k_rate = 0.225
+    if pd.isna(away_k_rate): away_k_rate = 0.225
+
+    home_expected_bf = home_ip * BF_PER_INNING
+    away_expected_bf = away_ip * BF_PER_INNING
+
+    mc_home_k_mean = home_k_rate * home_expected_bf
+    mc_away_k_mean = away_k_rate * away_expected_bf
+
+    home_k_sims = rng.binomial(int(round(home_expected_bf)), home_k_rate, size=N_SIMS).astype(float)
+    away_k_sims = rng.binomial(int(round(away_expected_bf)), away_k_rate, size=N_SIMS).astype(float)
+
+    def k_over_prob(k_sims, line):
+        return float((k_sims > line).mean())
+
     result = {
         "home_team":           home_team,
         "away_team":           away_team,
@@ -627,6 +702,31 @@ def predict_game(
         "mc_expected_total":   round(mc_total, 2),
         "mc_total_median":     mc_total_median,
         "n_sims":              N_SIMS,
+        # F5 predictions
+        "mc_f5_home_runs":      round(float(f5_home_runs.mean()), 2),
+        "mc_f5_away_runs":      round(float(f5_away_runs.mean()), 2),
+        "mc_f5_total":          round(float((f5_home_runs + f5_away_runs).mean()), 2),
+        "mc_f5_home_win_prob":  round(float((f5_margin > 0).mean()), 4),
+        "mc_f5_home_covers_rl": round(float((f5_margin >= 2).mean()), 4),
+        # F1 / NRFI predictions
+        "mc_nrfi_prob":         round(p_nrfi, 4),
+        "mc_p_home_scores_f1":  round(1 - p_home_scoreless_f1, 4),
+        "mc_p_away_scores_f1":  round(1 - p_away_scoreless_f1, 4),
+        "mc_f1_home_runs":      round(float(f1_home_runs.mean()), 3),
+        "mc_f1_away_runs":      round(float(f1_away_runs.mean()), 3),
+        # K prop predictions
+        "mc_home_sp_k_mean":    round(mc_home_k_mean, 2),
+        "mc_away_sp_k_mean":    round(mc_away_k_mean, 2),
+        "mc_home_sp_k_std":     round(float(home_k_sims.std()), 2),
+        "mc_away_sp_k_std":     round(float(away_k_sims.std()), 2),
+        "mc_home_sp_k_over_35": round(k_over_prob(home_k_sims, 3.5), 4),
+        "mc_home_sp_k_over_45": round(k_over_prob(home_k_sims, 4.5), 4),
+        "mc_home_sp_k_over_55": round(k_over_prob(home_k_sims, 5.5), 4),
+        "mc_home_sp_k_over_65": round(k_over_prob(home_k_sims, 6.5), 4),
+        "mc_away_sp_k_over_35": round(k_over_prob(away_k_sims, 3.5), 4),
+        "mc_away_sp_k_over_45": round(k_over_prob(away_k_sims, 4.5), 4),
+        "mc_away_sp_k_over_55": round(k_over_prob(away_k_sims, 5.5), 4),
+        "mc_away_sp_k_over_65": round(k_over_prob(away_k_sims, 6.5), 4),
     }
 
     # XGBoost prediction

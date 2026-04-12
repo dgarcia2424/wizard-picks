@@ -10,6 +10,20 @@ Usage:
     python run_pipeline.py --only supplemental weather  # run specific steps
     python run_pipeline.py --from weather               # resume from a step
     python run_pipeline.py --dry-run     # print order without running
+    python run_pipeline.py --daily       # lightweight daily card (lineups → picks → upload)
+
+DAILY RUN ORDER (--daily or run manually):
+  1. lineup_pull.py           ← today's starters from MLB Stats API
+  2. odds_current_pull.py     ← today's ML/RL/total + K props from Odds API
+  3. build_pitcher_profile.py ← refresh pitcher xwOBA/K%/IP profiles
+  4. build_team_stats_2026.py ← refresh team batting/bullpen stats
+  5. run_today.py --csv       ← MC + XGBoost predictions → daily_card.csv
+  6. backtest_2026.py         ← append today's games to backtest tracker
+  7. supabase_upload.py       ← push daily_card.csv + backtest to Supabase
+
+FULL PIPELINE (weekly / season start):
+  Same as above but also runs supplemental_pull.py (FanGraphs/Statcast)
+  and weather_pull.py (historical weather for all games).
 """
 
 import argparse
@@ -24,26 +38,20 @@ from pathlib import Path
 # Tags are used for --skip and --only filtering.
 
 STEPS = [
+    # ── Heavy / weekly pulls ──────────────────────────────────────────────────
     (
         "supplemental",
         "supplemental_pull.py",
         "FanGraphs stats, Statcast leaderboards, MLB schedule, park factors, pitcher handedness",
         30,
-        ["data", "pybaseball"],
+        ["data", "pybaseball", "weekly"],
     ),
     (
         "weather",
         "weather_pull.py",
         "Open-Meteo per-game weather (temp, wind, humidity) for all historical games",
         20,
-        ["data", "weather"],
-    ),
-    (
-        "lineups",
-        "lineup_pull.py",
-        "Today's confirmed lineups + probable pitchers from MLB Stats API",
-        1,
-        ["data", "daily", "lineups"],
+        ["data", "weather", "weekly"],
     ),
     (
         "odds_historical",
@@ -53,19 +61,65 @@ STEPS = [
         ["odds", "historical", "one-time"],
     ),
     (
-        "odds_current",
-        "odds_current_pull.py",
-        "Today's odds via Odds API + ActionNetwork fallback",
-        2,
-        ["odds", "daily"],
-    ),
-    (
         "odds_combine",
         "odds_combine.py",
         "Merge all odds sources into odds_combined_{year}.parquet",
         2,
-        ["odds"],
+        ["odds", "weekly"],
     ),
+    # ── Daily pulls ───────────────────────────────────────────────────────────
+    (
+        "lineups",
+        "lineup_pull.py",
+        "Today's confirmed lineups + probable pitchers from MLB Stats API",
+        1,
+        ["data", "daily"],
+    ),
+    (
+        "odds_current",
+        "odds_current_pull.py",
+        "Today's ML/RL/total odds + pitcher K props via Odds API",
+        2,
+        ["odds", "daily"],
+    ),
+    # ── Model inputs (build from raw data) ────────────────────────────────────
+    (
+        "pitcher_profiles",
+        "build_pitcher_profile.py",
+        "Compute trailing xwOBA/K%/BB%/velocity/expected_IP per pitcher from 2026 Statcast",
+        3,
+        ["model", "daily"],
+    ),
+    (
+        "team_stats",
+        "build_team_stats_2026.py",
+        "Compute team batting splits (xwOBA vs RHP/LHP), RS/G, bullpen ERA for 2026",
+        2,
+        ["model", "daily"],
+    ),
+    # ── Predictions + tracking ────────────────────────────────────────────────
+    (
+        "picks",
+        "run_today.py --csv",
+        "Generate today's MC + XGBoost picks and save daily_card.csv",
+        2,
+        ["daily", "picks"],
+    ),
+    (
+        "backtest",
+        "backtest_2026.py",
+        "Append completed games to backtest tracker (append mode, no duplication)",
+        1,
+        ["daily", "tracking"],
+    ),
+    (
+        "upload",
+        "supabase_upload.py",
+        "Push daily_card.csv, backtest, and model history to Supabase",
+        1,
+        ["daily", "upload"],
+    ),
+    # ── Validation ────────────────────────────────────────────────────────────
     (
         "catalog",
         "data_catalog.py",
@@ -74,6 +128,10 @@ STEPS = [
         ["validate"],
     ),
 ]
+
+# Steps that run in the lightweight daily card generation
+DAILY_STEPS = {"lineups", "odds_current", "pitcher_profiles", "team_stats",
+               "picks", "backtest", "upload"}
 
 STEP_NAMES = [s[0] for s in STEPS]
 
@@ -105,12 +163,14 @@ def print_step_start(i: int, total: int, name: str, desc: str, est_min: int):
 
 def run_step(script: str) -> tuple[int, float]:
     """
-    Run script as subprocess, streaming output in real time.
+    Run script (with optional args) as subprocess, streaming output in real time.
+    script may be "run_today.py --csv" — it is split on spaces.
     Returns (returncode, elapsed_seconds).
     """
     start = time.time()
+    parts = script.split()   # e.g. ["run_today.py", "--csv"]
     proc = subprocess.Popen(
-        [sys.executable, "-X", "utf8", script],
+        [sys.executable, "-X", "utf8"] + parts,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -148,10 +208,21 @@ def main():
         "--no-catalog", action="store_true",
         help="Skip the final data_catalog validation step"
     )
+    parser.add_argument(
+        "--daily", action="store_true",
+        help=(
+            "Run only the lightweight daily card steps: "
+            "lineups → odds_current → pitcher_profiles → team_stats → picks → backtest → upload"
+        )
+    )
     args = parser.parse_args()
 
     # ── Filter steps ─────────────────────────────────────────────────────────
     steps = list(STEPS)
+
+    # --daily shortcut: run only daily-tagged steps, skip catalog
+    if args.daily and not args.only:
+        steps = [s for s in steps if s[0] in DAILY_STEPS]
 
     if args.from_step:
         if args.from_step not in STEP_NAMES:
@@ -180,8 +251,9 @@ def main():
     # ── Check scripts exist ───────────────────────────────────────────────────
     missing = []
     for name, script, *_ in steps:
-        if not Path(script).exists():
-            missing.append(script)
+        script_file = script.split()[0]   # strip any CLI args (e.g. "run_today.py --csv")
+        if not Path(script_file).exists():
+            missing.append(script_file)
     if missing:
         print("Missing scripts:")
         for m in missing:
