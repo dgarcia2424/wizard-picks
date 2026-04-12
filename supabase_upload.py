@@ -90,7 +90,12 @@ def upload_daily_card(csv_path: Path = None) -> int:
 
     success = 0
     for _, row in df.iterrows():
-        record = {
+        # All data goes into the JSONB 'data' column — the app reads from there.
+        # Top-level columns are only those that exist in the original table schema.
+        # New fields (best_edge, mc_home_win, etc.) live inside 'data' only.
+        full_data = _clean(row.to_dict())
+
+        record = _clean({
             "game_date":    game_date,
             "game":         row.get("game", ""),
             "home_team":    row.get("home_team", ""),
@@ -104,7 +109,6 @@ def upload_daily_card(csv_path: Path = None) -> int:
             "blended_total":row.get("blended_total"),
             "vegas_total":  row.get("vegas_total"),
             "vegas_ml_home":row.get("vegas_ml_home"),
-            "vegas_ml_away":row.get("vegas_ml_away"),
             "home_sp":      row.get("home_sp", ""),
             "away_sp":      row.get("away_sp", ""),
             "home_sp_xwoba":row.get("home_sp_xwoba"),
@@ -112,18 +116,9 @@ def upload_daily_card(csv_path: Path = None) -> int:
             "home_sp_flag": row.get("home_sp_flag", ""),
             "away_sp_flag": row.get("away_sp_flag", ""),
             "temp_f":       row.get("temp_f"),
-            "lineup_confirmed": row.get("lineup_confirmed", False),
-            # Best-bet fields
-            "best_line":    row.get("best_line", ""),
-            "best_tier":    row.get("best_tier", ""),
-            "best_model_prob": row.get("best_model_prob"),
-            "best_market_odds": row.get("best_market_odds"),
-            "best_edge":    row.get("best_edge"),
-            "mc_home_win":  row.get("mc_home_win"),
-            "mc_home_cvr25":row.get("mc_home_cvr25"),
-            "mc_away_cvr25":row.get("mc_away_cvr25"),
-            "data":         _clean(row.to_dict()),
-        }
+            "lineup_confirmed": bool(row.get("lineup_confirmed", False)),
+            "data":         full_data,   # all fields including new ones
+        })
         try:
             client.table("wizard_daily_card").insert(record).execute()
             success += 1
