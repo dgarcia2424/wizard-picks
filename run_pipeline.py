@@ -119,6 +119,13 @@ STEPS = [
         1,
         ["daily", "upload"],
     ),
+    (
+        "health",
+        "pipeline_health.py --upload",
+        "Check data artifact freshness and push status to Supabase dashboard",
+        1,
+        ["daily", "upload"],
+    ),
     # ── Validation ────────────────────────────────────────────────────────────
     (
         "catalog",
@@ -131,7 +138,7 @@ STEPS = [
 
 # Steps that run in the lightweight daily card generation
 DAILY_STEPS = {"lineups", "odds_current", "pitcher_profiles", "team_stats",
-               "picks", "backtest", "upload"}
+               "picks", "backtest", "upload", "health"}
 
 STEP_NAMES = [s[0] for s in STEPS]
 

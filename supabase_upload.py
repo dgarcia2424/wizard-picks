@@ -253,6 +253,53 @@ def upload_model_history(csv_path: Path = None) -> int:
     return success
 
 
+def upload_pipeline_health(status: dict = None) -> int:
+    """Upload pipeline health status to wizard_pipeline_health table.
+
+    If status is None, reads from pipeline_status.json.
+    Upserts on date (one row per day, updated throughout the day).
+    """
+    import json as _json
+
+    if status is None:
+        path = BASE_DIR / "pipeline_status.json"
+        if not path.exists():
+            logger.warning("  [SKIP] pipeline_status.json not found")
+            return 0
+        try:
+            status = _json.loads(path.read_text())
+        except Exception as e:
+            logger.warning(f"  [SKIP] Could not read pipeline_status.json: {e}")
+            return 0
+
+    if not status:
+        return 0
+
+    client = _get_client()
+    today  = status.get("date", str(__import__("datetime").date.today()))
+
+    record = _clean({
+        "date":            today,
+        "generated_at":    status.get("generated_at", ""),
+        "overall":         status.get("overall", "ok"),
+        "picks_ready":     bool(status.get("picks_ready", False)),
+        "missing_critical": _json.dumps(status.get("missing_critical", [])),
+        "missing_optional": _json.dumps(status.get("missing_optional", [])),
+        "warnings":         _json.dumps(status.get("warnings", [])),
+        "artifacts_json":   _json.dumps(status.get("artifacts", {})),
+    })
+
+    try:
+        # Upsert: delete today's row then insert fresh
+        client.table("wizard_pipeline_health").delete().eq("date", today).execute()
+        client.table("wizard_pipeline_health").insert(record).execute()
+        logger.info(f"  wizard_pipeline_health: uploaded status={status.get('overall')} for {today}")
+        return 1
+    except Exception as e:
+        logger.error(f"  [ERROR] pipeline_health upload: {e}")
+        return 0
+
+
 # ---------------------------------------------------------------------------
 # MAIN
 # ---------------------------------------------------------------------------
@@ -267,7 +314,8 @@ def main():
         n2 = upload_backtest()
         n3 = upload_bet_tracker()
         n4 = upload_model_history()
-        total = n1 + n2 + n3 + n4
+        n5 = upload_pipeline_health()
+        total = n1 + n2 + n3 + n4 + n5
         print(f"\n  Done. {total} total rows uploaded to Supabase.")
         sys.exit(0)
     except RuntimeError as e:

@@ -306,6 +306,113 @@ def load_model_history() -> pd.DataFrame:
     return pd.read_csv(path).sort_values("date", ascending=False) if path.exists() else pd.DataFrame()
 
 
+@st.cache_data(ttl=60)
+def load_pipeline_health() -> dict:
+    """Load pipeline health status from Supabase or local JSON."""
+    if USE_SUPABASE:
+        client = _supabase()
+        try:
+            today = datetime.date.today().isoformat()
+            resp = client.table("wizard_pipeline_health").select("*").eq("date", today).execute()
+            if resp.data:
+                row = resp.data[0]
+                # Parse artifacts_json back to dict
+                import json as _json
+                try:
+                    row["artifacts"] = _json.loads(row.get("artifacts_json", "{}"))
+                except Exception:
+                    row["artifacts"] = {}
+                return row
+        except Exception:
+            pass
+    # Fallback: local pipeline_status.json
+    import json as _json
+    path = Path(__file__).parent / "pipeline_status.json"
+    if path.exists():
+        try:
+            age_min = (datetime.datetime.now().timestamp() - path.stat().st_mtime) / 60
+            if age_min < 30:  # only use if less than 30 minutes old
+                return _json.loads(path.read_text())
+        except Exception:
+            pass
+    return {}
+
+
+def render_health_banner(health: dict) -> None:
+    """Render a compact pipeline health status banner in the picks tab."""
+    if not health:
+        return
+
+    overall   = health.get("overall", "ok")
+    picks_rdy = health.get("picks_ready", True)
+    generated = health.get("generated_at", "")
+    missing_c = health.get("missing_critical", [])
+    missing_o = health.get("missing_optional", [])
+    warnings  = health.get("warnings", [])
+    next_runs = health.get("next_scheduled_runs", {})
+
+    # Decide banner color/icon
+    if overall == "critical":
+        color  = "rgba(239,68,68,.12)"
+        border = "rgba(239,68,68,.5)"
+        icon   = "🔴"
+        title  = "Pipeline issue — picks may be stale"
+    elif overall == "warning":
+        color  = "rgba(251,191,36,.10)"
+        border = "rgba(251,191,36,.4)"
+        icon   = "🟡"
+        title  = "Some data not yet available"
+    else:
+        if not picks_rdy:
+            color  = "rgba(251,191,36,.10)"
+            border = "rgba(251,191,36,.4)"
+            icon   = "🟡"
+            title  = "Picks not yet generated today"
+        else:
+            color  = "rgba(34,197,94,.08)"
+            border = "rgba(34,197,94,.3)"
+            icon   = "🟢"
+            title  = "All systems good"
+
+    # Build detail lines
+    details = []
+    if missing_c:
+        details.append(f"<b>Missing (critical):</b> {', '.join(missing_c)}")
+    if missing_o:
+        details.append(f"<b>Missing (optional):</b> {', '.join(missing_o)}")
+    for w in warnings[:2]:   # cap at 2 warnings
+        details.append(f"⚠ {w}")
+    if next_runs:
+        next_strs = []
+        if "k_props_retry" in next_runs and missing_o and "k_props" in str(missing_o):
+            next_strs.append(f"K props retry: {next_runs['k_props_retry']}")
+        if "picks" in next_runs and not picks_rdy:
+            next_strs.append(f"Picks: {next_runs['picks']}")
+        if next_strs:
+            details.append(f"🕐 Next update: {' · '.join(next_strs)}")
+    if generated:
+        try:
+            gen_dt = datetime.datetime.fromisoformat(generated)
+            ago_min = int((datetime.datetime.now() - gen_dt).total_seconds() / 60)
+            details.append(f"Status checked {ago_min}m ago")
+        except Exception:
+            pass
+
+    detail_html = "  &nbsp;·&nbsp;  ".join(details) if details else ""
+    detail_block = f'<div style="font-size:.78rem;color:#9ca3af;margin-top:4px">{detail_html}</div>' if detail_html else ""
+
+    # Only show banner if there's something to report (hide when all-green + picks ready)
+    if overall == "ok" and picks_rdy and not details:
+        return
+
+    st.markdown(f"""
+<div style="background:{color};border:1px solid {border};border-radius:8px;
+            padding:10px 16px;margin-bottom:12px">
+  <span style="font-weight:700;font-size:.9rem">{icon} {title}</span>
+  {detail_block}
+</div>""", unsafe_allow_html=True)
+
+
 # ── Card helpers ──────────────────────────────────────────────────────────────
 
 def _tip(term: str, definition: str) -> str:
@@ -696,6 +803,10 @@ with tab_picks:
 
     date_str = today.isoformat()
     st.caption(f"Showing picks for **{today.strftime('%A, %B %d, %Y')}**")
+
+    # Pipeline health banner
+    _health = load_pipeline_health()
+    render_health_banner(_health)
 
     with st.expander("📖 How to read this — terms & definitions"):
         st.markdown("""
