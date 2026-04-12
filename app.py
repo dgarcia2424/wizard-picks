@@ -74,10 +74,13 @@ st.markdown("""
 
 # ── Password gate ─────────────────────────────────────────────────────────────
 def _site_password() -> str:
+    # Try Streamlit secrets first (hosted), then env var (local)
     try:
-        return st.secrets.get("SITE_PASSWORD", "")
+        val = st.secrets["SITE_PASSWORD"]
+        return str(val).strip()
     except Exception:
-        return os.environ.get("SITE_PASSWORD", "")
+        pass
+    return str(os.environ.get("SITE_PASSWORD", "")).strip()
 
 def check_password() -> bool:
     if st.session_state.get("authenticated"):
@@ -91,7 +94,7 @@ def check_password() -> bool:
         pwd = st.text_input("Password", type="password", label_visibility="collapsed",
                             placeholder="Enter password")
         if st.button("Enter", use_container_width=True, type="primary"):
-            if pwd == _site_password():
+            if pwd.strip() == _site_password():
                 st.session_state.authenticated = True
                 st.rerun()
             else:
