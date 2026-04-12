@@ -75,20 +75,27 @@ st.markdown("""
                padding:7px 12px; display:inline-block; }
 
 /* Score prediction */
-.score-section { background:rgba(255,255,255,.04); border-radius:8px;
-                 padding:14px 18px; margin:12px 0; }
-.score-label   { font-size:.72rem; color:#6b7280; text-transform:uppercase;
-                 letter-spacing:.08em; margin-bottom:8px; }
-.score-main    { font-size:1.3rem; font-weight:700; color:#f9fafb; margin-bottom:8px; }
-.score-bands   { display:flex; gap:10px; margin:6px 0; }
-.score-band    { flex:1; background:rgba(255,255,255,.06); border-radius:6px;
-                 padding:7px 12px; text-align:center; }
-.score-band-team { font-size:.72rem; color:#9ca3af; text-transform:uppercase;
-                   letter-spacing:.06em; margin-bottom:3px; }
-.score-band-range { font-size:1rem; font-weight:700; color:#f9fafb; }
-.score-band-label { font-size:.7rem; color:#6b7280; margin-top:2px; }
-.score-total   { font-size:.85rem; color:#9ca3af; margin-top:8px;
-                 border-top:1px solid rgba(255,255,255,.06); padding-top:7px; }
+.score-section  { background:rgba(255,255,255,.04); border-radius:8px;
+                  padding:14px 18px; margin:12px 0; }
+.score-label    { font-size:.72rem; color:#6b7280; text-transform:uppercase;
+                  letter-spacing:.08em; margin-bottom:10px; }
+.bp-row         { display:flex; align-items:center; gap:12px; margin:6px 0; }
+.bp-team        { font-size:.82rem; font-weight:700; color:#9ca3af;
+                  width:36px; text-align:right; }
+.bp-avg         { font-size:1.05rem; font-weight:800; color:#f9fafb; width:28px; }
+.bp-chart       { flex:1; height:18px; position:relative; max-width:160px; }
+.bp-track       { height:4px; background:rgba(255,255,255,.1); border-radius:2px;
+                  position:absolute; top:7px; width:100%; }
+.bp-fill        { height:4px; border-radius:2px; position:absolute; top:0; }
+.bp-fill-a      { background:#22c55e; }
+.bp-fill-b      { background:#6b7280; }
+.bp-dot         { width:12px; height:12px; border-radius:50%; background:#f9fafb;
+                  position:absolute; top:-4px; transform:translateX(-50%);
+                  border:2px solid #111827; }
+.bp-range       { font-size:.78rem; color:#6b7280; white-space:nowrap; }
+.score-divider  { border:none; border-top:1px solid rgba(255,255,255,.06);
+                  margin:10px 0; }
+.score-total    { font-size:.85rem; color:#9ca3af; }
 
 /* Why */
 .why-section { margin:12px 0; }
@@ -117,6 +124,16 @@ st.markdown("""
                letter-spacing:.12em; text-transform:uppercase;
                margin:24px 0 10px 0; border-bottom:1px solid #1f2937;
                padding-bottom:6px; }
+
+/* Bigger tabs */
+button[data-baseweb="tab"] { font-size:1rem !important; font-weight:600 !important; padding:10px 20px !important; }
+
+/* Quick-pick chips */
+.pick-chip { display:inline-block; background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.15);
+             border-radius:99px; padding:5px 14px; margin:4px; font-size:.85rem; color:#f9fafb;
+             font-weight:600; cursor:default; }
+.pick-chip-strong { border-color:#22c55e; background:rgba(34,197,94,.12); color:#4ade80; }
+.pick-chip-lean   { border-color:#eab308; background:rgba(234,179,8,.10); color:#fde047; }
 
 /* Tracker date buttons */
 div[data-testid="column"] button { font-size:.8rem !important; }
@@ -410,41 +427,88 @@ def render_card(r: dict, n: int, tier: str):
     badge_txt = (f"★★ STRONG  ·  {conf_pct}% confidence" if tier == "strong"
                  else f"★ LEAN  ·  {conf_pct}% confidence")
 
-    # Confidence sub-line
-    market_odds = r.get("best_market_odds")
+    # Confidence / market comparison line
+    market_odds    = r.get("best_market_odds")
+    market_implied = r.get("best_market_implied")
+    raw_model      = _safe_float(r.get("best_raw_model") or model_prob)
+    deviation      = _safe_float(r.get("market_deviation"), 0.0)
+
     if market_odds is not None:
-        implied = abs(float(market_odds)) / (abs(float(market_odds)) + 100) if float(market_odds) < 0 \
-                  else 100 / (float(market_odds) + 100)
-        conf_detail = (f"{T_IMPLIED}: {implied:.0%}  ·  Your {T_EDGE}: {edge:+.1f}%")
+        mo = float(market_odds)
+        impl = _safe_float(market_implied) if market_implied else (
+            abs(mo)/(abs(mo)+100) if mo < 0 else 100/(mo+100))
+        conf_detail = (
+            f"<b style='color:#f9fafb'>Market odds: {int(mo):+d}</b>"
+            f"&nbsp;({impl:.0%} implied)"
+            f"&nbsp;·&nbsp;Model: {int(model_prob*100)}%"
+            f"&nbsp;·&nbsp;Your {T_EDGE}: <b style='color:#4ade80'>{edge:+.1f}%</b>"
+        )
     else:
-        conf_detail = f"Breakeven at -110: 52.4%  ·  Model {T_EDGE}: {edge:+.1f}%"
+        conf_detail = (
+            f"Model: {int(model_prob*100)}%"
+            f"&nbsp;·&nbsp;Breakeven at -110: 52.4%"
+            f"&nbsp;·&nbsp;Your {T_EDGE}: <b style='color:#4ade80'>{edge:+.1f}%</b>"
+        )
+
+    # Warning when pitcher-only model diverges significantly from the market
+    deviation_warning = ""
+    if deviation >= 0.25:
+        deviation_warning = (
+            f'<div style="background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.4);'
+            f'border-radius:6px;padding:6px 12px;margin:8px 0;font-size:.82rem;color:#fcd34d;">'
+            f'⚠️ <b>Model vs market gap: {deviation:.0%}</b> — pitcher matchup strongly favors '
+            f'this side, but the market disagrees. Our model does not see lineup or bullpen strength. '
+            f'Use judgment.</div>'
+        )
 
     # Predicted score
     hm = r.get("home_runs_mean")
     am = r.get("away_runs_mean")
     hl = r.get("home_runs_lo"); hh = r.get("home_runs_hi")
     al = r.get("away_runs_lo"); ah = r.get("away_runs_hi")
+    MAX_R = 12.0   # scale: 0–12 runs covers 99%+ of MLB games
+
+    def _bp_row(team, avg, lo, hi, cls):
+        """Generate one mini box-plot row."""
+        if lo is None or hi is None:
+            return (f'<div class="bp-row">'
+                    f'<div class="bp-team">{team}</div>'
+                    f'<div class="bp-avg">{avg:.1f}</div>'
+                    f'</div>')
+        box_left  = min(lo,  MAX_R) / MAX_R * 100
+        box_width = max(0, min(hi, MAX_R) - min(lo, MAX_R)) / MAX_R * 100
+        dot_left  = min(avg, MAX_R) / MAX_R * 100
+        return (
+            f'<div class="bp-row">'
+            f'  <div class="bp-team">{team}</div>'
+            f'  <div class="bp-avg">{avg:.1f}</div>'
+            f'  <div class="bp-chart">'
+            f'    <div class="bp-track">'
+            f'      <div class="bp-fill {cls}" style="left:{box_left:.1f}%;width:{box_width:.1f}%"></div>'
+            f'      <div class="bp-dot" style="left:{dot_left:.1f}%"></div>'
+            f'    </div>'
+            f'  </div>'
+            f'  <div class="bp-range">{int(lo) if lo else "?"}–{int(hi) if hi else "?"} runs</div>'
+            f'</div>'
+        )
+
     if hm is not None and am is not None:
-        score_main = f"{away} {_safe_float(am):.1f} — {home} {_safe_float(hm):.1f}"
-        if al is not None:
-            bands_html = f"""
-<div class="score-bands">
-  <div class="score-band">
-    <div class="score-band-team">{away}</div>
-    <div class="score-band-range">{int(al)} – {int(ah)}</div>
-    <div class="score-band-label">likely range</div>
-  </div>
-  <div class="score-band">
-    <div class="score-band-team">{home}</div>
-    <div class="score-band-range">{int(hl)} – {int(hh)}</div>
-    <div class="score-band-label">likely range</div>
-  </div>
-</div>"""
-        else:
-            bands_html = ""
+        # Determine which team is the bet (green bar) vs opponent (grey)
+        is_home_bet_score = "home" in str(r.get("best_line") or "").lower()
+        away_cls = "bp-fill-a" if not is_home_bet_score else "bp-fill-b"
+        home_cls = "bp-fill-a" if is_home_bet_score  else "bp-fill-b"
+
+        bands_html = (
+            f'<div style="margin:8px 0">'
+            + _bp_row(away, _safe_float(am), al, ah, away_cls)
+            + _bp_row(home, _safe_float(hm), hl, hh, home_cls)
+            + f'<div style="font-size:.7rem;color:#4b5563;margin-top:4px">'
+            f'Bars show 25th–75th percentile of 50,000 simulations · '
+            f'<span style="color:#22c55e">■</span> = recommended side</div>'
+            + f'</div>'
+        )
     else:
-        score_main = "Re-run pipeline to get score prediction"
-        bands_html = ""
+        bands_html = '<div style="font-size:.8rem;color:#4b5563">Re-run pipeline for score prediction</div>'
 
     bt = r.get("blended_total") or r.get("mc_total")
     vt = r.get("vegas_total")
@@ -500,6 +564,7 @@ def render_card(r: dict, n: int, tier: str):
 
   <div class="conf-wrap">
     <div class="conf-detail">{conf_detail}</div>
+    {deviation_warning}
   </div>
 
   <div class="score-section">
@@ -537,18 +602,30 @@ tab_picks, tab_season, tab_log = st.tabs(["📋 Today's Picks", "📈 Season Tra
 # TAB 1 — TODAY'S PICKS
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_picks:
-    col_date, col_refresh = st.columns([3, 1])
-    with col_date:
-        today    = datetime.date.today()
-        selected = st.date_input("Date", value=today,
-                                 min_value=datetime.date(2026, 3, 28),
-                                 max_value=today, label_visibility="collapsed")
-    with col_refresh:
-        if st.button("🔄 Refresh", use_container_width=True):
-            st.cache_data.clear()
+    today = datetime.date.today()
+    if "pick_date" not in st.session_state:
+        st.session_state.pick_date = today
 
-    date_str = selected.isoformat()
-    st.caption(f"Showing picks for **{selected.strftime('%A, %B %d %Y')}**")
+    qc1, qc2, qc3, qc4, qc5 = st.columns([1, 1, 1, 2, 1])
+    if qc1.button("Today",     use_container_width=True):
+        st.session_state.pick_date = today
+    if qc2.button("Yesterday", use_container_width=True):
+        st.session_state.pick_date = today - datetime.timedelta(days=1)
+    if qc3.button("–1 day",    use_container_width=True):
+        st.session_state.pick_date = max(
+            st.session_state.pick_date - datetime.timedelta(days=1),
+            datetime.date(2026, 3, 28))
+    with qc4:
+        selected = st.date_input("Date", value=st.session_state.pick_date,
+                                 min_value=datetime.date(2026, 3, 28),
+                                 max_value=today, label_visibility="collapsed",
+                                 key="pick_date_input")
+        st.session_state.pick_date = selected
+    if qc5.button("🔄",        use_container_width=True):
+        st.cache_data.clear()
+
+    date_str = st.session_state.pick_date.isoformat()
+    st.caption(f"Showing picks for **{st.session_state.pick_date.strftime('%A, %B %d, %Y')}**")
 
     with st.expander("📖 How to read this — terms & definitions"):
         st.markdown("""
@@ -619,9 +696,20 @@ with tab_picks:
     # Summary bar
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Games Today",  len(results))
-    c2.metric("Strong Plays", len(strong), delta="2 units each" if strong else None)
-    c3.metric("Lean Plays",   len(lean),   delta="1 unit each"  if lean   else None)
+    c2.metric("Strong Plays", len(strong))
+    c3.metric("Lean Plays",   len(lean))
     c4.metric("No Edge",      len(skip))
+
+    # Quick-picks chip bar — all bets at a glance
+    if strong or lean:
+        chips_html = ""
+        for r in strong + lean:
+            label, _ = _format_bet_label(r)
+            conf = int(_model_prob(r) * 100)
+            cls = "pick-chip-strong" if _is_strong(r) else "pick-chip-lean"
+            chips_html += f'<span class="pick-chip {cls}">{label} · {conf}%</span>'
+        st.markdown(f'<div style="margin:8px 0 4px 0">{chips_html}</div>',
+                    unsafe_allow_html=True)
     st.divider()
 
     n = 1
@@ -827,41 +915,90 @@ with tab_log:
             st.divider()
 
     # ── Log a new bet ─────────────────────────────────────────────────────────
-    with st.expander("➕ Log a new bet", expanded=tracker.empty):
-        st.caption("Enter each leg of a parlay as a separate row and check 'Part of a parlay'.")
+    with st.expander("➕ Log a bet", expanded=tracker.empty):
+        log_date = st.date_input("Date", value=datetime.date.today(), key="log_date")
+
+        # Load today's picks to pre-populate options
+        picks_for_log = load_card(log_date.isoformat())
+        pick_options  = ["-- Custom / Other --"]
+        pick_map      = {}   # label → result dict
+        for p in picks_for_log:
+            label, _ = _format_bet_label(p)
+            game      = p.get("game","")
+            if label and game:
+                display = f"{game}  →  {label}"
+                pick_options.append(display)
+                pick_map[display] = p
+
+        selected_pick = st.selectbox(
+            "Pick a recommendation from today (or choose Custom)",
+            pick_options, key="log_pick")
+
+        # Auto-fill from recommendation
+        prefill = pick_map.get(selected_pick, {})
+        pre_game    = prefill.get("game", "")
+        pre_label, _= _format_bet_label(prefill) if prefill else ("", "")
+        pre_odds    = prefill.get("best_market_odds") or -110
+        pre_team    = ""
+        if pre_label:
+            parts = pre_label.split()
+            pre_team = parts[0] if parts else ""
+
+        st.caption("Fields below auto-fill from the recommendation. Edit anything before saving.")
+
         with st.form("log_bet_form", clear_on_submit=True):
-            fc1, fc2 = st.columns(2)
-            bet_date  = fc1.date_input("Date", value=datetime.date.today())
-            bet_game  = fc2.text_input("Game", placeholder="e.g. TEX @ LAD")
+            fa, fb = st.columns(2)
+            bet_game = fa.text_input("Game", value=pre_game)
+            bet_team = fb.text_input("Team / Side", value=pre_team,
+                                     placeholder="e.g. TEX")
 
-            fc3, fc4, fc5 = st.columns(3)
-            bet_type  = fc3.selectbox("Bet type",
-                ["RL +1.5","RL -1.5","ML","OVER","UNDER","RL +2.5","RL -2.5","Other"])
-            bet_team  = fc4.text_input("Team / Side", placeholder="e.g. TEX")
-            bet_odds  = fc5.number_input("Odds (American)", value=-110, step=5)
+            fc, fd, fe = st.columns(3)
+            bt_options = ["ML","RL +1.5","RL -1.5","RL +2.5","RL -2.5",
+                          "OVER","UNDER","Parlay","Other"]
+            # Guess type from pre_label
+            pre_type = "ML"
+            if "+1.5" in pre_label:   pre_type = "RL +1.5"
+            elif "-1.5" in pre_label: pre_type = "RL -1.5"
+            elif "+2.5" in pre_label: pre_type = "RL +2.5"
+            elif "-2.5" in pre_label: pre_type = "RL -2.5"
+            elif "OVER"  in pre_label: pre_type = "OVER"
+            elif "UNDER" in pre_label: pre_type = "UNDER"
 
-            fc6, fc7, fc8 = st.columns(3)
-            bet_units = fc6.number_input("Units", value=1.0, step=0.5, min_value=0.5)
-            bet_result= fc7.selectbox("Result", ["PENDING","WIN","LOSS","PUSH"])
-            bet_pl    = fc8.number_input("P&L (units)", value=0.0, step=0.1)
+            bet_type   = fc.selectbox("Bet type", bt_options,
+                                       index=bt_options.index(pre_type))
+            bet_odds   = fd.number_input("Market odds", value=int(pre_odds), step=5)
+            bet_result = fe.selectbox("Result", ["PENDING","WIN","LOSS","PUSH"])
 
-            fc9, fc10 = st.columns([1, 2])
-            is_parlay = fc9.checkbox("Part of a parlay")
-            parlay_id = fc10.text_input("Parlay name / ID (if parlay)",
-                                         placeholder="e.g. Sunday 3-leg parlay")
-            notes     = st.text_input("Notes (optional)")
+            fg, fh = st.columns(2)
+            is_parlay = fg.checkbox("Part of a parlay")
+            parlay_id = fh.text_input("Parlay name", placeholder="e.g. Sunday 3-legger",
+                                       disabled=not is_parlay)
 
-            submitted = st.form_submit_button("Log Bet", type="primary",
+            # Auto-calculate P&L when result is set and it's not a parlay
+            auto_pl = 0.0
+            if bet_result == "WIN":
+                auto_pl = round(100/abs(bet_odds) if bet_odds < 0 else bet_odds/100, 2)
+            elif bet_result == "LOSS":
+                auto_pl = -1.0
+            elif bet_result == "PUSH":
+                auto_pl = 0.0
+
+            fi, fj = st.columns(2)
+            bet_pl    = fi.number_input("P&L (units)", value=float(auto_pl), step=0.1,
+                                         help="Auto-calculated from odds. Edit if different.")
+            notes     = fj.text_input("Notes (optional)")
+
+            submitted = st.form_submit_button("✅ Log Bet", type="primary",
                                               use_container_width=True)
 
         if submitted:
             new_row = {
-                "date":        str(bet_date),
+                "date":        str(log_date),
                 "game":        bet_game,
                 "bet_type":    bet_type,
                 "team":        bet_team,
                 "odds":        int(bet_odds),
-                "units":       float(bet_units),
+                "units":       1.0,
                 "is_parlay":   is_parlay,
                 "parlay_id":   parlay_id if is_parlay else "",
                 "result":      bet_result,
@@ -871,19 +1008,17 @@ with tab_log:
             if USE_SUPABASE:
                 try:
                     _supabase().table("bet_tracker").insert(new_row).execute()
-                    st.success("Bet logged! Refresh the page to see it.")
+                    st.success("✅ Bet logged!")
                     st.cache_data.clear()
                 except Exception as e:
-                    st.error(f"Could not save to Supabase: {e}")
-                    st.info("Make sure the bet_tracker table exists in Supabase.")
+                    st.error(f"Could not save: {e}")
             else:
-                # Save locally
                 path = Path(__file__).parent / "data" / "raw" / "bet_tracker.csv"
                 existing_local = pd.read_csv(path) if path.exists() else pd.DataFrame()
                 updated = pd.concat([existing_local, pd.DataFrame([new_row])],
                                     ignore_index=True)
                 updated.to_csv(path, index=False)
-                st.success(f"Bet saved to {path.name}")
+                st.success(f"✅ Saved to {path.name}")
                 st.cache_data.clear()
 
     # ── Bet table ─────────────────────────────────────────────────────────────

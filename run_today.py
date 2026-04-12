@@ -132,6 +132,36 @@ def _edge_vs_line(model_prob: float, market_odds: float) -> float:
     return model_prob - implied
 
 
+def _is_missing(v) -> bool:
+    """True if v is None, NaN, pandas NA, or any missing sentinel."""
+    if v is None:
+        return True
+    try:
+        return bool(pd.isna(v))
+    except (TypeError, ValueError):
+        return False
+
+
+def _blend_ml_prob(model_prob: float, market_odds) -> tuple[float, float]:
+    """
+    Blend model ML win probability with Vegas implied probability.
+
+    The Monte Carlo only sees starting pitcher quality. Vegas bakes in lineup,
+    bullpen, park factors, and roster depth — all the things our model misses.
+
+    Blend: 35% model (pitcher matchup signal) + 65% Vegas (everything else)
+
+    Returns (blended_prob, market_implied_prob)
+    """
+    if _is_missing(market_odds):
+        return model_prob, np.nan
+    implied = ml_to_prob(float(market_odds))
+    if np.isnan(implied):
+        return model_prob, implied
+    blended = 0.35 * model_prob + 0.65 * implied
+    return round(blended, 4), round(implied, 4)
+
+
 def _best_bet(
     mc_home_win: float,
     mc_home_covers_rl: float,
@@ -147,34 +177,38 @@ def _best_bet(
     """
     Evaluate edge across all available lines and return the best bet.
 
-    Lines evaluated (home-perspective):
-      ML home   : model=mc_home_win     vs vegas_ml_home
-      ML away   : model=(1-mc_home_win) vs vegas_ml_away
-      RL -1.5 H : model=blended_rl      vs rl_home_odds (market spread: -1.5 H)
-      RL +1.5 A : model=(1-blended_rl)  vs implied from rl_home_odds (flipped)
-      RL -2.5 H : model=mc_home_covers_25 vs alt_home_25_odds
-      RL +2.5 A : model=mc_away_covers_25  vs alt_away_25_odds
+    ML probabilities are blended 35% model / 65% Vegas to account for
+    team-level factors (lineup, bullpen, depth) the pitcher-only model misses.
+    RL probabilities use the existing blended MC+XGB model as-is.
 
-    Returns dict with keys: line, side, model_prob, market_odds, edge, tier
-    tier: ** = strong (edge >= 0.08), * = lean (edge >= 0.04), "" = skip
+    Returns dict with keys: line, model_prob, market_prob, market_odds, edge,
+                            tier, signal, raw_model_prob, market_deviation
     """
     candidates = []
 
-    def add(line, model_prob, market_odds):
-        if market_odds is None or pd.isna(market_odds):
+    def add(line, model_prob, market_odds, raw_model_prob=None):
+        if market_odds is None or (isinstance(market_odds, float) and np.isnan(market_odds)):
             return
-        edge = _edge_vs_line(model_prob, float(market_odds))
+        market_odds_f = float(market_odds)
+        edge = _edge_vs_line(model_prob, market_odds_f)
         if not np.isnan(edge):
+            market_implied = ml_to_prob(market_odds_f)
             candidates.append({
-                "line":         line,
-                "model_prob":   round(model_prob, 3),
-                "market_odds":  int(market_odds),
-                "edge":         round(edge, 4),
+                "line":           line,
+                "model_prob":     round(model_prob, 3),
+                "raw_model_prob": round(raw_model_prob or model_prob, 3),
+                "market_implied": round(market_implied, 3),
+                "market_odds":    int(market_odds_f),
+                "edge":           round(edge, 4),
             })
 
-    # Moneyline candidates
-    add(f"ML (home)",  mc_home_win,       vegas_ml_home)
-    add(f"ML (away)",  1 - mc_home_win,   vegas_ml_away)
+    # Moneyline — blend with Vegas so team factors are accounted for
+    if not _is_missing(vegas_ml_home):
+        home_blended, _ = _blend_ml_prob(mc_home_win, vegas_ml_home)
+        add("ML (home)", home_blended, vegas_ml_home, raw_model_prob=mc_home_win)
+    if not _is_missing(vegas_ml_away):
+        away_blended, _ = _blend_ml_prob(1 - mc_home_win, vegas_ml_away)
+        add("ML (away)", away_blended, vegas_ml_away, raw_model_prob=1 - mc_home_win)
 
     # Run line candidates — standard (-1.5)
     add("RL -1.5 (home)", blended_rl,       rl_home_odds)
@@ -205,6 +239,11 @@ def _best_bet(
         tier = ""
 
     best["tier"] = tier
+
+    # How far does the raw model diverge from the market? Flag large deviations.
+    raw   = best.get("raw_model_prob", best["model_prob"])
+    mkt   = best.get("market_implied", best["model_prob"])
+    best["market_deviation"] = round(abs(raw - mkt), 3) if not np.isnan(mkt) else 0.0
 
     # Build a clean signal string like "HOME -1.5 **" or "ML (away) *"
     if tier:
@@ -375,11 +414,14 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
             "alt_away_25_odds": alt_away_25_odds,
             "vegas_implied":  round(ml_to_prob(vegas_ml), 3) if not pd.isna(vegas_ml) else None,
             # Best bet recommendation
-            "best_line":      best.get("line", ""),
-            "best_model_prob":best.get("model_prob", blended_rl),
-            "best_market_odds":best.get("market_odds"),
-            "best_edge":      best.get("edge", 0.0),
-            "best_tier":      best.get("tier", ""),
+            "best_line":         best.get("line", ""),
+            "best_model_prob":   best.get("model_prob", blended_rl),
+            "best_raw_model":    best.get("raw_model_prob", blended_rl),
+            "best_market_implied": best.get("market_implied"),
+            "best_market_odds":  best.get("market_odds"),
+            "best_edge":         best.get("edge", 0.0),
+            "best_tier":         best.get("tier", ""),
+            "market_deviation":  best.get("market_deviation", 0.0),
             # Legacy fields (used by backtest)
             "rl_signal":      rl_signal_legacy,
             "total_signal":   total_signal,
