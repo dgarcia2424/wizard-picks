@@ -242,7 +242,9 @@ def load_card(date_str: str) -> list[dict]:
                         "vegas_total","vegas_ml_home","vegas_ml_away","home_sp","away_sp",
                         "home_sp_xwoba","away_sp_xwoba","home_sp_flag","away_sp_flag",
                         "temp_f","lineup_confirmed",
-                        "best_line","best_tier","best_model_prob","best_market_odds","best_edge",
+                        "best_line","best_tier","best_tier_capped","best_model_prob",
+                        "best_market_odds","best_edge","best_market_implied","best_raw_model",
+                        "market_deviation",
                         "mc_home_win","mc_home_cvr25","mc_away_cvr25",
                         "home_runs_mean","away_runs_mean",
                         "home_runs_lo","home_runs_hi","away_runs_lo","away_runs_hi"]:
@@ -424,8 +426,20 @@ def render_card(r: dict, n: int, tier: str):
     fill_cls  = "conf-fill-strong" if tier == "strong" else "conf-fill-lean"
     card_cls  = "bet-card-strong"  if tier == "strong" else "bet-card-lean"
     badge_cls = "badge-strong"     if tier == "strong" else "badge-lean"
-    badge_txt = (f"★★ STRONG  ·  {conf_pct}% confidence" if tier == "strong"
-                 else f"★ LEAN  ·  {conf_pct}% confidence")
+
+    # For ML bets on big underdogs (>+200), show edge instead of win probability.
+    # "30% confidence" on a +750 underdog ML is misleading — the edge is what matters.
+    best_line_str  = str(r.get("best_line") or "")
+    best_odds_raw  = r.get("best_market_odds") or 0
+    tier_capped    = bool(r.get("best_tier_capped") or False)
+    is_ml_underdog = "ML" in best_line_str and (best_odds_raw or 0) > 200
+    capped_note    = "  (odds capped)" if tier_capped else ""
+    if is_ml_underdog:
+        badge_txt = (f"★★ STRONG  ·  Edge: {edge:+.0f}%{capped_note}" if tier == "strong"
+                     else f"★ LEAN  ·  Edge: {edge:+.0f}%{capped_note}")
+    else:
+        badge_txt = (f"★★ STRONG  ·  {conf_pct}% confidence{capped_note}" if tier == "strong"
+                     else f"★ LEAN  ·  {conf_pct}% confidence{capped_note}")
 
     # Confidence / market comparison line
     market_odds    = r.get("best_market_odds")
@@ -452,7 +466,17 @@ def render_card(r: dict, n: int, tier: str):
 
     # Warning when pitcher-only model diverges significantly from the market
     deviation_warning = ""
-    if deviation >= 0.25:
+    if deviation >= 0.35:
+        # Severe divergence — red-level warning, score bands suppressed
+        deviation_warning = (
+            f'<div style="background:rgba(239,68,68,.10);border:1px solid rgba(239,68,68,.40);'
+            f'border-radius:6px;padding:8px 14px;margin:8px 0;font-size:.83rem;color:#fca5a5;">'
+            f'🚨 <b>Large model vs market gap: {deviation:.0%}</b> — our pitcher-only model sees '
+            f'a strong edge here, but Vegas disagrees by a wide margin. This often means the market '
+            f'is pricing in factors we can\'t see (lineup, injury, bullpen, public money). '
+            f'<b>Bet cautiously — half-unit max.</b></div>'
+        )
+    elif deviation >= 0.25:
         deviation_warning = (
             f'<div style="background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.4);'
             f'border-radius:6px;padding:6px 12px;margin:8px 0;font-size:.82rem;color:#fcd34d;">'
@@ -495,7 +519,7 @@ def render_card(r: dict, n: int, tier: str):
     score_main = (f"{away} {_safe_float(am):.1f} — {home} {_safe_float(hm):.1f}"
                   if hm is not None and am is not None else "")
 
-    if hm is not None and am is not None:
+    if hm is not None and am is not None and deviation < 0.35:
         # Determine which team is the bet (green bar) vs opponent (grey)
         is_home_bet_score = "home" in str(r.get("best_line") or "").lower()
         away_cls = "bp-fill-a" if not is_home_bet_score else "bp-fill-b"
@@ -509,6 +533,12 @@ def render_card(r: dict, n: int, tier: str):
             f'Bars show 25th–75th percentile of 50,000 simulations · '
             f'<span style="color:#22c55e">■</span> = recommended side</div>'
             + f'</div>'
+        )
+    elif deviation >= 0.35:
+        bands_html = (
+            '<div style="font-size:.82rem;color:#6b7280;padding:6px 0">'
+            '📊 Score bands hidden — model and market diverge too much for reliable score prediction.'
+            '</div>'
         )
     else:
         bands_html = '<div style="font-size:.8rem;color:#4b5563">Re-run pipeline for score prediction</div>'

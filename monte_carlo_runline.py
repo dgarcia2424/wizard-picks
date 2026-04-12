@@ -222,6 +222,21 @@ def pitcher_expected_xwoba(prof: pd.Series, month: int = 4) -> tuple[float, floa
     if pd.isna(sigma):
         sigma = 0.050   # league-average uncertainty fallback
 
+    # ── Thin-sample shrinkage ─────────────────────────────────────────────────
+    # When a pitcher has very few 2026 starts (trailing_trust < 0.30), the
+    # blended_xwoba is heavily weighted by career data which may not reflect
+    # current form (e.g. post-TJ, age, innings limits, reduced velocity).
+    # Shrink the estimate toward league average to avoid over-confidence.
+    trailing_trust = float(prof.get("trailing_trust_xwoba", 0.5) or 0.5)
+    if pd.isna(trailing_trust):
+        trailing_trust = 0.5
+    if trailing_trust < 0.30:
+        # shrink_weight: 0 at trust=0.30, up to 0.20 at trust=0 (20% pull toward league avg)
+        shrink_weight = (0.30 - trailing_trust) / 0.30 * 0.20
+        mu = (1 - shrink_weight) * mu + shrink_weight * LEAGUE_XWOBA
+        # Also widen sigma to capture added uncertainty from small sample
+        sigma = min(sigma * (1 + shrink_weight * 0.5), 0.110)
+
     # New pitch K% boost: slightly lower expected xwOBA
     k_boost = float(prof.get("new_pitch_k_boost", 0.0))
     mu = mu - k_boost * 0.08   # rough xwOBA impact of +7.5% K%

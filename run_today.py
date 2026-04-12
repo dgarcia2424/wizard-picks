@@ -238,6 +238,17 @@ def _best_bet(
     else:
         tier = ""
 
+    # ── Guardrail: cap tier at * (lean) for extreme underdog ML bets ──────────
+    # When the market prices a team at > +400, there's high uncertainty and
+    # our pitcher-only model can't see roster/bullpen depth factors that explain
+    # those big odds. Cap at lean so we don't label them "STRONG" bets.
+    if "ML" in best.get("line", ""):
+        mo = best.get("market_odds", 0) or 0
+        if mo > 400:
+            if tier == "**":
+                tier = "*"   # downgrade strong → lean
+                best["tier_capped"] = True  # flag for display
+
     best["tier"] = tier
 
     # How far does the raw model diverge from the market? Flag large deviations.
@@ -448,6 +459,7 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
             "best_market_odds":  best.get("market_odds"),
             "best_edge":         best.get("edge", 0.0),
             "best_tier":         best.get("tier", ""),
+            "best_tier_capped":  best.get("tier_capped", False),
             "market_deviation":  best.get("market_deviation", 0.0),
             # Legacy fields (used by backtest)
             "rl_signal":      rl_signal_legacy,
