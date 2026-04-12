@@ -280,18 +280,6 @@ def load_backtest() -> pd.DataFrame:
     return pd.read_csv(path) if path.exists() else pd.DataFrame()
 
 
-@st.cache_data(ttl=60)
-def load_tracker() -> pd.DataFrame:
-    if USE_SUPABASE:
-        client = _supabase()
-        try:
-            resp = client.table("bet_tracker").select("*").order("date", desc=True).execute()
-            return pd.DataFrame(resp.data) if resp.data else pd.DataFrame()
-        except Exception:
-            return pd.DataFrame()
-    path = Path(__file__).parent / "data" / "raw" / "bet_tracker.csv"
-    return pd.read_csv(path).sort_values("date", ascending=False) if path.exists() else pd.DataFrame()
-
 
 @st.cache_data(ttl=300)
 def load_model_history() -> pd.DataFrame:
@@ -794,8 +782,8 @@ st.markdown("## 🧙 The Wizard — MLB Picks")
 st.caption("Picks updated daily after 8:30 AM ET  ·  Sorted by strongest edge first")
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_picks, tab_season, tab_log, tab_history, tab_performance = st.tabs([
-    "📋 Today's Picks", "📈 Season Tracker", "📓 Bet Log",
+tab_picks, tab_season, tab_history, tab_performance = st.tabs([
+    "📋 Today's Picks", "📈 Season Tracker",
     "🔬 Model History", "📊 2026 Performance"
 ])
 
@@ -1081,174 +1069,9 @@ with tab_season:
                         st.dataframe(cal, hide_index=True, use_container_width=True)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 3 — BET LOG
-# ══════════════════════════════════════════════════════════════════════════════
-with tab_log:
-    tracker = load_tracker()
-
-    # ── Summary ───────────────────────────────────────────────────────────────
-    if not tracker.empty and {"result","profit_loss"}.issubset(tracker.columns):
-        completed = tracker[tracker["result"].isin(["WIN","LOSS","PUSH"])]
-        if not completed.empty:
-            wins    = (completed["result"] == "WIN").sum()
-            losses  = (completed["result"] == "LOSS").sum()
-            pushes  = (completed["result"] == "PUSH").sum()
-            total_pl = pd.to_numeric(completed["profit_loss"], errors="coerce").sum()
-            n_bets   = wins + losses + pushes
-            t1, t2, t3, t4 = st.columns(4)
-            t1.metric("Record",     f"{wins}–{losses}–{pushes}")
-            t2.metric("Win %",      f"{wins/n_bets*100:.1f}%" if n_bets else "—")
-            t3.metric("P&L (units)",f"{total_pl:+.2f}",
-                      delta_color="normal" if total_pl >= 0 else "inverse")
-            t4.metric("Total Bets", n_bets)
-            st.divider()
-
-    # ── Log a new bet ─────────────────────────────────────────────────────────
-    with st.expander("➕ Log a bet", expanded=tracker.empty):
-        log_date = st.date_input("Date", value=datetime.date.today(), key="log_date")
-
-        # Load today's picks to pre-populate options
-        picks_for_log = load_card(log_date.isoformat())
-        pick_options  = ["-- Custom / Other --"]
-        pick_map      = {}   # label → result dict
-        for p in picks_for_log:
-            label, _ = _format_bet_label(p)
-            game      = p.get("game","")
-            if label and game:
-                display = f"{game}  →  {label}"
-                pick_options.append(display)
-                pick_map[display] = p
-
-        selected_pick = st.selectbox(
-            "Pick a recommendation from today (or choose Custom)",
-            pick_options, key="log_pick")
-
-        # Auto-fill from recommendation
-        prefill = pick_map.get(selected_pick, {})
-        pre_game    = prefill.get("game", "")
-        pre_label, _= _format_bet_label(prefill) if prefill else ("", "")
-        pre_odds    = prefill.get("best_market_odds") or -110
-        pre_team    = ""
-        if pre_label:
-            parts = pre_label.split()
-            pre_team = parts[0] if parts else ""
-
-        st.caption("Fields below auto-fill from the recommendation. Edit anything before saving.")
-
-        with st.form("log_bet_form", clear_on_submit=True):
-            fa, fb = st.columns(2)
-            bet_game = fa.text_input("Game", value=pre_game)
-            bet_team = fb.text_input("Team / Side", value=pre_team,
-                                     placeholder="e.g. TEX")
-
-            fc, fd, fe = st.columns(3)
-            bt_options = ["ML","RL +1.5","RL -1.5","RL +2.5","RL -2.5",
-                          "OVER","UNDER","Parlay","Other"]
-            # Guess type from pre_label
-            pre_type = "ML"
-            if "+1.5" in pre_label:   pre_type = "RL +1.5"
-            elif "-1.5" in pre_label: pre_type = "RL -1.5"
-            elif "+2.5" in pre_label: pre_type = "RL +2.5"
-            elif "-2.5" in pre_label: pre_type = "RL -2.5"
-            elif "OVER"  in pre_label: pre_type = "OVER"
-            elif "UNDER" in pre_label: pre_type = "UNDER"
-
-            bet_type   = fc.selectbox("Bet type", bt_options,
-                                       index=bt_options.index(pre_type))
-            bet_odds   = fd.number_input("Market odds", value=int(pre_odds), step=5)
-            bet_result = fe.selectbox("Result", ["PENDING","WIN","LOSS","PUSH"])
-
-            fg, fh = st.columns(2)
-            is_parlay = fg.checkbox("Part of a parlay")
-            parlay_id = fh.text_input("Parlay name", placeholder="e.g. Sunday 3-legger",
-                                       disabled=not is_parlay)
-
-            # Auto-calculate P&L when result is set and it's not a parlay
-            auto_pl = 0.0
-            if bet_result == "WIN":
-                auto_pl = round(100/abs(bet_odds) if bet_odds < 0 else bet_odds/100, 2)
-            elif bet_result == "LOSS":
-                auto_pl = -1.0
-            elif bet_result == "PUSH":
-                auto_pl = 0.0
-
-            fi, fj = st.columns(2)
-            bet_pl    = fi.number_input("P&L (units)", value=float(auto_pl), step=0.1,
-                                         help="Auto-calculated from odds. Edit if different.")
-            notes     = fj.text_input("Notes (optional)")
-
-            submitted = st.form_submit_button("✅ Log Bet", type="primary",
-                                              use_container_width=True)
-
-        if submitted:
-            new_row = {
-                "date":        str(log_date),
-                "game":        bet_game,
-                "bet_type":    bet_type,
-                "team":        bet_team,
-                "odds":        int(bet_odds),
-                "units":       1.0,
-                "is_parlay":   is_parlay,
-                "parlay_id":   parlay_id if is_parlay else "",
-                "result":      bet_result,
-                "profit_loss": float(bet_pl),
-                "notes":       notes,
-            }
-            if USE_SUPABASE:
-                try:
-                    _supabase().table("bet_tracker").insert(new_row).execute()
-                    st.success("✅ Bet logged!")
-                    st.cache_data.clear()
-                except Exception as e:
-                    st.error(f"Could not save: {e}")
-            else:
-                path = Path(__file__).parent / "data" / "raw" / "bet_tracker.csv"
-                existing_local = pd.read_csv(path) if path.exists() else pd.DataFrame()
-                updated = pd.concat([existing_local, pd.DataFrame([new_row])],
-                                    ignore_index=True)
-                updated.to_csv(path, index=False)
-                st.success(f"✅ Saved to {path.name}")
-                st.cache_data.clear()
-
-    # ── Bet table ─────────────────────────────────────────────────────────────
-    if tracker.empty:
-        st.info("No bets logged yet. Use the form above to log your first bet.")
-    else:
-        # Parlay summary
-        if "is_parlay" in tracker.columns:
-            parlays = tracker[tracker["is_parlay"] == True]
-            singles = tracker[tracker["is_parlay"] != True]
-            if not parlays.empty:
-                st.caption(f"**Singles:** {len(singles)}  ·  **Parlay legs:** {len(parlays)}")
-
-        def _style_result(row):
-            styles = [""] * len(row)
-            if "result" in row.index:
-                idx = row.index.get_loc("result")
-                v = str(row["result"])
-                styles[idx] = ("color:#4ade80;font-weight:bold" if v == "WIN"
-                                else "color:#f87171;font-weight:bold" if v == "LOSS"
-                                else "color:#facc15" if v == "PUSH" else "")
-            return styles
-
-        st.dataframe(tracker.style.apply(_style_result, axis=1),
-                     hide_index=True, use_container_width=True)
-
-        # Parlay breakdown
-        if "is_parlay" in tracker.columns and "parlay_id" in tracker.columns:
-            parlays_df = tracker[tracker["is_parlay"] == True]
-            if not parlays_df.empty:
-                with st.expander("Parlay breakdown"):
-                    for pid, pdf in parlays_df.groupby("parlay_id"):
-                        st.markdown(f"**{pid}**")
-                        st.dataframe(pdf[["date","game","bet_type","team","odds","units",
-                                         "result","profit_loss"]],
-                                     hide_index=True, use_container_width=True)
-
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — MODEL HISTORY
+# TAB 3 — MODEL HISTORY
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_history:
     mh = load_model_history()
@@ -1304,7 +1127,7 @@ with tab_history:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 5 — 2026 PERFORMANCE
+# TAB 4 — 2026 PERFORMANCE
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_performance:
     mh2 = load_model_history()

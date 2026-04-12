@@ -7,7 +7,7 @@ Uploads:
   daily_card.csv               → wizard_daily_card   (today's predictions)
   backtest_2026_results.csv    → wizard_backtest     (season tracker)
   backtest_mc_2026_results.csv → wizard_model_history (enriched backtest w/ F5/NRFI/K actuals)
-  data/raw/bet_tracker.csv     → bet_tracker         (manually logged bets)
+  pipeline_status.json         → wizard_pipeline_health (data freshness status)
 
 Run automatically by mlb_model_run.bat after run_today.py.
 """
@@ -162,32 +162,6 @@ def upload_backtest(csv_path: Path = None) -> int:
     logger.info(f"  wizard_backtest: {success}/{len(df)} rows uploaded")
     return success
 
-
-def upload_bet_tracker(csv_path: Path = None) -> int:
-    """Upload bet tracker to Supabase bet_tracker table."""
-    csv_path = csv_path or BASE_DIR / "data" / "raw" / "bet_tracker.csv"
-    if not csv_path.exists():
-        logger.warning(f"  [SKIP] bet_tracker.csv not found")
-        return 0
-
-    df = pd.read_csv(csv_path)
-    if df.empty:
-        return 0
-
-    client = _get_client()
-    client.table("bet_tracker").delete().neq("id", -1).execute()
-
-    success = 0
-    for _, row in df.iterrows():
-        record = _clean(row.to_dict())
-        try:
-            client.table("bet_tracker").insert(record).execute()
-            success += 1
-        except Exception as e:
-            logger.error(f"  [ERROR] bet_tracker row: {e}")
-
-    logger.info(f"  bet_tracker: {success}/{len(df)} rows uploaded")
-    return success
 
 
 def upload_model_history(csv_path: Path = None) -> int:
@@ -352,7 +326,6 @@ def main():
     for name, fn in [
         ("daily_card",      upload_daily_card),
         ("backtest",        upload_backtest),
-        ("bet_tracker",     upload_bet_tracker),
         ("model_history",   upload_model_history),
         ("pipeline_health", upload_pipeline_health),
     ]:
