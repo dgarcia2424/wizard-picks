@@ -43,11 +43,11 @@ warnings.filterwarnings("ignore")
 # ---------------------------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------------------------
-DATA_DIR = Path("./statcast_data")
+DATA_DIR = Path("./data/statcast")
 
 BACKTEST_FILES = {
-    2024: "backtest_games_2024.csv",
-    2025: "backtest_games_2025.csv",
+    2024: "data/raw/backtest_games_2024.csv",
+    2025: "data/raw/backtest_games_2025.csv",
 }
 
 # Park factor team name -> MLB abbreviation mapping

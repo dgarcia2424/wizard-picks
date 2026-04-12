@@ -18,7 +18,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.parse
 
 PIPELINE_DIR = os.path.dirname(os.path.abspath(__file__))
-TRACKER_FILE = os.path.join(PIPELINE_DIR, "bet_tracker.csv")
+TRACKER_FILE = os.path.join(PIPELINE_DIR, "data", "raw", "bet_tracker.csv")
 
 FIELDNAMES = [
     "id", "date", "game", "home", "away", "model", "bet_type",

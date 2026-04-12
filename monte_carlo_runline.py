@@ -49,7 +49,7 @@ warnings.filterwarnings("ignore")
 # ---------------------------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------------------------
-DATA_DIR   = Path("./statcast_data")
+DATA_DIR   = Path("./data/statcast")
 MODELS_DIR = Path("./models")
 
 N_SIMS         = 50_000    # Monte Carlo sample count

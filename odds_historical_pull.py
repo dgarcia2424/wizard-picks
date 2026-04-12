@@ -30,7 +30,7 @@ from playwright.async_api import async_playwright, Page, BrowserContext, Timeout
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-OUTPUT_DIR = Path("./statcast_data")
+OUTPUT_DIR = Path("./data/statcast")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 YEARS = [2023, 2024, 2025]

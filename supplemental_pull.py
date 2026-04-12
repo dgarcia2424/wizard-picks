@@ -41,7 +41,7 @@ from pybaseball import (
 
 # ── CONFIG ───────────────────────────────────────────────────────────────────
 YEARS = [2023, 2024, 2025, 2026]
-OUTPUT_DIR = Path("./statcast_data")
+OUTPUT_DIR = Path("./data/statcast")
 
 TEAMS = [
     'ARI', 'ATL', 'BAL', 'BOS', 'CHC', 'CWS', 'CIN', 'CLE', 'COL', 'DET',

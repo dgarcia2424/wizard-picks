@@ -15,7 +15,7 @@ dist/
 build/
 
 # Data files (too large / sensitive for GitHub)
-statcast_data/
+data/statcast/
 *.parquet
 *.log
 

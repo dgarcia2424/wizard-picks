@@ -64,8 +64,8 @@ SBRO_URLS = {
 SBRO_CACHE_DIR = Path("./sbro_cache")
 
 BACKTEST_FILES = {
-    2024: "backtest_games_2024.csv",
-    2025: "backtest_games_2025.csv",
+    2024: "data/raw/backtest_games_2024.csv",
+    2025: "data/raw/backtest_games_2025.csv",
 }
 
 # F-inning total ratios (same as score_models.py)

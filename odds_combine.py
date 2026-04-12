@@ -31,7 +31,7 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-OUTPUT_DIR = Path("./statcast_data")
+OUTPUT_DIR = Path("./data/statcast")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 YEARS = [2023, 2024, 2025, 2026]

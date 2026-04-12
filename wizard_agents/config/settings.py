@@ -20,13 +20,13 @@ FILES = {
     "games":                 PIPELINE_DIR / "games.csv",
     "model_scores":          PIPELINE_DIR / "model_scores.csv",
     "model_report":          PIPELINE_DIR / "model_report.html",
-    "bet_tracker":           PIPELINE_DIR / "bet_tracker.csv",
-    "fangraphs_pitchers":    PIPELINE_DIR / "fangraphs_pitchers.csv",
-    "fangraphs_batters":     PIPELINE_DIR / "fangraphs_batters.csv",
-    "fangraphs_team_vs_lhp": PIPELINE_DIR / "fangraphs_team_vs_lhp.csv",
-    "fangraphs_team_vs_rhp": PIPELINE_DIR / "fangraphs_team_vs_rhp.csv",
-    "savant_pitchers":       PIPELINE_DIR / "savant_pitchers.csv",
-    "savant_batters":        PIPELINE_DIR / "savant_batters.csv",
+    "bet_tracker":           PIPELINE_DIR / "data/raw/bet_tracker.csv",
+    "fangraphs_pitchers":    PIPELINE_DIR / "data/raw/fangraphs_pitchers.csv",
+    "fangraphs_batters":     PIPELINE_DIR / "data/raw/fangraphs_batters.csv",
+    "fangraphs_team_vs_lhp": PIPELINE_DIR / "data/raw/fangraphs_team_vs_lhp.csv",
+    "fangraphs_team_vs_rhp": PIPELINE_DIR / "data/raw/fangraphs_team_vs_rhp.csv",
+    "savant_pitchers":       PIPELINE_DIR / "data/raw/savant_pitchers.csv",
+    "savant_batters":        PIPELINE_DIR / "data/raw/savant_batters.csv",
 }
 
 STATIC_FILES = [

@@ -37,7 +37,7 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-OUTPUT_DIR = Path("./statcast_data")
+OUTPUT_DIR = Path("./data/statcast")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 ODDS_API_CACHE_DIR = OUTPUT_DIR / "odds_api_cache"

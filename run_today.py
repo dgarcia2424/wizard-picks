@@ -40,7 +40,7 @@ def _load_dotenv():
 
 _load_dotenv()
 
-DATA_DIR = Path("./statcast_data")
+DATA_DIR = Path("./data/statcast")
 
 # Bet signal thresholds
 # Historical home -1.5 cover rate: ~35.7%.  Thresholds must clear break-even

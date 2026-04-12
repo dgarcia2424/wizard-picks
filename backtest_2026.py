@@ -24,7 +24,7 @@ import pandas as pd
 
 warnings.filterwarnings("ignore")
 
-DATA_DIR    = Path("./statcast_data")
+DATA_DIR    = Path("./data/statcast")
 TRACKER_CSV = Path("backtest_2026_results.csv")
 
 

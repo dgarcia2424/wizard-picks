@@ -29,7 +29,7 @@ from pybaseball import playerid_reverse_lookup, cache
 
 cache.enable()
 
-STATCAST_DIR = Path("./statcast_data")   # where statcast_pull.py saves files
+STATCAST_DIR = Path("./data/statcast")   # where statcast_pull.py saves files
 
 # ─── SEASON DATE RANGES ───────────────────────────────────────────────────────
 

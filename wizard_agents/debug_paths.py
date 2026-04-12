@@ -14,12 +14,12 @@ PIPELINE_DIR = Path(os.getenv(
 ))
 
 FILES = {
-    "savant_pitchers":       PIPELINE_DIR / "savant_pitchers.csv",
-    "savant_batters":        PIPELINE_DIR / "savant_batters.csv",
-    "fangraphs_pitchers":    PIPELINE_DIR / "fangraphs_pitchers.csv",
-    "fangraphs_batters":     PIPELINE_DIR / "fangraphs_batters.csv",
-    "fangraphs_team_vs_lhp": PIPELINE_DIR / "fangraphs_team_vs_lhp.csv",
-    "fangraphs_team_vs_rhp": PIPELINE_DIR / "fangraphs_team_vs_rhp.csv",
+    "savant_pitchers":       PIPELINE_DIR / "data/raw/savant_pitchers.csv",
+    "savant_batters":        PIPELINE_DIR / "data/raw/savant_batters.csv",
+    "fangraphs_pitchers":    PIPELINE_DIR / "data/raw/fangraphs_pitchers.csv",
+    "fangraphs_batters":     PIPELINE_DIR / "data/raw/fangraphs_batters.csv",
+    "fangraphs_team_vs_lhp": PIPELINE_DIR / "data/raw/fangraphs_team_vs_lhp.csv",
+    "fangraphs_team_vs_rhp": PIPELINE_DIR / "data/raw/fangraphs_team_vs_rhp.csv",
 }
 
 print(f"\nPIPELINE_DIR from .env : {os.getenv('PIPELINE_DIR', 'NOT SET — using default')}")

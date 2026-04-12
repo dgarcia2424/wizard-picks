@@ -27,7 +27,7 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-OUTPUT_DIR = Path("./statcast_data")
+OUTPUT_DIR = Path("./data/statcast")
 BASELINE_YEARS = [2023, 2024, 2025, 2026]
 
 # Key columns to check null % for each file pattern

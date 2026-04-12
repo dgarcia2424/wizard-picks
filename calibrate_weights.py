@@ -33,13 +33,13 @@ warnings.filterwarnings("ignore")
 # ─── PATHS ────────────────────────────────────────────────────────────────────
 
 BACKTEST_FILES = {
-    2024: "backtest_games_2024.csv",
-    2025: "backtest_games_2025.csv",
+    2024: "data/raw/backtest_games_2024.csv",
+    2025: "data/raw/backtest_games_2025.csv",
 }
-SAVANT_FILE         = "savant_pitchers.csv"
-FANGRAPHS_FILE      = "fangraphs_pitchers.csv"
-SAVANT_BATTERS_FILE = "savant_batters.csv"
-FG_BATTERS_FILE     = "fangraphs_batters.csv"
+SAVANT_FILE         = "data/raw/savant_pitchers.csv"
+FANGRAPHS_FILE      = "data/raw/fangraphs_pitchers.csv"
+SAVANT_BATTERS_FILE = "data/raw/savant_batters.csv"
+FG_BATTERS_FILE     = "data/raw/fangraphs_batters.csv"
 
 # ─── GRID SEARCH SPACE ────────────────────────────────────────────────────────
 

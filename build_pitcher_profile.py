@@ -64,7 +64,7 @@ warnings.filterwarnings("ignore")
 # ---------------------------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------------------------
-OUTPUT_DIR = Path("./statcast_data")
+OUTPUT_DIR = Path("./data/statcast")
 VELOCITY_THRESHOLD   = 1.5   # mph delta that triggers VOLATILE / GAINER flag
 NEW_PITCH_THRESHOLD  = 0.08  # usage fraction gain to count as "new primary pitch"
 MIN_APRIL_STARTS     = 2     # minimum historical April starts for reliable sigma
@@ -687,7 +687,7 @@ def build_buyllow_signals(verbose: bool = True) -> pd.DataFrame:
     if verbose:
         print("  [6/7] Buy-low signals (LOB%, xFIP) ...")
 
-    fg = pd.read_csv("fangraphs_pitchers.csv", encoding="utf-8-sig")
+    fg = pd.read_csv("data/raw/fangraphs_pitchers.csv", encoding="utf-8-sig")
     fg.columns = fg.columns.str.strip()
 
     # Normalize pitcher name

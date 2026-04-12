@@ -30,7 +30,7 @@ import requests
 # Configuration
 # ---------------------------------------------------------------------------
 
-OUTPUT_DIR = Path("./statcast_data")
+OUTPUT_DIR = Path("./data/statcast")
 LINEUP_CACHE_DIR = OUTPUT_DIR / "lineup_cache"
 
 MLB_SCHEDULE_BASE = "https://statsapi.mlb.com/api/v1/schedule"

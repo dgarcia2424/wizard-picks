@@ -3,12 +3,12 @@ import pandas as pd
 BASE = r"C:\Users\garci\OneDrive\Documents\Claude\mlb_model_pipeline_dan"
 
 files = [
-    "savant_pitchers.csv",
-    "savant_batters.csv",
-    "fangraphs_pitchers.csv",
-    "fangraphs_batters.csv",
-    "fangraphs_team_vs_lhp.csv",
-    "fangraphs_team_vs_rhp.csv",
+    "data/raw/savant_pitchers.csv",
+    "data/raw/savant_batters.csv",
+    "data/raw/fangraphs_pitchers.csv",
+    "data/raw/fangraphs_batters.csv",
+    "data/raw/fangraphs_team_vs_lhp.csv",
+    "data/raw/fangraphs_team_vs_rhp.csv",
 ]
 
 for f in files:

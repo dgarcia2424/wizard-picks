@@ -24,10 +24,10 @@ from datetime import datetime
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
 
-SAVANT_FILE    = "savant_pitchers.csv"
-FANGRAPHS_FILE = "fangraphs_pitchers.csv"
-SAVANT_BATTERS_FILE  = "savant_batters.csv"
-FANGRAPHS_BATTERS_FILE = "fangraphs_batters.csv"
+SAVANT_FILE    = "data/raw/savant_pitchers.csv"
+FANGRAPHS_FILE = "data/raw/fangraphs_pitchers.csv"
+SAVANT_BATTERS_FILE  = "data/raw/savant_batters.csv"
+FANGRAPHS_BATTERS_FILE = "data/raw/fangraphs_batters.csv"
 GAMES_FILE     = "games.csv"
 OUTPUT_CSV       = "model_scores.csv"
 OUTPUT_HTML      = "model_report.html"
@@ -53,8 +53,8 @@ TEAM_NAME_TO_ABBR = {
     "Washington Nationals": "WSH",
 }
 
-TEAM_VS_LHP_FILE = "fangraphs_team_vs_lhp.csv"
-TEAM_VS_RHP_FILE = "fangraphs_team_vs_rhp.csv"
+TEAM_VS_LHP_FILE = "data/raw/fangraphs_team_vs_lhp.csv"
+TEAM_VS_RHP_FILE = "data/raw/fangraphs_team_vs_rhp.csv"
 
 # Park factor lookup (2025 baseline — replace with downloaded Savant park factors)
 PARK_FACTORS = {
@@ -1597,7 +1597,7 @@ def _load_weather_parquet(year: int) -> "pd.DataFrame | None":
     """
     import os
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    path = os.path.join(script_dir, "statcast_data", f"weather_{year}.parquet")
+    path = os.path.join(script_dir, "data", "statcast", f"weather_{year}.parquet")
     if not os.path.exists(path):
         return None
     try:

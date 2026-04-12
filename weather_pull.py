@@ -23,7 +23,7 @@ import requests
 # Configuration
 # ---------------------------------------------------------------------------
 
-OUTPUT_DIR = Path("./statcast_data")
+OUTPUT_DIR = Path("./data/statcast")
 CACHE_DIR = OUTPUT_DIR / "weather_cache"
 
 OPEN_METEO_URL = "https://archive-api.open-meteo.com/v1/archive"
