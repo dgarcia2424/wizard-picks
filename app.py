@@ -496,6 +496,39 @@ with tab_picks:
     date_str = selected.isoformat()
     st.caption(f"Showing picks for **{selected.strftime('%A, %B %d %Y')}**")
 
+    with st.expander("📖 How to read this — terms & definitions"):
+        st.markdown("""
+**Bet types**
+- **ML (Moneyline)** — Bet on a team to win the game outright. No spread involved.
+- **RL (Run Line)** — Baseball's version of a point spread. Standard is ±1.5 runs.
+  - *Home -1.5* means the home team must win by 2 or more runs for you to win.
+  - *Away +1.5* means the away team can lose by 1 or win, and you still win.
+- **-2.5 / +2.5** — Alternate run line. Higher risk/reward than the standard ±1.5.
+- **O/U (Over/Under)** — Bet on the combined total runs scored being over or under the number set by the book.
+
+**Odds (American format)**
+- **Negative odds** (e.g. -150): How much you must bet to win $100. -150 = bet $150 to win $100.
+- **Positive odds** (e.g. +130): How much you win on a $100 bet. +130 = bet $100 to win $130.
+- **Breakeven at -110** (standard juice): You need to win 52.4% of bets to break even.
+
+**Model terms**
+- **xwOBA** (Expected Weighted On-Base Average) — A pitcher quality metric. Lower is better for pitchers. Elite starters are below 0.280. League average is ~0.318. Above 0.350 is below average.
+- **Model Confidence %** — The probability our model assigns to the recommended bet winning. 60% = model thinks this bet wins 6 out of 10 times.
+- **Edge** — How much better our model probability is vs. what the market implies. +10% edge means the model sees a 10 percentage point advantage over the book's implied odds.
+- **Market implied %** — The win probability baked into the current betting odds.
+- **Predicted Score** — The model's expected final score based on 50,000 simulated games.
+- **Typical Range** — The 25th to 75th percentile of simulated scores (middle 50% of outcomes).
+
+**Confidence tiers**
+- **★★ STRONG** — High confidence. Model sees significant edge vs. the market.
+- **★ LEAN** — Moderate confidence. Smaller but still meaningful edge.
+- **No signal** — Model sees no meaningful edge. These games are skipped.
+
+**Lineup status**
+- **Confirmed lineup** — Starting pitchers have been officially announced.
+- **Projected lineup** — Starters are based on rotation projections, not yet confirmed.
+""")
+
     with st.spinner("Loading picks..."):
         results = load_card(date_str)
 
