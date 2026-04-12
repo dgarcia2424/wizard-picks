@@ -1,88 +1,208 @@
 """
 supabase_upload.py
+==================
+Pushes daily pipeline outputs to Supabase so the hosted dashboard can read them.
 
-Uploads today's model_scores.csv to Supabase after Agent 3 runs.
-Uses the secret key (server-side) so it bypasses RLS.
-Stores all model data as JSONB to avoid schema cache issues.
+Uploads:
+  daily_card.csv          → wizard_daily_card  (today's predictions)
+  backtest_2026_results.csv → wizard_backtest  (season tracker)
+  data/raw/bet_tracker.csv  → bet_tracker      (manually logged bets)
+
+Run automatically by mlb_model_run.bat after run_today.py.
 """
 import os
+import sys
 import logging
-import pandas as pd
 from pathlib import Path
-from supabase import create_client
+
+import pandas as pd
 
 logger = logging.getLogger("wizard.supabase")
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-NUMERIC_COLS = {
-    "MF5i_prob", "MFull_prob", "MF1i_prob", "MF3i_prob",
-    "MFull_proj_total", "MF1_proj", "MG3_proj",
-}
+BASE_DIR = Path(__file__).parent
 
 
-def upload_picks(csv_path: Path) -> int:
-    """
-    Read model_scores.csv and upsert all rows into Supabase wizard_picks table.
-    Stores all columns as a JSONB blob to avoid schema cache issues.
-    Returns number of rows uploaded.
-    """
-    url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_SECRET_KEY")
+# ---------------------------------------------------------------------------
+# HELPERS
+# ---------------------------------------------------------------------------
 
-    if not url or not key or key == "your-secret-key-here":
-        logger.warning("Supabase credentials not set — skipping upload.")
-        return 0
+def _load_dotenv():
+    env = BASE_DIR / ".env"
+    if not env.exists():
+        return
+    with open(env) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            os.environ.setdefault(k.strip(), v.strip())
 
+
+def _get_client():
+    _load_dotenv()
+    url = os.environ.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_KEY", "")
+    if not url or not key:
+        raise RuntimeError("SUPABASE_URL or SUPABASE_KEY not set in .env")
+    from supabase import create_client
+    return create_client(url, key)
+
+
+def _clean(row: dict) -> dict:
+    """Make a dict JSON-safe (replace NaN/inf with None)."""
+    out = {}
+    for k, v in row.items():
+        if v is None:
+            out[k] = None
+        elif isinstance(v, float) and (v != v or abs(v) == float("inf")):
+            out[k] = None
+        else:
+            out[k] = v
+    return out
+
+
+# ---------------------------------------------------------------------------
+# UPLOAD FUNCTIONS
+# ---------------------------------------------------------------------------
+
+def upload_daily_card(csv_path: Path = None) -> int:
+    """Upload today's run_today.py output to wizard_daily_card table."""
+    csv_path = csv_path or BASE_DIR / "daily_card.csv"
     if not csv_path.exists():
-        logger.error(f"model_scores.csv not found at {csv_path}")
+        logger.warning(f"  [SKIP] {csv_path.name} not found")
         return 0
 
     df = pd.read_csv(csv_path)
-    df = df.where(pd.notnull(df), None)
+    if df.empty:
+        logger.warning("  [SKIP] daily_card.csv is empty")
+        return 0
 
-    for col in NUMERIC_COLS:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    run_date = str(df["game_date"].iloc[0])
-    supabase = create_client(url, key)
+    client     = _get_client()
+    game_date  = str(df["game"].iloc[0])  # use date from filename fallback
+    # Try to get date from the data or use today
+    import datetime
+    game_date  = datetime.date.today().isoformat()
 
     # Clear today's rows
-    supabase.table("wizard_picks").delete().eq("game_date", run_date).execute()
-    logger.info(f"[Supabase] 🗑️ Cleared existing rows for {run_date}.")
+    client.table("wizard_daily_card").delete().eq("game_date", game_date).execute()
 
-    # Insert each row: only game_date + matchup as real columns, everything else as JSONB
     success = 0
     for _, row in df.iterrows():
-        # Convert NaN/inf to None so it's JSON-safe
-        clean = {k: (None if (v != v or v is float('inf') or v == float('-inf')) else v)
-                 for k, v in row.to_dict().items()}
         record = {
-            "game_date": run_date,
-            "matchup": row.get("matchup"),
-            "data": clean,
+            "game_date":    game_date,
+            "game":         row.get("game", ""),
+            "home_team":    row.get("home_team", ""),
+            "away_team":    row.get("away_team", ""),
+            "rl_signal":    row.get("rl_signal", ""),
+            "total_signal": row.get("total_signal", ""),
+            "blended_rl":   row.get("blended_rl"),
+            "mc_rl":        row.get("mc_rl"),
+            "xgb_rl":       row.get("xgb_rl"),
+            "mc_total":     row.get("mc_total"),
+            "blended_total":row.get("blended_total"),
+            "vegas_total":  row.get("vegas_total"),
+            "vegas_ml_home":row.get("vegas_ml_home"),
+            "home_sp":      row.get("home_sp", ""),
+            "away_sp":      row.get("away_sp", ""),
+            "home_sp_xwoba":row.get("home_sp_xwoba"),
+            "away_sp_xwoba":row.get("away_sp_xwoba"),
+            "home_sp_flag": row.get("home_sp_flag", ""),
+            "away_sp_flag": row.get("away_sp_flag", ""),
+            "temp_f":       row.get("temp_f"),
+            "lineup_confirmed": row.get("lineup_confirmed", False),
+            "data":         _clean(row.to_dict()),
         }
         try:
-            supabase.table("wizard_picks").insert(record).execute()
+            client.table("wizard_daily_card").insert(record).execute()
             success += 1
         except Exception as e:
-            logger.error(f"[Supabase] ❌ {record['matchup']} failed: {e}")
+            logger.error(f"  [ERROR] {record['game']}: {e}")
 
-    logger.info(f"[Supabase] ✅ Uploaded {success}/{len(df)} rows to wizard_picks.")
+    logger.info(f"  wizard_daily_card: {success}/{len(df)} rows uploaded for {game_date}")
     return success
 
 
+def upload_backtest(csv_path: Path = None) -> int:
+    """Upload season backtest results to wizard_backtest table."""
+    csv_path = csv_path or BASE_DIR / "backtest_2026_results.csv"
+    if not csv_path.exists():
+        logger.warning(f"  [SKIP] {csv_path.name} not found")
+        return 0
+
+    df = pd.read_csv(csv_path)
+    if df.empty:
+        return 0
+
+    client = _get_client()
+
+    # Full replace — backtest file is the source of truth
+    client.table("wizard_backtest").delete().neq("date", "1900-01-01").execute()
+
+    success = 0
+    for _, row in df.iterrows():
+        record = _clean(row.to_dict())
+        try:
+            client.table("wizard_backtest").insert(record).execute()
+            success += 1
+        except Exception as e:
+            logger.error(f"  [ERROR] backtest row {row.get('game', '')}: {e}")
+
+    logger.info(f"  wizard_backtest: {success}/{len(df)} rows uploaded")
+    return success
+
+
+def upload_bet_tracker(csv_path: Path = None) -> int:
+    """Upload bet tracker to Supabase bet_tracker table."""
+    csv_path = csv_path or BASE_DIR / "data" / "raw" / "bet_tracker.csv"
+    if not csv_path.exists():
+        logger.warning(f"  [SKIP] bet_tracker.csv not found")
+        return 0
+
+    df = pd.read_csv(csv_path)
+    if df.empty:
+        return 0
+
+    client = _get_client()
+    client.table("bet_tracker").delete().neq("id", -1).execute()
+
+    success = 0
+    for _, row in df.iterrows():
+        record = _clean(row.to_dict())
+        try:
+            client.table("bet_tracker").insert(record).execute()
+            success += 1
+        except Exception as e:
+            logger.error(f"  [ERROR] bet_tracker row: {e}")
+
+    logger.info(f"  bet_tracker: {success}/{len(df)} rows uploaded")
+    return success
+
+
+# ---------------------------------------------------------------------------
+# MAIN
+# ---------------------------------------------------------------------------
+
+def main():
+    print("=" * 50)
+    print("  supabase_upload.py")
+    print("=" * 50)
+
+    try:
+        n1 = upload_daily_card()
+        n2 = upload_backtest()
+        n3 = upload_bet_tracker()
+        total = n1 + n2 + n3
+        print(f"\n  Done. {total} total rows uploaded to Supabase.")
+        sys.exit(0)
+    except RuntimeError as e:
+        print(f"\n  [ERROR] {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n  [ERROR] Unexpected: {e}")
+        sys.exit(1)
+
+
 if __name__ == "__main__":
-    import sys
-    from dotenv import load_dotenv
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-
-    env_file = Path(__file__).parent / "wizard_agents" / "env"
-    if env_file.exists():
-        load_dotenv(env_file)
-
-    pipeline_dir = Path(os.environ.get("PIPELINE_DIR", Path(__file__).parent))
-    csv_path = pipeline_dir / "model_scores.csv"
-
-    n = upload_picks(csv_path)
-    print(f"Uploaded {n} rows.")
-    sys.exit(0 if n > 0 else 1)
+    main()
