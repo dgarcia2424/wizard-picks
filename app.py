@@ -76,11 +76,19 @@ st.markdown("""
 def _site_password() -> str:
     # Try Streamlit secrets first (hosted), then env var (local)
     try:
-        val = st.secrets["SITE_PASSWORD"]
-        return str(val).strip()
+        if hasattr(st, "secrets") and "SITE_PASSWORD" in st.secrets:
+            return str(st.secrets["SITE_PASSWORD"]).strip()
     except Exception:
         pass
     return str(os.environ.get("SITE_PASSWORD", "")).strip()
+
+def _debug_secrets() -> str:
+    """Temporary: show what secrets are visible (key names only, not values)."""
+    try:
+        keys = list(st.secrets.keys())
+        return f"Secrets loaded: {keys}"
+    except Exception as e:
+        return f"Secrets error: {e}"
 
 def check_password() -> bool:
     if st.session_state.get("authenticated"):
@@ -99,6 +107,7 @@ def check_password() -> bool:
                 st.rerun()
             else:
                 st.error("Incorrect password")
+                st.caption(_debug_secrets())  # temp: remove once login works
         st.markdown('</div>', unsafe_allow_html=True)
     return False
 
