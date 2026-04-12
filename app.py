@@ -358,7 +358,8 @@ def render_card(r: dict, n: int, tier: str):
     fill_cls  = "conf-fill-strong" if tier == "strong" else "conf-fill-lean"
     card_cls  = "bet-card-strong"  if tier == "strong" else "bet-card-lean"
     badge_cls = "badge-strong"     if tier == "strong" else "badge-lean"
-    badge_txt = "★★ STRONG  ·  High Confidence" if tier == "strong" else "★ LEAN  ·  Moderate Confidence"
+    badge_txt = (f"★★ STRONG  ·  {conf_pct}% confidence" if tier == "strong"
+                 else f"★ LEAN  ·  {conf_pct}% confidence")
 
     # Confidence sub-line
     market_odds = r.get("best_market_odds")
