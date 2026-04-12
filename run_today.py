@@ -16,6 +16,7 @@ Usage:
 
 import argparse
 import datetime
+import os
 import warnings
 from pathlib import Path
 
@@ -23,6 +24,21 @@ import numpy as np
 import pandas as pd
 
 warnings.filterwarnings("ignore")
+
+# Load .env file so GMAIL_APP_PASSWORD etc. are available
+def _load_dotenv():
+    env_path = Path(__file__).parent / ".env"
+    if not env_path.exists():
+        return
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            os.environ.setdefault(key.strip(), val.strip())
+
+_load_dotenv()
 
 DATA_DIR = Path("./statcast_data")
 
@@ -327,6 +343,97 @@ def _print_game_row(r: dict, highlight: bool) -> None:
 # MAIN
 # ---------------------------------------------------------------------------
 
+def _build_email_body(results: list[dict], date_str: str) -> str:
+    """Build a plain-text email body from the card results."""
+    lines = []
+    lines.append(f"MLB Run Line Card — {date_str}")
+    lines.append("=" * 60)
+
+    strong = [r for r in results if "**" in r["rl_signal"]]
+    lean   = [r for r in results if "*"  in r["rl_signal"] and "**" not in r["rl_signal"]]
+    watch  = [r for r in results if not r["rl_signal"]]
+
+    def fmt(r):
+        conf = "" if r["lineup_confirmed"] else " [PROJECTED]"
+        flag_h = f" [{r['home_sp_flag']}]" if r["home_sp_flag"] not in ("NORMAL", "UNKNOWN", "") else ""
+        flag_a = f" [{r['away_sp_flag']}]" if r["away_sp_flag"] not in ("NORMAL", "UNKNOWN", "") else ""
+        has_vegas = r["vegas_ml_home"] is not None and not pd.isna(r["vegas_ml_home"])
+        vegas_str = f"ML={int(r['vegas_ml_home']):+d}  O/U={r['vegas_total']}" if has_vegas else "no Vegas line"
+        block = [
+            f"{r['game']}{conf}",
+            f"  HOME: {r['home_sp']}{flag_h}  xwOBA={r['home_sp_xwoba']:.3f}",
+            f"  AWAY: {r['away_sp']}{flag_a}  xwOBA={r['away_sp_xwoba']:.3f}",
+            f"  {r['temp_f']:.0f}F  {vegas_str}",
+            f"  MC={r['mc_rl']:.3f}  XGB={r['xgb_rl'] or 'N/A'}  BLEND={r['blended_rl']:.3f}  total={r['blended_total'] or r['mc_total']:.1f}",
+        ]
+        if r["rl_signal"]:
+            block.append(f"  >>> BET: {r['rl_signal']}  prob={r['blended_rl']:.3f}")
+        if r["total_signal"]:
+            block.append(f"  >>> TOTAL: {r['total_signal']}")
+        return "\n".join(block)
+
+    if strong:
+        lines.append(f"\n** STRONG SIGNALS ({len(strong)} games)")
+        lines.append("-" * 40)
+        for r in strong:
+            lines.append(fmt(r))
+            lines.append("")
+
+    if lean:
+        lines.append(f"\n*  LEAN SIGNALS ({len(lean)} games)")
+        lines.append("-" * 40)
+        for r in lean:
+            lines.append(fmt(r))
+            lines.append("")
+
+    if watch:
+        lines.append(f"\n-- NO SIGNAL ({len(watch)} games)")
+        lines.append("-" * 40)
+        for r in watch:
+            lines.append(fmt(r))
+            lines.append("")
+
+    lines.append(f"Thresholds: ** HOME>=0.58 | * HOME>=0.54 | ** AWAY<=0.34 | * AWAY<=0.40")
+    lines.append(f"Blend: 60% Monte Carlo + 40% XGBoost")
+    return "\n".join(lines)
+
+
+def send_card_email(results: list[dict], date_str: str) -> None:
+    """Send the daily card as a plain-text email via Gmail."""
+    import os
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+
+    gmail_from = os.getenv("GMAIL_FROM", "garcia.dan24@gmail.com")
+    gmail_pass = os.getenv("GMAIL_APP_PASSWORD", "")
+    recipients = os.getenv("EMAIL_RECIPIENTS", gmail_from).split(",")
+
+    if not gmail_pass:
+        print("  [WARN] GMAIL_APP_PASSWORD not set — skipping email")
+        return
+
+    strong_count = sum(1 for r in results if "**" in r["rl_signal"])
+    lean_count   = sum(1 for r in results if "*"  in r["rl_signal"] and "**" not in r["rl_signal"])
+    subject = f"MLB Picks {date_str} — {strong_count} strong, {lean_count} lean signals"
+
+    body = _build_email_body(results, date_str)
+
+    msg = MIMEMultipart()
+    msg["From"]    = gmail_from
+    msg["To"]      = ", ".join(recipients)
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain"))
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
+            s.login(gmail_from, gmail_pass)
+            s.sendmail(gmail_from, recipients, msg.as_string())
+        print(f"  Email sent -> {', '.join(recipients)}")
+    except Exception as e:
+        print(f"  [ERROR] Email failed: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run automated MLB daily prediction card")
@@ -336,6 +443,8 @@ def main():
                         help="Only show games above this RL probability threshold")
     parser.add_argument("--csv",       action="store_true",
                         help="Write results to daily_card.csv")
+    parser.add_argument("--email",     action="store_true",
+                        help="Send the card as an email via Gmail")
     args = parser.parse_args()
 
     date_str = args.date or str(datetime.date.today())
@@ -352,6 +461,9 @@ def main():
         out = "daily_card.csv"
         pd.DataFrame(results).to_csv(out, index=False)
         print(f"  Saved -> {out}")
+
+    if args.email and results:
+        send_card_email(results, date_str)
 
 
 if __name__ == "__main__":
