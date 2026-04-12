@@ -780,7 +780,7 @@ def render_card(r: dict, n: int, tier: str):
 
 # ── App header ────────────────────────────────────────────────────────────────
 st.markdown("## 🧙 The Wizard — MLB Picks")
-st.caption("Picks updated daily after 9 AM ET  ·  Sorted by strongest edge first")
+st.caption("Picks updated daily after 8:30 AM ET  ·  Sorted by strongest edge first")
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 tab_picks, tab_season, tab_log, tab_history, tab_performance = st.tabs([
@@ -846,7 +846,7 @@ with tab_picks:
 
     if not results:
         st.warning(f"No predictions for {today.strftime('%B %d, %Y')} — pipeline may not have run yet.")
-        st.info("Run `python run_today.py --csv && python supabase_upload.py` to generate today's card.")
+        st.info("Run `python run_pipeline.py --daily` to generate today's card, or start the scheduler with `python run_daily_scheduler.py`.")
         st.stop()
 
     def _sort_key(r):
