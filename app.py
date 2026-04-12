@@ -662,10 +662,11 @@ with tab_picks:
         results = load_card(date_str)
 
     if not results:
-        st.warning(f"No predictions for {selected.strftime('%B %d, %Y')} — "
+        st.warning(f"No predictions for {st.session_state.pick_date.strftime('%B %d, %Y')} — "
                    "pipeline may not have run yet.")
-        st.info("Run `python run_today.py --csv && python supabase_upload.py` "
-                "to generate today's card.")
+        if st.session_state.pick_date == today:
+            st.info("Run `python run_today.py --csv && python supabase_upload.py` "
+                    "to generate today's card.")
         st.stop()
 
     def _sort_key(r):
