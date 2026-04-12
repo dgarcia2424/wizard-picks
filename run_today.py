@@ -343,8 +343,161 @@ def _print_game_row(r: dict, highlight: bool) -> None:
 # MAIN
 # ---------------------------------------------------------------------------
 
+def _edge_pct(blended_rl: float, signal: str) -> str:
+    """Return edge vs -110 breakeven (52.4%) as a string like +18%."""
+    breakeven = 100 / 210  # 52.38%
+    if "HOME" in signal:
+        edge = blended_rl - breakeven
+    else:
+        edge = (1 - blended_rl) - breakeven
+    return f"{edge:+.0%}"
+
+
+def _why(r: dict) -> str:
+    """One-line reason for the bet."""
+    parts = []
+    home_x = r.get("home_sp_xwoba") or 0
+    away_x = r.get("away_sp_xwoba") or 0
+    signal = r["rl_signal"]
+
+    # Flag the favored pitcher
+    if "AWAY" in signal:
+        sp_name = r["away_sp"].title()
+        sp_x = away_x
+        opp_name = r["home_sp"].title()
+        opp_x = home_x
+    else:
+        sp_name = r["home_sp"].title()
+        sp_x = home_x
+        opp_name = r["away_sp"].title()
+        opp_x = away_x
+
+    if sp_x < 0.280:
+        parts.append(f"{sp_name} elite (xwOBA {sp_x:.3f})")
+    elif sp_x < 0.305:
+        parts.append(f"{sp_name} strong (xwOBA {sp_x:.3f})")
+
+    if opp_x > 0.360:
+        parts.append(f"{opp_name} struggling (xwOBA {opp_x:.3f})")
+    elif opp_x > 0.330:
+        parts.append(f"{opp_name} below avg (xwOBA {opp_x:.3f})")
+
+    # Velocity flags
+    if "AWAY" in signal and r.get("home_sp_flag") in ("VOLATILE",):
+        parts.append(f"{r['home_sp'].title()} velocity declining [VOLATILE]")
+    if "HOME" in signal and r.get("away_sp_flag") in ("VOLATILE",):
+        parts.append(f"{r['away_sp'].title()} velocity declining [VOLATILE]")
+    if "AWAY" in signal and r.get("away_sp_flag") == "GAINER":
+        parts.append(f"{r['away_sp'].title()} velo trending up [GAINER]")
+
+    # Temperature
+    temp = r.get("temp_f", 72)
+    if temp and temp > 80:
+        parts.append(f"warm weather ({temp:.0f}F)")
+    elif temp and temp < 50:
+        parts.append(f"cold weather ({temp:.0f}F, suppresses scoring)")
+
+    return " | ".join(parts) if parts else "model edge on run differential"
+
+
 def _build_email_body(results: list[dict], date_str: str) -> str:
-    """Build a plain-text email body from the card results."""
+    """Build a clean action-first email: BET -> Game -> Why -> Stats."""
+    import datetime as dt
+    try:
+        day_label = dt.datetime.strptime(date_str, "%Y-%m-%d").strftime("%A, %B %-d")
+    except Exception:
+        day_label = date_str
+
+    strong = [r for r in results if "**" in r["rl_signal"]]
+    lean   = [r for r in results if "*"  in r["rl_signal"] and "**" not in r["rl_signal"]]
+    skip   = [r for r in results if not r["rl_signal"]]
+
+    play_count = len(strong) + len(lean)
+    lines = []
+    lines.append("THE WIZARD — MLB PICKS")
+    lines.append(day_label)
+    lines.append("=" * 48)
+
+    if play_count == 0:
+        lines.append("\nNo plays today — model sees no edge on the slate.")
+        lines.append("=" * 48)
+        return "\n".join(lines)
+
+    lines.append(f"\nTODAY'S PLAYS  ({len(strong)} strong  |  {len(lean)} lean)")
+
+    def fmt_play(r, n, units):
+        signal   = r["rl_signal"]
+        away, home = r["away_team"], r["home_team"]
+        conf = "" if r["lineup_confirmed"] else " *"
+
+        # Action line — what to bet
+        if "AWAY" in signal:
+            bet_team = away
+            bet_line = f"{away} +1.5"
+        else:
+            bet_team = home
+            bet_line = f"{home} -1.5"
+
+        total_bets = []
+        if r["total_signal"]:
+            total_bets.append(r["total_signal"])
+
+        edge = _edge_pct(r["blended_rl"], signal)
+        conf_pct = int((1 - r["blended_rl"] if "AWAY" in signal else r["blended_rl"]) * 100)
+
+        has_vegas = r["vegas_ml_home"] is not None and not pd.isna(r["vegas_ml_home"])
+        vegas_str = f"O/U {r['vegas_total']}" if has_vegas and r["vegas_total"] else ""
+
+        block = [
+            f"",
+            f"[{n}]  BET: {bet_line}  ({units} unit{'s' if units > 1 else ''}){conf}",
+            f"     {away} @ {home}  {vegas_str}",
+            f"     Model confidence: {conf_pct}%  |  Edge vs breakeven: {edge}",
+            f"     Why: {_why(r)}",
+        ]
+        if total_bets:
+            block.append(f"     Also: {' + '.join(total_bets)}")
+
+        # Stats (secondary)
+        block.append(f"     ---")
+        home_flag = f" [{r['home_sp_flag']}]" if r["home_sp_flag"] not in ("NORMAL","UNKNOWN","") else ""
+        away_flag = f" [{r['away_sp_flag']}]" if r["away_sp_flag"] not in ("NORMAL","UNKNOWN","") else ""
+        block.append(f"     {home} SP: {r['home_sp'].title()}{home_flag}  xwOBA {r['home_sp_xwoba']:.3f}")
+        block.append(f"     {away} SP: {r['away_sp'].title()}{away_flag}  xwOBA {r['away_sp_xwoba']:.3f}")
+
+        return "\n".join(block)
+
+    if strong:
+        lines.append("\n" + "=" * 48)
+        lines.append("  STRONG PLAYS (2 units each)")
+        lines.append("=" * 48)
+        for i, r in enumerate(strong, 1):
+            lines.append(fmt_play(r, i, 2))
+
+    if lean:
+        lines.append("\n" + "-" * 48)
+        lines.append("  LEAN PLAYS (1 unit each)")
+        lines.append("-" * 48)
+        offset = len(strong)
+        for i, r in enumerate(lean, offset + 1):
+            lines.append(fmt_play(r, i, 1))
+
+    if skip:
+        lines.append("\n" + "-" * 48)
+        lines.append(f"  NO EDGE ({len(skip)} games skipped)")
+        skip_games = "  " + ",  ".join(r["game"] for r in skip)
+        lines.append(skip_games)
+
+    lines.append("\n" + "=" * 48)
+    lines.append("* lineup projected, not confirmed")
+    lines.append("Breakeven at -110 juice: 52.4%")
+    lines.append("=" * 48)
+
+    return "\n".join(lines)
+
+
+# legacy — keep for console output formatting
+def _build_email_body_old(results: list[dict], date_str: str) -> str:
     lines = []
     lines.append(f"MLB Run Line Card — {date_str}")
     lines.append("=" * 60)
@@ -352,25 +505,6 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
     strong = [r for r in results if "**" in r["rl_signal"]]
     lean   = [r for r in results if "*"  in r["rl_signal"] and "**" not in r["rl_signal"]]
     watch  = [r for r in results if not r["rl_signal"]]
-
-    def fmt(r):
-        conf = "" if r["lineup_confirmed"] else " [PROJECTED]"
-        flag_h = f" [{r['home_sp_flag']}]" if r["home_sp_flag"] not in ("NORMAL", "UNKNOWN", "") else ""
-        flag_a = f" [{r['away_sp_flag']}]" if r["away_sp_flag"] not in ("NORMAL", "UNKNOWN", "") else ""
-        has_vegas = r["vegas_ml_home"] is not None and not pd.isna(r["vegas_ml_home"])
-        vegas_str = f"ML={int(r['vegas_ml_home']):+d}  O/U={r['vegas_total']}" if has_vegas else "no Vegas line"
-        block = [
-            f"{r['game']}{conf}",
-            f"  HOME: {r['home_sp']}{flag_h}  xwOBA={r['home_sp_xwoba']:.3f}",
-            f"  AWAY: {r['away_sp']}{flag_a}  xwOBA={r['away_sp_xwoba']:.3f}",
-            f"  {r['temp_f']:.0f}F  {vegas_str}",
-            f"  MC={r['mc_rl']:.3f}  XGB={r['xgb_rl'] or 'N/A'}  BLEND={r['blended_rl']:.3f}  total={r['blended_total'] or r['mc_total']:.1f}",
-        ]
-        if r["rl_signal"]:
-            block.append(f"  >>> BET: {r['rl_signal']}  prob={r['blended_rl']:.3f}")
-        if r["total_signal"]:
-            block.append(f"  >>> TOTAL: {r['total_signal']}")
-        return "\n".join(block)
 
     if strong:
         lines.append(f"\n** STRONG SIGNALS ({len(strong)} games)")
