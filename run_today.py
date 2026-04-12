@@ -258,14 +258,35 @@ def _best_bet(
 # RUN PREDICTIONS
 # ---------------------------------------------------------------------------
 
+def _load_team_stats() -> pd.DataFrame:
+    """Load 2026 team batting/bullpen stats, rebuilding if stale (>6 hrs old)."""
+    import datetime as _dt
+    from build_team_stats_2026 import build as _build_team_stats
+    path = Path("data/statcast/team_stats_2026.parquet")
+    if not path.exists():
+        print("  Building team stats 2026 ...")
+        _build_team_stats(verbose=False)
+    else:
+        age_hours = (_dt.datetime.now().timestamp() - path.stat().st_mtime) / 3600
+        if age_hours > 6:
+            print("  Refreshing team stats 2026 (stale) ...")
+            _build_team_stats(verbose=False)
+    return pd.read_parquet(path, engine="pyarrow").set_index("batting_team")
+
+
 def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
     from monte_carlo_runline import predict_game, load_profiles
 
     # Load all data sources
-    lineups = load_lineups(date_str)
-    odds    = load_odds(date_str)
-    weather = load_weather(date_str)
+    lineups  = load_lineups(date_str)
+    odds     = load_odds(date_str)
+    weather  = load_weather(date_str)
     profiles = load_profiles()
+    try:
+        team_stats = _load_team_stats()
+    except Exception as e:
+        print(f"  [WARN] Could not load team stats: {e} — using pitcher-only model")
+        team_stats = None
 
     if len(lineups) == 0:
         print("  No games found for today.")
@@ -323,12 +344,18 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
         vegas_tot  = game.get("close_total")
         rl_odds    = game.get("runline_home_odds")
 
+        # Fetch team stats rows (None if team not found)
+        home_ts = team_stats.loc[home] if (team_stats is not None and home in team_stats.index) else None
+        away_ts = team_stats.loc[away] if (team_stats is not None and away in team_stats.index) else None
+
         try:
             res = predict_game(
                 home_team=home, away_team=away,
                 home_sp_name=home_sp_norm, away_sp_name=away_sp_norm,
                 temp_f=temp, month=today_month,
                 verbose=False,
+                home_team_stats=home_ts,
+                away_team_stats=away_ts,
             )
         except Exception as e:
             print(f"  {away} @ {home}: ERROR — {e}")

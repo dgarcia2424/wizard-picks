@@ -234,6 +234,9 @@ def xwoba_to_runs_per_game(xwoba: np.ndarray) -> np.ndarray:
     return np.clip(XWOBA_INTERCEPT + XWOBA_SLOPE * xwoba, 0, 20)
 
 
+LEAGUE_RS_PER_GAME = 4.38   # 2024 MLB average runs scored per team per game
+
+
 def simulate_game(
     home_mu: float,   home_sigma: float,
     away_mu: float,   away_sigma: float,
@@ -241,15 +244,33 @@ def simulate_game(
     temp_f: float = 72.0,
     home_bullpen_xwoba: float = DEFAULT_BULLPEN_XWOBA,
     away_bullpen_xwoba: float = DEFAULT_BULLPEN_XWOBA,
+    home_team_rs_per_game: float | None = None,   # season-to-date RS/G
+    away_team_rs_per_game: float | None = None,
     rng: np.random.Generator | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Monte Carlo game simulation.
 
     Returns (home_runs_array, away_runs_array) each of length N_SIMS.
+
+    Team offensive quality (RS/G) scales the pitcher-derived lambda so that
+    elite offenses score more than the SP xwOBA alone would suggest.
     """
     if rng is None:
         rng = np.random.default_rng()
+
+    # --- Team offensive factors (RS/G vs league average) -------------------
+    # Blend 50% team factor / 50% pitcher-derived: avoids over-weighting
+    # small early-season samples while still incorporating team quality.
+    def off_factor(rs_pg):
+        if rs_pg is None or np.isnan(float(rs_pg)):
+            return 1.0
+        raw = float(rs_pg) / LEAGUE_RS_PER_GAME
+        # Blend toward 1.0 (league avg) — dampens small sample extremes
+        return 0.50 * raw + 0.50
+
+    home_off = off_factor(home_team_rs_per_game)
+    away_off = off_factor(away_team_rs_per_game)
 
     # --- Environment adjustments -------------------------------------------
     air   = air_density_ratio(park_elevation_ft)
@@ -270,16 +291,16 @@ def simulate_game(
     bp_frac = 1 - sp_frac
 
     # Runs allowed by each pitcher / bullpen (= opponent's scoring)
-    home_sp_concedes  = xwoba_to_runs_per_game(home_xwoba_sp) * sp_frac   # away team scores off home SP
-    away_sp_concedes  = xwoba_to_runs_per_game(away_xwoba_sp) * sp_frac   # home team scores off away SP
-    home_bp_concedes  = xwoba_to_runs_per_game(home_bullpen_xwoba) * bp_frac
-    away_bp_concedes  = xwoba_to_runs_per_game(away_bullpen_xwoba) * bp_frac
+    home_sp_concedes = xwoba_to_runs_per_game(home_xwoba_sp) * sp_frac
+    away_sp_concedes = xwoba_to_runs_per_game(away_xwoba_sp) * sp_frac
+    home_bp_concedes = xwoba_to_runs_per_game(home_bullpen_xwoba) * bp_frac
+    away_bp_concedes = xwoba_to_runs_per_game(away_bullpen_xwoba) * bp_frac
 
-    # --- Total expected runs (environment-adjusted) -----------------------
-    # Home team scores = what AWAY pitching concedes
-    home_lambda = (away_sp_concedes + away_bp_concedes) * env_factor
-    # Away team scores = what HOME pitching concedes
-    away_lambda = (home_sp_concedes + home_bp_concedes) * env_factor
+    # --- Total expected runs (environment + team offense adjusted) ----------
+    # Home team scores = away pitching concedes × home team offensive quality
+    home_lambda = (away_sp_concedes + away_bp_concedes) * env_factor * home_off
+    # Away team scores = home pitching concedes × away team offensive quality
+    away_lambda = (home_sp_concedes + home_bp_concedes) * env_factor * away_off
 
     # --- Poisson draw (actual runs in each simulated game) ----------------
     home_runs = rng.poisson(np.maximum(home_lambda, 0.1))
@@ -294,7 +315,9 @@ def simulate_game(
 
 def build_xgb_row(home_prof: pd.Series, away_prof: pd.Series,
                   home_team: str, away_team: str,
-                  temp_f: float, feature_cols: list) -> pd.DataFrame | None:
+                  temp_f: float, feature_cols: list,
+                  home_team_stats: pd.Series | None = None,
+                  away_team_stats: pd.Series | None = None) -> pd.DataFrame | None:
     """
     Build a single feature row for XGBoost inference.
     Uses pitcher profile features where available.
@@ -368,6 +391,41 @@ def build_xgb_row(home_prof: pd.Series, away_prof: pd.Series,
     row["sp_kminusbb_diff"] = safe_diff(
         row.get("home_sp_k_minus_bb"), row.get("away_sp_k_minus_bb"))
 
+    # Team batting splits (2026 season-to-date)
+    def fill_batting(stats, prefix):
+        if stats is None:
+            return
+        for col in ["bat_xwoba_vs_rhp", "bat_xwoba_vs_lhp",
+                    "bat_k_vs_rhp",     "bat_k_vs_lhp",
+                    "bat_bb_vs_rhp",    "bat_bb_vs_lhp"]:
+            feat = f"{prefix}_{col}"
+            if feat in row and pd.notna(stats.get(col)):
+                row[feat] = float(stats.get(col))
+
+    fill_batting(home_team_stats, "home")
+    fill_batting(away_team_stats, "away")
+
+    # Matchup-specific batting edge (home team vs away SP handedness)
+    away_sp_rhp = row.get("away_sp_p_throws_R", 1)
+    home_sp_rhp = row.get("home_sp_p_throws_R", 1)
+    if home_team_stats is not None and pd.notna(away_sp_rhp):
+        home_bat_vs_sp = (home_team_stats.get("bat_xwoba_vs_rhp")
+                          if away_sp_rhp == 1
+                          else home_team_stats.get("bat_xwoba_vs_lhp"))
+        if "home_bat_vs_away_sp" in row and pd.notna(home_bat_vs_sp):
+            row["home_bat_vs_away_sp"] = float(home_bat_vs_sp)
+    if away_team_stats is not None and pd.notna(home_sp_rhp):
+        away_bat_vs_sp = (away_team_stats.get("bat_xwoba_vs_rhp")
+                          if home_sp_rhp == 1
+                          else away_team_stats.get("bat_xwoba_vs_lhp"))
+        if "away_bat_vs_home_sp" in row and pd.notna(away_bat_vs_sp):
+            row["away_bat_vs_home_sp"] = float(away_bat_vs_sp)
+    if ("home_bat_vs_away_sp" in row and "away_bat_vs_home_sp" in row
+            and pd.notna(row["home_bat_vs_away_sp"])
+            and pd.notna(row["away_bat_vs_home_sp"])):
+        row["batting_matchup_edge"] = (row["home_bat_vs_away_sp"]
+                                       - row["away_bat_vs_home_sp"])
+
     # Weather
     row["temp_f"]    = temp_f
     row["wind_mph"]  = 8.0   # default
@@ -392,6 +450,8 @@ def predict_game(
     temp_f: float = 72.0,
     month: int | None = None,
     verbose: bool = True,
+    home_team_stats: pd.Series | None = None,   # row from team_stats_2026
+    away_team_stats: pd.Series | None = None,
 ) -> dict:
     """
     Full prediction pipeline for one game.
@@ -442,6 +502,20 @@ def predict_game(
     # Environment
     elev = STADIUM_ELEVATION.get(home_team, 0)
 
+    # Team quality inputs for simulation
+    home_rs_pg = float(home_team_stats["team_rs_per_game"]) \
+        if home_team_stats is not None and pd.notna(home_team_stats.get("team_rs_per_game")) \
+        else None
+    away_rs_pg = float(away_team_stats["team_rs_per_game"]) \
+        if away_team_stats is not None and pd.notna(away_team_stats.get("team_rs_per_game")) \
+        else None
+    home_bp_xwoba = float(home_team_stats["bullpen_xwoba"]) \
+        if home_team_stats is not None and pd.notna(home_team_stats.get("bullpen_xwoba")) \
+        else DEFAULT_BULLPEN_XWOBA
+    away_bp_xwoba = float(away_team_stats["bullpen_xwoba"]) \
+        if away_team_stats is not None and pd.notna(away_team_stats.get("bullpen_xwoba")) \
+        else DEFAULT_BULLPEN_XWOBA
+
     # Monte Carlo simulation
     rng = np.random.default_rng(seed=42)
     home_runs, away_runs = simulate_game(
@@ -449,6 +523,10 @@ def predict_game(
         away_mu=away_mu, away_sigma=away_sigma,
         park_elevation_ft=elev,
         temp_f=temp_f,
+        home_bullpen_xwoba=home_bp_xwoba,
+        away_bullpen_xwoba=away_bp_xwoba,
+        home_team_rs_per_game=home_rs_pg,
+        away_team_rs_per_game=away_rs_pg,
         rng=rng,
     )
 
@@ -504,7 +582,9 @@ def predict_game(
     rl_model, tot_model, feat_cols = load_xgb_models()
     if rl_model is not None:
         xgb_row = build_xgb_row(
-            home_prof, away_prof, home_team, away_team, temp_f, feat_cols)
+            home_prof, away_prof, home_team, away_team, temp_f, feat_cols,
+            home_team_stats=home_team_stats,
+            away_team_stats=away_team_stats)
         if xgb_row is not None:
             xgb_rl_prob = float(rl_model.predict_proba(xgb_row)[0, 1])
             xgb_tot     = float(tot_model.predict(xgb_row)[0]) \
