@@ -190,7 +190,7 @@ def _why(r: dict) -> str:
     parts = []
     home_x = float(r.get("home_sp_xwoba") or 0)
     away_x = float(r.get("away_sp_xwoba") or 0)
-    best_line = r.get("best_line", r.get("rl_signal", ""))
+    best_line = str(r.get("best_line") or r.get("rl_signal") or "")
     is_home_bet = "home" in best_line.lower() or ("ML" in best_line and home_x < away_x)
 
     sp_name  = r.get("home_sp","").title() if is_home_bet else r.get("away_sp","").title()
@@ -234,7 +234,7 @@ def _why(r: dict) -> str:
 def _format_bet_label(r: dict) -> str:
     """Convert best_line to human-readable bet string, e.g. 'NYY -1.5 (-115)'."""
     away, home = r.get("away_team",""), r.get("home_team","")
-    line  = r.get("best_line", "")
+    line  = str(r.get("best_line") or "")
     odds  = r.get("best_market_odds")
     odds_str = f" ({int(odds):+d})" if odds is not None else ""
 
@@ -261,8 +261,18 @@ def render_card(r: dict, n: int, units: int, tier: str):
     away, home = r.get("away_team",""), r.get("home_team","")
 
     bet_label = _format_bet_label(r)
+    # Fall back gracefully when best_bet fields are missing (old Supabase rows)
     model_prob = float(r.get("best_model_prob") or r.get("blended_rl") or 0.5)
     edge_raw   = float(r.get("best_edge") or 0.0)
+    if not bet_label:
+        # Reconstruct from legacy rl_signal
+        sig = str(r.get("rl_signal") or "")
+        if "AWAY" in sig:
+            bet_label = f"{r.get('away_team','')} +1.5"
+        elif "HOME" in sig:
+            bet_label = f"{r.get('home_team','')} -1.5"
+        else:
+            bet_label = r.get("game", "")
     c          = int(model_prob * 100)
     e          = edge_raw * 100   # already edge vs implied
 
