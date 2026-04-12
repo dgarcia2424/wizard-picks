@@ -68,16 +68,11 @@ st.markdown("""
                    padding:4px 12px; border-radius:99px; letter-spacing:.08em;
                    white-space:nowrap; margin-top:4px; display:inline-block; }
 
-/* Confidence bar */
-.conf-wrap  { margin:12px 0; }
-.conf-label { font-size:.75rem; color:#6b7280; text-transform:uppercase;
-              letter-spacing:.08em; margin-bottom:4px; }
-.conf-row   { display:flex; align-items:center; gap:10px; }
-.conf-bar   { flex:1; height:8px; background:#1f2937; border-radius:99px; overflow:hidden; }
-.conf-fill-strong { height:100%; background:#22c55e; border-radius:99px; }
-.conf-fill-lean   { height:100%; background:#eab308; border-radius:99px; }
-.conf-pct   { font-size:1.2rem; font-weight:700; color:#f9fafb; min-width:44px; text-align:right; }
-.conf-detail { font-size:.82rem; color:#6b7280; margin-top:4px; }
+/* Confidence section */
+.conf-wrap   { margin:12px 0; }
+.conf-detail { font-size:.9rem; color:#d1d5db; font-weight:500;
+               background:rgba(255,255,255,.06); border-radius:6px;
+               padding:7px 12px; display:inline-block; }
 
 /* Score prediction */
 .score-section { background:rgba(255,255,255,.04); border-radius:8px;
