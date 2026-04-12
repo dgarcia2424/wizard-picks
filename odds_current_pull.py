@@ -147,6 +147,10 @@ def _empty_odds_dict(game_date: str, home_team: str, away_team: str) -> dict:
         "runline_home_odds": None,
         "public_pct_home": None,
         "public_pct_over": None,
+        "alt_rl_home_25_odds": None,
+        "alt_rl_away_25_odds": None,
+        "alt_rl_home_ml_odds": None,
+        "alt_rl_away_ml_odds": None,
         "source": None,
         "pull_timestamp": datetime.utcnow(),
     }
@@ -238,7 +242,7 @@ def fetch_odds_api(target_date: str) -> Optional[list[dict]]:
     params = {
         "apiKey": ODDS_API_KEY,
         "regions": "us",
-        "markets": "h2h,totals,spreads",
+        "markets": "h2h,totals,spreads,alternate_spreads",
         "bookmakers": ",".join(ODDS_API_BOOKS),
         "oddsFormat": "american",
         "dateFormat": "iso",
@@ -338,6 +342,24 @@ def _parse_odds_api_game(game: dict) -> dict:
                     result["runline_home"] = float(out["point"]) if "point" in out else -1.5
                     result["runline_home_odds"] = int(out["price"]) if "price" in out else None
                     break
+
+        elif key == "alternate_spreads":
+            # Extract -2.5 (home) and +2.5 (away) lines specifically
+            for out in outcomes:
+                name  = normalize_team(out.get("name", ""))
+                point = out.get("point")
+                price = out.get("price")
+                if point is None or price is None:
+                    continue
+                pt = float(point)
+                if name == home_team and abs(pt - (-2.5)) < 0.01:
+                    result["alt_rl_home_25_odds"] = int(price)
+                elif name == away_team and abs(pt - 2.5) < 0.01:
+                    result["alt_rl_away_25_odds"] = int(price)
+                elif name == home_team and abs(pt - (-0.5)) < 0.01:
+                    result["alt_rl_home_ml_odds"] = int(price)   # near-ML line
+                elif name == away_team and abs(pt - 0.5) < 0.01:
+                    result["alt_rl_away_ml_odds"] = int(price)
 
     return result
 

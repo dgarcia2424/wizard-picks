@@ -142,9 +142,11 @@ def load_card(date_str: str) -> list[dict]:
             r = row.get("data", {}) or {}
             for col in ["game","home_team","away_team","rl_signal","total_signal",
                         "blended_rl","mc_rl","xgb_rl","mc_total","blended_total",
-                        "vegas_total","vegas_ml_home","home_sp","away_sp",
+                        "vegas_total","vegas_ml_home","vegas_ml_away","home_sp","away_sp",
                         "home_sp_xwoba","away_sp_xwoba","home_sp_flag","away_sp_flag",
-                        "temp_f","lineup_confirmed"]:
+                        "temp_f","lineup_confirmed",
+                        "best_line","best_tier","best_model_prob","best_market_odds","best_edge",
+                        "mc_home_win","mc_home_cvr25","mc_away_cvr25"]:
                 if col not in r:
                     r[col] = row.get(col)
             rows.append(r)
@@ -183,20 +185,18 @@ def load_tracker() -> pd.DataFrame:
 
 # ── Card helpers ──────────────────────────────────────────────────────────────
 
-def _edge_pct(blended_rl: float, signal: str) -> float:
-    breakeven = 100 / 210
-    return ((1 - blended_rl if "AWAY" in signal else blended_rl) - breakeven) * 100
-
-def _conf_pct(blended_rl: float, signal: str) -> int:
-    return int((1 - blended_rl if "AWAY" in signal else blended_rl) * 100)
-
 def _why(r: dict) -> str:
+    """Plain-English reason for the bet, adapts to whatever line was chosen."""
     parts = []
     home_x = float(r.get("home_sp_xwoba") or 0)
     away_x = float(r.get("away_sp_xwoba") or 0)
-    signal = r.get("rl_signal", "")
-    sp_name, sp_x    = (r.get("away_sp","").title(), away_x) if "AWAY" in signal else (r.get("home_sp","").title(), home_x)
-    opp_name, opp_x  = (r.get("home_sp","").title(), home_x) if "AWAY" in signal else (r.get("away_sp","").title(), away_x)
+    best_line = r.get("best_line", r.get("rl_signal", ""))
+    is_home_bet = "home" in best_line.lower() or ("ML" in best_line and home_x < away_x)
+
+    sp_name  = r.get("home_sp","").title() if is_home_bet else r.get("away_sp","").title()
+    sp_x     = home_x if is_home_bet else away_x
+    opp_name = r.get("away_sp","").title() if is_home_bet else r.get("home_sp","").title()
+    opp_x    = away_x if is_home_bet else home_x
 
     if sp_x and sp_x < 0.280:
         parts.append(f"{sp_name} is elite (xwOBA {sp_x:.3f})")
@@ -206,26 +206,66 @@ def _why(r: dict) -> str:
         parts.append(f"{opp_name} is struggling (xwOBA {opp_x:.3f})")
     elif opp_x and opp_x > 0.330:
         parts.append(f"{opp_name} is below average (xwOBA {opp_x:.3f})")
-    if "AWAY" in signal and r.get("home_sp_flag") == "VOLATILE":
+
+    # Velocity flags
+    if not is_home_bet and r.get("home_sp_flag") == "VOLATILE":
         parts.append(f"{r.get('home_sp','').title()} velocity declining")
-    if "HOME" in signal and r.get("away_sp_flag") == "VOLATILE":
+    if is_home_bet and r.get("away_sp_flag") == "VOLATILE":
         parts.append(f"{r.get('away_sp','').title()} velocity declining")
-    if "AWAY" in signal and r.get("away_sp_flag") == "GAINER":
+    if not is_home_bet and r.get("away_sp_flag") == "GAINER":
         parts.append(f"{r.get('away_sp','').title()} velo trending up")
+
     temp = r.get("temp_f") or 72
     if float(temp) > 82:
         parts.append(f"hot weather ({float(temp):.0f}°F)")
     elif float(temp) < 48:
         parts.append(f"cold weather ({float(temp):.0f}°F, suppresses scoring)")
+
+    # Line-specific reason
+    line = best_line.lower()
+    if "-2.5" in line:
+        parts.append("dominant SP matchup — expect comfortable margin")
+    elif "ml" in line:
+        parts.append("outright win probability misvalued by market")
+
     return " · ".join(parts) if parts else "Model edge on run differential"
 
 
-def render_card(r: dict, n: int, units: int, tier: str):
-    signal   = r.get("rl_signal", "")
+def _format_bet_label(r: dict) -> str:
+    """Convert best_line to human-readable bet string, e.g. 'NYY -1.5 (-115)'."""
     away, home = r.get("away_team",""), r.get("home_team","")
-    bet_line = f"{away} +1.5" if "AWAY" in signal else f"{home} -1.5"
-    c        = _conf_pct(float(r.get("blended_rl", 0.5)), signal)
-    e        = _edge_pct(float(r.get("blended_rl", 0.5)), signal)
+    line  = r.get("best_line", "")
+    odds  = r.get("best_market_odds")
+    odds_str = f" ({int(odds):+d})" if odds is not None else ""
+
+    if not line:
+        return ""
+
+    line_l = line.lower()
+    if "-2.5" in line_l and "home" in line_l:
+        return f"{home} -2.5{odds_str}"
+    elif "+2.5" in line_l and "away" in line_l:
+        return f"{away} +2.5{odds_str}"
+    elif "-1.5" in line_l and "home" in line_l:
+        return f"{home} -1.5{odds_str}"
+    elif "+1.5" in line_l and "away" in line_l:
+        return f"{away} +1.5{odds_str}"
+    elif "ml" in line_l and "home" in line_l:
+        return f"{home} ML{odds_str}"
+    elif "ml" in line_l and "away" in line_l:
+        return f"{away} ML{odds_str}"
+    return f"{line}{odds_str}"
+
+
+def render_card(r: dict, n: int, units: int, tier: str):
+    away, home = r.get("away_team",""), r.get("home_team","")
+
+    bet_label = _format_bet_label(r)
+    model_prob = float(r.get("best_model_prob") or r.get("blended_rl") or 0.5)
+    edge_raw   = float(r.get("best_edge") or 0.0)
+    c          = int(model_prob * 100)
+    e          = edge_raw * 100   # already edge vs implied
+
     has_v    = r.get("vegas_ml_home") is not None
     ou_str   = f"O/U {r['vegas_total']}" if has_v and r.get("vegas_total") else ""
     conf_str = "" if r.get("lineup_confirmed") else \
@@ -236,27 +276,38 @@ def render_card(r: dict, n: int, units: int, tier: str):
     tag       = ('<span class="bet-tag-strong">STRONG · 2 units</span>' if tier == "strong"
                  else '<span class="bet-tag-lean">LEAN · 1 unit</span>')
 
-    total_html = (f'<div class="bet-also">Also play: {r["total_signal"]}</div>'
+    total_html = (f'<div class="bet-also">Also consider: {r["total_signal"]}</div>'
                   if r.get("total_signal") else "")
 
     hf = f" <b>[{r['home_sp_flag']}]</b>" if r.get("home_sp_flag") not in ("NORMAL","UNKNOWN","","None",None) else ""
     af = f" <b>[{r['away_sp_flag']}]</b>" if r.get("away_sp_flag") not in ("NORMAL","UNKNOWN","","None",None) else ""
     xgb_str = f"{float(r['xgb_rl']):.0%}" if r.get("xgb_rl") else "N/A"
-    bl = float(r.get("blended_rl", 0.5))
-    mc = float(r.get("mc_rl", 0.5))
+    bl  = float(r.get("blended_rl", 0.5))
+    mc  = float(r.get("mc_rl", 0.5))
+    mw  = float(r.get("mc_home_win") or 0.5)
+
+    # Show alt line probabilities if relevant
+    mc25h = r.get("mc_home_cvr25")
+    mc25a = r.get("mc_away_cvr25")
+    alt_str = ""
+    if mc25h:
+        alt_str += f"&nbsp;·&nbsp; -2.5 cover: {float(mc25h):.0%}"
+    if mc25a:
+        alt_str += f"&nbsp;·&nbsp; +2.5 cover: {float(mc25a):.0%}"
 
     st.markdown(f"""
 <div class="{card_cls}">
-  <div class="{act_cls}">[{n}] {bet_line} {tag}</div>
+  <div class="{act_cls}">[{n}] BET: {bet_label} {tag}</div>
   <div class="bet-meta">{away} @ {home} &nbsp;·&nbsp; {ou_str} &nbsp;·&nbsp; {float(r.get('temp_f',72)):.0f}°F{conf_str}</div>
   <div class="bet-why">Why: {_why(r)}</div>
   {total_html}
   <div class="bet-stats">
-    Confidence: {c}% &nbsp;|&nbsp; Edge vs breakeven: {e:+.1f}%<br>
+    Model prob: {c}% &nbsp;|&nbsp; Edge vs market: {e:+.1f}%<br>
+    Win%: {mw:.0%} &nbsp;·&nbsp; RL cover (-1.5): {bl:.0%}{alt_str}<br>
     {home} SP: {r.get('home_sp','').title()}{hf} &nbsp;xwOBA {float(r.get('home_sp_xwoba') or 0):.3f}
     &nbsp;&nbsp;|&nbsp;&nbsp;
     {away} SP: {r.get('away_sp','').title()}{af} &nbsp;xwOBA {float(r.get('away_sp_xwoba') or 0):.3f}<br>
-    <span style="color:#4b5563">MC: {mc:.0%} &nbsp;·&nbsp; XGB: {xgb_str} &nbsp;·&nbsp; Blend: {bl:.0%}</span>
+    <span style="color:#4b5563">MC RL: {mc:.0%} &nbsp;·&nbsp; XGB: {xgb_str} &nbsp;·&nbsp; Blend: {bl:.0%}</span>
   </div>
 </div>""", unsafe_allow_html=True)
 
@@ -286,14 +337,17 @@ if not results:
     st.stop()
 
 def _sort(r):
-    sig  = r.get("rl_signal", "")
-    tier = 0 if "**" in sig else (1 if "*" in sig else 2)
-    return (tier, -abs(float(r.get("blended_rl", 0.5)) - 0.5))
+    tier_str = r.get("best_tier") or r.get("rl_signal", "")
+    tier = 0 if "**" in tier_str else (1 if "*" in tier_str else 2)
+    edge = float(r.get("best_edge") or abs(float(r.get("blended_rl", 0.5)) - 0.5))
+    return (tier, -edge)
 
 results = sorted(results, key=_sort)
-strong  = [r for r in results if "**" in r.get("rl_signal","")]
-lean    = [r for r in results if "*"  in r.get("rl_signal","") and "**" not in r.get("rl_signal","")]
-skip    = [r for r in results if not r.get("rl_signal","")]
+strong  = [r for r in results if r.get("best_tier") == "**"
+           or ("**" in r.get("rl_signal","") and not r.get("best_tier"))]
+lean    = [r for r in results if r.get("best_tier") == "*"
+           or ("*" in r.get("rl_signal","") and "**" not in r.get("rl_signal","") and not r.get("best_tier"))]
+skip    = [r for r in results if not r.get("best_tier") and not r.get("rl_signal","")]
 
 # ── Summary bar ───────────────────────────────────────────────────────────────
 c1, c2, c3, c4 = st.columns(4)

@@ -454,7 +454,14 @@ def predict_game(
 
     margin     = home_runs - away_runs
     mc_home_win     = (margin > 0).mean()
-    mc_covers_rl    = (margin >= 2).mean()
+    mc_covers_rl    = (margin >= 2).mean()   # home covers -1.5 (wins by 2+)
+    mc_home_cvr_25  = (margin >= 3).mean()   # home covers -2.5 (wins by 3+)
+    mc_away_cvr_25  = (margin <= -3).mean()  # away covers +2.5 (loses by 3+... wait no)
+    # away +2.5 means away wins or loses by <=2, so home wins by <=2 → margin <= 2
+    # more precisely: away +2.5 covers when home_margin < 2.5, i.e. margin <= 2
+    mc_away_cvr_rl  = (margin <= 0).mean()   # away moneyline (away wins outright, includes ties→extra innings)
+    mc_away_25      = (margin <= 2).mean()   # away +2.5 covers (home wins by 2 or fewer, or away wins)
+
     mc_total        = (home_runs + away_runs).mean()
     mc_total_median = float(np.median(home_runs + away_runs))
 
@@ -473,8 +480,14 @@ def predict_game(
         "away_sp_age_bucket":  str(away_prof.get("age_bucket", "unknown")),
         "park_elevation_ft":   elev,
         "temp_f":              temp_f,
-        "mc_home_win_prob":    round(mc_home_win, 4),
-        "mc_home_covers_rl":   round(mc_covers_rl, 4),
+        # Moneyline probabilities
+        "mc_home_win_prob":    round(float(mc_home_win), 4),
+        "mc_away_win_prob":    round(float(mc_away_cvr_rl), 4),
+        # Run line cover probabilities
+        "mc_home_covers_rl":   round(float(mc_covers_rl), 4),   # home -1.5
+        "mc_home_covers_25":   round(float(mc_home_cvr_25), 4), # home -2.5
+        "mc_away_covers_25":   round(float(mc_away_25), 4),     # away +2.5
+        # Totals
         "mc_expected_total":   round(mc_total, 2),
         "mc_total_median":     mc_total_median,
         "n_sims":              N_SIMS,

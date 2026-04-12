@@ -118,10 +118,101 @@ def load_weather(date_str: str) -> pd.DataFrame:
 
 
 def ml_to_prob(ml):
-    if pd.isna(ml):
+    if pd.isna(ml) or ml is None:
         return np.nan
     ml = float(ml)
     return 100 / (ml + 100) if ml > 0 else abs(ml) / (abs(ml) + 100)
+
+
+def _edge_vs_line(model_prob: float, market_odds: float) -> float:
+    """Edge = model probability minus implied probability from market odds."""
+    implied = ml_to_prob(market_odds)
+    if np.isnan(implied):
+        return np.nan
+    return model_prob - implied
+
+
+def _best_bet(
+    mc_home_win: float,
+    mc_home_covers_rl: float,
+    mc_home_covers_25: float,
+    mc_away_covers_25: float,
+    blended_rl: float,
+    vegas_ml_home,
+    vegas_ml_away,
+    rl_home_odds,
+    alt_home_25_odds,
+    alt_away_25_odds,
+) -> dict:
+    """
+    Evaluate edge across all available lines and return the best bet.
+
+    Lines evaluated (home-perspective):
+      ML home   : model=mc_home_win     vs vegas_ml_home
+      ML away   : model=(1-mc_home_win) vs vegas_ml_away
+      RL -1.5 H : model=blended_rl      vs rl_home_odds (market spread: -1.5 H)
+      RL +1.5 A : model=(1-blended_rl)  vs implied from rl_home_odds (flipped)
+      RL -2.5 H : model=mc_home_covers_25 vs alt_home_25_odds
+      RL +2.5 A : model=mc_away_covers_25  vs alt_away_25_odds
+
+    Returns dict with keys: line, side, model_prob, market_odds, edge, tier
+    tier: ** = strong (edge >= 0.08), * = lean (edge >= 0.04), "" = skip
+    """
+    candidates = []
+
+    def add(line, model_prob, market_odds):
+        if market_odds is None or pd.isna(market_odds):
+            return
+        edge = _edge_vs_line(model_prob, float(market_odds))
+        if not np.isnan(edge):
+            candidates.append({
+                "line":         line,
+                "model_prob":   round(model_prob, 3),
+                "market_odds":  int(market_odds),
+                "edge":         round(edge, 4),
+            })
+
+    # Moneyline candidates
+    add(f"ML (home)",  mc_home_win,       vegas_ml_home)
+    add(f"ML (away)",  1 - mc_home_win,   vegas_ml_away)
+
+    # Run line candidates — standard (-1.5)
+    add("RL -1.5 (home)", blended_rl,       rl_home_odds)
+    # Away +1.5: need away RL odds — estimate from home RL odds if not available
+    # At -1.5 the away is +1.5; if home RL is e.g. -130, away +1.5 is roughly +110
+    if rl_home_odds is not None and not pd.isna(rl_home_odds):
+        # Simple approximation: flip + 20 cents juice
+        ho = float(rl_home_odds)
+        away_rl_est = int(round((-ho + 20) if ho < 0 else (-ho - 20)))
+        add("RL +1.5 (away)", 1 - blended_rl, away_rl_est)
+
+    # Alternate run line candidates
+    add("RL -2.5 (home)", mc_home_covers_25, alt_home_25_odds)
+    add("RL +2.5 (away)", mc_away_covers_25, alt_away_25_odds)
+
+    if not candidates:
+        return {"line": "", "model_prob": blended_rl, "market_odds": None,
+                "edge": 0.0, "tier": ""}
+
+    # Pick highest edge candidate
+    best = max(candidates, key=lambda c: c["edge"])
+
+    if best["edge"] >= 0.08:
+        tier = "**"
+    elif best["edge"] >= 0.04:
+        tier = "*"
+    else:
+        tier = ""
+
+    best["tier"] = tier
+
+    # Build a clean signal string like "HOME -1.5 **" or "ML (away) *"
+    if tier:
+        best["signal"] = f"{best['line']} {tier}"
+    else:
+        best["signal"] = ""
+
+    return best
 
 
 # ---------------------------------------------------------------------------
@@ -143,10 +234,14 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
 
     # Merge odds and weather onto lineups
     if not odds.empty:
-        odds_merge = odds[["home_team", "away_team", "close_ml_home",
-                            "close_ml_away", "close_total",
-                            "runline_home_odds"]].drop_duplicates(
-            subset=["home_team", "away_team"])
+        odds_cols = ["home_team", "away_team", "close_ml_home",
+                     "close_ml_away", "close_total", "runline_home_odds"]
+        # Include alternate line odds if present in the odds file
+        for alt_col in ["alt_rl_home_25_odds", "alt_rl_away_25_odds",
+                        "alt_rl_home_ml_odds", "alt_rl_away_ml_odds"]:
+            if alt_col in odds.columns:
+                odds_cols.append(alt_col)
+        odds_merge = odds[odds_cols].drop_duplicates(subset=["home_team", "away_team"])
         lineups = lineups.merge(odds_merge, on=["home_team", "away_team"],
                                 how="left")
 
@@ -207,17 +302,38 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
         xgb_rl      = res.get("xgb_home_covers_rl", np.nan)
         mc_rl       = res["mc_home_covers_rl"]
 
-        # Bet signal — tiered
+        # Gather alternate line odds (only present if odds file has them)
+        vegas_ml_away    = game.get("close_ml_away")
+        alt_home_25_odds = game.get("alt_rl_home_25_odds")
+        alt_away_25_odds = game.get("alt_rl_away_25_odds")
+
+        # Best-bet selection across all available lines
+        best = _best_bet(
+            mc_home_win      = res.get("mc_home_win_prob", 0.5),
+            mc_home_covers_rl= blended_rl,
+            mc_home_covers_25= res.get("mc_home_covers_25", 0.0),
+            mc_away_covers_25= res.get("mc_away_covers_25", 0.0),
+            blended_rl       = blended_rl,
+            vegas_ml_home    = vegas_ml,
+            vegas_ml_away    = vegas_ml_away,
+            rl_home_odds     = rl_odds,
+            alt_home_25_odds = alt_home_25_odds,
+            alt_away_25_odds = alt_away_25_odds,
+        )
+
+        signal = best.get("signal", "")
+
+        # Also keep the legacy rl_signal for backwards compat (backtest etc.)
         if blended_rl >= BET_THRESHOLD_HIGH:
-            signal = "HOME -1.5 **"
+            rl_signal_legacy = "HOME -1.5 **"
         elif blended_rl >= BET_THRESHOLD_HIGH_LEAN:
-            signal = "HOME -1.5 *"
+            rl_signal_legacy = "HOME -1.5 *"
         elif blended_rl <= BET_THRESHOLD_LOW:
-            signal = "AWAY +1.5 **"
+            rl_signal_legacy = "AWAY +1.5 **"
         elif blended_rl <= BET_THRESHOLD_LOW_LEAN:
-            signal = "AWAY +1.5 *"
+            rl_signal_legacy = "AWAY +1.5 *"
         else:
-            signal = ""
+            rl_signal_legacy = ""
 
         # Total signal
         total_signal = ""
@@ -240,13 +356,26 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
             "mc_rl":          round(mc_rl, 3),
             "xgb_rl":         round(xgb_rl, 3) if not pd.isna(xgb_rl) else None,
             "blended_rl":     round(blended_rl, 3),
+            "mc_home_win":    round(res.get("mc_home_win_prob", 0.5), 3),
+            "mc_home_cvr25":  round(res.get("mc_home_covers_25", 0.0), 3),
+            "mc_away_cvr25":  round(res.get("mc_away_covers_25", 0.0), 3),
             "mc_total":       round(res["mc_expected_total"], 2),
             "blended_total":  round(blended_tot, 2) if blended_tot else None,
             "vegas_ml_home":  vegas_ml,
+            "vegas_ml_away":  vegas_ml_away,
             "vegas_total":    vegas_tot,
             "rl_odds":        rl_odds,
+            "alt_home_25_odds": alt_home_25_odds,
+            "alt_away_25_odds": alt_away_25_odds,
             "vegas_implied":  round(ml_to_prob(vegas_ml), 3) if not pd.isna(vegas_ml) else None,
-            "rl_signal":      signal,
+            # Best bet recommendation
+            "best_line":      best.get("line", ""),
+            "best_model_prob":best.get("model_prob", blended_rl),
+            "best_market_odds":best.get("market_odds"),
+            "best_edge":      best.get("edge", 0.0),
+            "best_tier":      best.get("tier", ""),
+            # Legacy fields (used by backtest)
+            "rl_signal":      rl_signal_legacy,
             "total_signal":   total_signal,
             "lineup_confirmed": bool(game.get("home_lineup_confirmed", False)
                                      and game.get("away_lineup_confirmed", False)),
