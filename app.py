@@ -1130,89 +1130,608 @@ with tab_history:
 # TAB 4 — 2026 PERFORMANCE
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_performance:
-    mh2 = load_model_history()
+    import plotly.graph_objects as go
+    import plotly.express as px
 
-    if mh2.empty:
-        st.info("2026 performance data will appear here once backtest_mc_2026.py has been run.")
+    # Load data — wizard_backtest has scores/totals; wizard_model_history has F1/F5/K
+    _bt   = load_backtest()
+    _mhst = load_model_history()
+
+    _has_bt   = not _bt.empty
+    _has_mh   = not _mhst.empty
+
+    if not _has_bt and not _has_mh:
+        st.info("2026 performance data will appear here once the backtest has been run.")
     else:
-        mh2["date"] = pd.to_datetime(mh2["date"], errors="coerce")
-        mh2 = mh2.dropna(subset=["date"])
+        # ── Pre-process wizard_backtest ────────────────────────────────────────
+        if _has_bt:
+            _bt = _bt.copy()
+            _bt["date"] = pd.to_datetime(_bt["date"], errors="coerce")
+            for _c in ["bet_win","home_covers_rl","home_score","away_score",
+                       "model_total","actual_total","blended_rl"]:
+                if _c in _bt.columns:
+                    _bt[_c] = pd.to_numeric(_bt[_c], errors="coerce")
+            _bt_bets = _bt[_bt["signal"].notna() & (_bt["signal"] != "") & _bt["bet_win"].notna()].copy()
+            _bt_bets = _bt_bets.sort_values("date").reset_index(drop=True)
 
-        st.markdown("### 2026 Season Model Performance")
-        st.caption("All completed games where the model generated predictions")
+        # ── Pre-process wizard_model_history ──────────────────────────────────
+        if _has_mh:
+            _mhst = _mhst.copy()
+            _date_col = "date" if "date" in _mhst.columns else "game_date"
+            _mhst["date"] = pd.to_datetime(_mhst[_date_col], errors="coerce")
+            for _c in ["f1_nrfi_actual","f5_total_actual","home_sp_k_actual","away_sp_k_actual",
+                       "mc_nrfi_prob","mc_f5_total","home_covers_rl","bet_win","blended_rl"]:
+                if _c in _mhst.columns:
+                    _mhst[_c] = pd.to_numeric(_mhst[_c], errors="coerce")
 
-        # RL Performance over time
-        if "bet_win" in mh2.columns and "signal" in mh2.columns:
-            bet_df = mh2[mh2["signal"].notna() & (mh2["signal"] != "") & mh2["bet_win"].notna()].copy()
-            if not bet_df.empty:
-                bet_df = bet_df.sort_values("date")
-                bet_df["cum_wins"]  = bet_df["bet_win"].cumsum()
-                bet_df["cum_bets"]  = range(1, len(bet_df) + 1)
-                bet_df["cum_wr"]    = bet_df["cum_wins"] / bet_df["cum_bets"]
-                bet_df["cum_roi"]   = (bet_df["cum_wins"] * (100/110) - (bet_df["cum_bets"] - bet_df["cum_wins"])) / bet_df["cum_bets"] * 100
+        # ── Plotly helper ──────────────────────────────────────────────────────
+        _DARK_BG  = "rgba(0,0,0,0)"
+        _GREEN    = "#22c55e"
+        _RED      = "#ef4444"
+        _BLUE     = "#3b82f6"
+        _AMBER    = "#f59e0b"
+        _GRAY     = "#6b7280"
 
-                st.subheader("Run Line Performance")
-                m1, m2, m3, m4 = st.columns(4)
-                wins   = int(bet_df["bet_win"].sum())
-                losses = len(bet_df) - wins
-                roi    = (wins * (100/110) - losses) / len(bet_df) * 100
-                m1.metric("Record", f"{wins}–{losses}")
-                m2.metric("Win Rate", f"{wins/len(bet_df):.1%}")
-                m3.metric("ROI", f"{roi:+.1f}%")
-                m4.metric("Total Bets", len(bet_df))
+        def _pl_layout(fig, title="", height=280):
+            fig.update_layout(
+                title=title,
+                height=height,
+                paper_bgcolor=_DARK_BG,
+                plot_bgcolor=_DARK_BG,
+                font=dict(color="#e5e7eb", size=12),
+                xaxis=dict(gridcolor="#374151", showgrid=True, zeroline=False),
+                yaxis=dict(gridcolor="#374151", showgrid=True, zeroline=True,
+                           zerolinecolor="#6b7280"),
+                margin=dict(l=40, r=20, t=40 if title else 20, b=40),
+                showlegend=False,
+            )
+            return fig
 
-                # Show cumulative win rate chart
-                try:
-                    import altair as alt
-                    chart_df = bet_df[["date","cum_wr","cum_roi"]].copy()
-                    chart_df["date_str"] = chart_df["date"].dt.strftime("%m/%d")
-                    line = alt.Chart(chart_df).mark_line(color="#22c55e").encode(
-                        x=alt.X("date_str:N", title="Date"),
-                        y=alt.Y("cum_wr:Q", title="Cumulative Win Rate",
-                                scale=alt.Scale(domain=[0.3, 0.8]))
-                    ).properties(height=200)
-                    st.altair_chart(line, use_container_width=True)
-                except Exception:
-                    st.dataframe(bet_df[["date","signal","bet_win","cum_wr"]].tail(20),
+        # ══════════════════════════════════════════════════════════════════════
+        # HEADER — overall summary
+        # ══════════════════════════════════════════════════════════════════════
+        st.markdown("## 📊 2026 Season Performance Dashboard")
+        st.caption("All completed games · Updated nightly")
+
+        if _has_bt and not _bt_bets.empty:
+            _w  = int(_bt_bets["bet_win"].sum())
+            _l  = len(_bt_bets) - _w
+            _roi = (_w * (100/110) - _l) / len(_bt_bets) * 100
+            _h1, _h2, _h3, _h4 = st.columns(4)
+            _h1.metric("RL Record",  f"{_w}–{_l}")
+            _h2.metric("Win Rate",   f"{_w/len(_bt_bets):.1%}")
+            _h3.metric("ROI (−110)", f"{_roi:+.1f}%",
+                       delta="vs 52.4% break-even", delta_color="normal" if _roi > 0 else "inverse")
+            _h4.metric("Total Bets", len(_bt_bets))
+
+        st.divider()
+
+        # ── Sub-tabs ──────────────────────────────────────────────────────────
+        _ptabs = st.tabs([
+            "📉 Run Line",
+            "🎯 Moneyline",
+            "🔢 Totals",
+            "⚡ NRFI / F1",
+            "5️⃣  First 5",
+            "⚾ Strikeouts",
+            "🎓 Calibration",
+        ])
+
+        # ══════════════════════════════════════════════════════════════════════
+        # SUB-TAB 1 — RUN LINE
+        # ══════════════════════════════════════════════════════════════════════
+        with _ptabs[0]:
+            if not _has_bt or _bt_bets.empty:
+                st.info("No run-line bet data yet.")
+            else:
+                _rl = _bt_bets.copy()
+                _rl["unit_pl"]  = _rl["bet_win"].apply(lambda x: 100/110 if x == 1 else -1.0)
+                _rl["cum_pl"]   = _rl["unit_pl"].cumsum()
+                _rl["cum_bets"] = range(1, len(_rl) + 1)
+                _rl["cum_wr"]   = _rl["bet_win"].cumsum() / _rl["cum_bets"]
+                _rl["label"]    = _rl["date"].dt.strftime("%m/%d") + " · " + _rl.get("game", _rl.index.astype(str))
+
+                _c1, _c2, _c3, _c4 = st.columns(4)
+                _w = int(_rl["bet_win"].sum()); _l = len(_rl) - _w
+                _roi_rl = (_w * (100/110) - _l) / len(_rl) * 100
+                _c1.metric("Record", f"{_w}–{_l}")
+                _c2.metric("Win Rate", f"{_w/len(_rl):.1%}")
+                _c3.metric("ROI", f"{_roi_rl:+.1f}%")
+                _c4.metric("Total Bets", len(_rl))
+
+                # ── Cumulative P&L chart ───────────────────────────────────
+                _fig_rl = go.Figure()
+                _fig_rl.add_trace(go.Scatter(
+                    x=list(range(1, len(_rl)+1)),
+                    y=_rl["cum_pl"],
+                    mode="lines",
+                    line=dict(color=_GREEN, width=2.5),
+                    fill="tozeroy",
+                    fillcolor="rgba(34,197,94,0.12)",
+                    hovertemplate="Bet #%{x}<br>Cum P&L: %{y:.2f}u<extra></extra>",
+                    name="Cum P&L",
+                ))
+                _fig_rl.add_hline(y=0, line_color=_GRAY, line_width=1)
+                _pl_layout(_fig_rl, title="Cumulative P&L (units, −110 juice)", height=280)
+                _fig_rl.update_xaxes(title="Bet #")
+                _fig_rl.update_yaxes(title="Units")
+                st.plotly_chart(_fig_rl, use_container_width=True)
+
+                # ── By signal type ─────────────────────────────────────────
+                _sig_grp = _rl.groupby("signal").agg(
+                    Bets=("bet_win","count"),
+                    Wins=("bet_win","sum"),
+                ).reset_index()
+                _sig_grp["Win %"] = (_sig_grp["Wins"]/_sig_grp["Bets"]*100).map("{:.1f}%".format)
+                _sig_grp["ROI"]   = ((_sig_grp["Wins"]*(100/110) - (_sig_grp["Bets"]-_sig_grp["Wins"])) / _sig_grp["Bets"] * 100).map("{:+.1f}%".format)
+
+                st.markdown("**By Signal Type**")
+                _fa, _fb = st.columns([2,3])
+                _fa.dataframe(_sig_grp.rename(columns={"signal":"Signal"}),
+                              hide_index=True, use_container_width=True)
+
+                # ── Win rate over time (rolling 10) ────────────────────────
+                if len(_rl) >= 10:
+                    _rl["roll_wr"] = _rl["bet_win"].rolling(10, min_periods=5).mean()
+                    _fig_roll = go.Figure()
+                    _fig_roll.add_trace(go.Scatter(
+                        x=list(range(1, len(_rl)+1)),
+                        y=_rl["roll_wr"],
+                        mode="lines",
+                        line=dict(color=_BLUE, width=2),
+                        hovertemplate="Bet #%{x}<br>Rolling 10 WR: %{y:.1%}<extra></extra>",
+                    ))
+                    _fig_roll.add_hline(y=0.524, line_dash="dash", line_color=_AMBER,
+                                        annotation_text="Breakeven (52.4%)",
+                                        annotation_position="bottom right")
+                    _pl_layout(_fig_roll, title="Rolling 10-Bet Win Rate", height=220)
+                    _fig_roll.update_yaxes(title="Win Rate", tickformat=".0%")
+                    _fb.plotly_chart(_fig_roll, use_container_width=True)
+
+        # ══════════════════════════════════════════════════════════════════════
+        # SUB-TAB 2 — MONEYLINE
+        # ══════════════════════════════════════════════════════════════════════
+        with _ptabs[1]:
+            if not _has_bt or _bt_bets.empty or "home_score" not in _bt.columns:
+                st.info("Score data needed for moneyline tracking.")
+            else:
+                _ml = _bt_bets.copy()
+                _ml = _ml[_ml["home_score"].notna() & _ml["away_score"].notna()]
+                if _ml.empty:
+                    st.info("No completed score data yet.")
+                else:
+                    _ml["is_home_signal"] = _ml["signal"].str.startswith("HOME")
+                    _ml["home_won_ml"]    = (_ml["home_score"] > _ml["away_score"])
+                    _ml["ml_correct"]     = (_ml["is_home_signal"] == _ml["home_won_ml"])
+
+                    _ml_w = int(_ml["ml_correct"].sum())
+                    _ml_l = len(_ml) - _ml_w
+                    _ml_wr = _ml_w / len(_ml)
+
+                    _mc1, _mc2, _mc3 = st.columns(3)
+                    _mc1.metric("ML Record", f"{_ml_w}–{_ml_l}")
+                    _mc2.metric("ML Win Rate", f"{_ml_wr:.1%}",
+                                delta="vs 50% coin-flip",
+                                delta_color="normal" if _ml_wr > 0.5 else "inverse")
+                    _mc3.metric("Games", len(_ml))
+
+                    st.caption("ML derived from RL signals — when model picks HOME -1.5, did home team win outright? When AWAY +1.5, did away team win outright?")
+
+                    # ── By signal ─────────────────────────────────────────
+                    _ml_sig = _ml.groupby("signal").agg(
+                        Bets=("ml_correct","count"),
+                        ML_Wins=("ml_correct","sum"),
+                    ).reset_index()
+                    _ml_sig["ML Win %"] = (_ml_sig["ML_Wins"]/_ml_sig["Bets"]*100).map("{:.1f}%".format)
+                    st.markdown("**ML Win Rate by Signal**")
+                    st.dataframe(_ml_sig.rename(columns={"signal":"Signal"}),
                                  hide_index=True, use_container_width=True)
 
-        # NRFI Performance
-        if "mc_nrfi_prob" in mh2.columns and "f1_nrfi_actual" in mh2.columns:
-            nrfi_df = mh2[mh2["mc_nrfi_prob"].notna() & mh2["f1_nrfi_actual"].notna()].copy()
-            if len(nrfi_df) >= 5:
-                st.divider()
-                st.subheader("NRFI Prediction Accuracy")
-                nrfi_df["predicted_nrfi"] = (nrfi_df["mc_nrfi_prob"] > 0.5).astype(int)
-                nrfi_df["correct"] = (nrfi_df["predicted_nrfi"] == nrfi_df["f1_nrfi_actual"]).astype(int)
+                    # ── ML vs RL comparison bar ────────────────────────────
+                    _comp_df = pd.DataFrame({
+                        "Bet Type": ["Run Line (−1.5/+1.5)", "Moneyline (derived)"],
+                        "Win Rate": [
+                            _bt_bets["bet_win"].mean() * 100,
+                            _ml_wr * 100,
+                        ],
+                        "Color": [_GREEN, _BLUE],
+                    })
+                    _fig_ml = go.Figure(go.Bar(
+                        x=_comp_df["Bet Type"],
+                        y=_comp_df["Win Rate"],
+                        marker_color=_comp_df["Color"],
+                        text=[f"{v:.1f}%" for v in _comp_df["Win Rate"]],
+                        textposition="outside",
+                    ))
+                    _fig_ml.add_hline(y=52.4, line_dash="dash", line_color=_AMBER,
+                                      annotation_text="Breakeven")
+                    _pl_layout(_fig_ml, title="RL vs ML Win Rate Comparison", height=300)
+                    _fig_ml.update_yaxes(title="Win Rate (%)", range=[0, 90])
+                    st.plotly_chart(_fig_ml, use_container_width=True)
 
-                # Break into buckets
-                nrfi_df["prob_bucket"] = pd.cut(
-                    nrfi_df["mc_nrfi_prob"],
-                    bins=[0, 0.45, 0.55, 0.65, 0.75, 1.0],
-                    labels=["<45%", "45–55%", "55–65%", "65–75%", ">75%"]
-                )
-                nrfi_cal = nrfi_df.groupby("prob_bucket", observed=True).agg(
-                    Games=("correct", "count"),
-                    NRFI_Rate=("f1_nrfi_actual", "mean"),
-                    Accuracy=("correct", "mean"),
-                    Avg_Prob=("mc_nrfi_prob", "mean")
-                ).reset_index()
-                nrfi_cal["NRFI_Rate"] = nrfi_cal["NRFI_Rate"].map("{:.1%}".format)
-                nrfi_cal["Accuracy"]  = nrfi_cal["Accuracy"].map("{:.1%}".format)
-                nrfi_cal["Avg_Prob"]  = nrfi_cal["Avg_Prob"].map("{:.1%}".format)
-                st.dataframe(nrfi_cal, hide_index=True, use_container_width=True)
+        # ══════════════════════════════════════════════════════════════════════
+        # SUB-TAB 3 — TOTALS
+        # ══════════════════════════════════════════════════════════════════════
+        with _ptabs[2]:
+            if not _has_bt or "model_total" not in _bt.columns:
+                st.info("Model total predictions not available yet.")
+            else:
+                _tot = _bt[_bt["model_total"].notna() & _bt["actual_total"].notna()].copy()
+                if _tot.empty:
+                    st.info("No completed game totals yet.")
+                else:
+                    _tot["error"] = _tot["model_total"] - _tot["actual_total"]
+                    _mae   = float(_tot["error"].abs().mean())
+                    _bias  = float(_tot["error"].mean())
+                    _model_avg = float(_tot["model_total"].mean())
+                    _actual_avg = float(_tot["actual_total"].mean())
 
-        # K prop Performance
-        if "mc_home_sp_k_mean" in mh2.columns and "home_sp_k_actual" in mh2.columns:
-            k_df = mh2[mh2["mc_home_sp_k_mean"].notna() & mh2["home_sp_k_actual"].notna()].copy()
-            if len(k_df) >= 5:
-                st.divider()
-                st.subheader("SP Strikeout Prediction (K Props)")
-                k_err = (k_df["mc_home_sp_k_mean"] - k_df["home_sp_k_actual"]).abs().mean()
-                k_bias = (k_df["mc_home_sp_k_mean"] - k_df["home_sp_k_actual"]).mean()
-                ka, kb = st.columns(2)
-                ka.metric("K MAE", f"{k_err:.2f} strikeouts")
-                kb.metric("K Bias", f"{k_bias:+.2f} (+ = model over-predicts)")
+                    _tc1, _tc2, _tc3, _tc4 = st.columns(4)
+                    _tc1.metric("Model Avg Total", f"{_model_avg:.1f} runs")
+                    _tc2.metric("Actual Avg Total", f"{_actual_avg:.1f} runs")
+                    _tc3.metric("MAE", f"{_mae:.2f} runs")
+                    _tc4.metric("Bias", f"{_bias:+.2f}",
+                                help="Positive = model over-predicts scoring")
+
+                    # ── Scatter: model_total vs actual_total ──────────────
+                    _fig_sc = go.Figure()
+                    _fig_sc.add_trace(go.Scatter(
+                        x=_tot["model_total"],
+                        y=_tot["actual_total"],
+                        mode="markers",
+                        marker=dict(color=_BLUE, opacity=0.6, size=6),
+                        hovertemplate="Model: %{x:.1f}<br>Actual: %{y}<extra></extra>",
+                    ))
+                    # Perfect prediction line
+                    _mn = min(_tot["model_total"].min(), _tot["actual_total"].min())
+                    _mx = max(_tot["model_total"].max(), _tot["actual_total"].max())
+                    _fig_sc.add_trace(go.Scatter(
+                        x=[_mn, _mx], y=[_mn, _mx],
+                        mode="lines",
+                        line=dict(color=_AMBER, dash="dash", width=1.5),
+                        name="Perfect",
+                    ))
+                    _pl_layout(_fig_sc, title="Model Predicted Total vs Actual Total", height=300)
+                    _fig_sc.update_xaxes(title="Model Total (runs)")
+                    _fig_sc.update_yaxes(title="Actual Total (runs)")
+                    _fig_sc.update_layout(showlegend=True,
+                                          legend=dict(font=dict(color="#e5e7eb")))
+                    st.plotly_chart(_fig_sc, use_container_width=True)
+
+                    # ── Distribution of actual totals ──────────────────────
+                    _fig_hist = go.Figure()
+                    _fig_hist.add_trace(go.Histogram(
+                        x=_tot["actual_total"],
+                        nbinsx=20,
+                        marker_color=_BLUE,
+                        opacity=0.75,
+                        name="Actual",
+                    ))
+                    _fig_hist.add_vline(x=_actual_avg, line_dash="dash", line_color=_GREEN,
+                                        annotation_text=f"Avg {_actual_avg:.1f}",
+                                        annotation_position="top right")
+                    _pl_layout(_fig_hist, title="Distribution of Game Totals (Actual Runs)", height=250)
+                    _fig_hist.update_xaxes(title="Total Runs")
+                    _fig_hist.update_yaxes(title="Games")
+                    st.plotly_chart(_fig_hist, use_container_width=True)
+
+        # ══════════════════════════════════════════════════════════════════════
+        # SUB-TAB 4 — NRFI / F1
+        # ══════════════════════════════════════════════════════════════════════
+        with _ptabs[3]:
+            _f1_src = _mhst if _has_mh and "f1_nrfi_actual" in _mhst.columns else (
+                _bt if _has_bt and "home_covers_rl" in _bt.columns else None
+            )
+            # Use the source with f1_nrfi data
+            _nrfi_col = None
+            if _has_mh and "f1_nrfi_actual" in _mhst.columns:
+                _f1df = _mhst[_mhst["f1_nrfi_actual"].notna()].copy()
+                _nrfi_col = "f1_nrfi_actual"
+            else:
+                _f1df = pd.DataFrame()
+
+            if _f1df.empty:
+                st.info("First-inning NRFI data not yet available.")
+            else:
+                _nrfi_rate = float(_f1df[_nrfi_col].mean())
+                _nrfi_n    = len(_f1df)
+
+                _n1, _n2, _n3 = st.columns(3)
+                _n1.metric("NRFI Rate", f"{_nrfi_rate:.1%}", help="Games where neither team scored in inning 1")
+                _n2.metric("YRFI Rate", f"{1-_nrfi_rate:.1%}", help="Games where at least one team scored in inning 1")
+                _n3.metric("Games Tracked", _nrfi_n)
+
+                # ── NRFI rate over time ────────────────────────────────────
+                _f1df = _f1df.sort_values("date")
+                _f1df["cum_nrfi_rate"] = _f1df[_nrfi_col].cumsum() / (pd.Series(range(1, len(_f1df)+1), index=_f1df.index))
+                _fig_nrfi = go.Figure()
+                _fig_nrfi.add_trace(go.Scatter(
+                    x=_f1df["date"],
+                    y=_f1df["cum_nrfi_rate"],
+                    mode="lines",
+                    line=dict(color=_AMBER, width=2.5),
+                    fill="tozeroy",
+                    fillcolor="rgba(245,158,11,0.10)",
+                    hovertemplate="%{x|%b %d}<br>Cum NRFI Rate: %{y:.1%}<extra></extra>",
+                ))
+                _fig_nrfi.add_hline(y=0.5, line_dash="dash", line_color=_GRAY,
+                                    annotation_text="50%")
+                _pl_layout(_fig_nrfi, title="Cumulative NRFI Rate Over Season", height=250)
+                _fig_nrfi.update_yaxes(title="NRFI Rate", tickformat=".0%")
+                st.plotly_chart(_fig_nrfi, use_container_width=True)
+
+                # MC model predictions (when available)
+                if _has_mh and "mc_nrfi_prob" in _mhst.columns:
+                    _nrfi_mc = _mhst[_mhst["mc_nrfi_prob"].notna() & _mhst["f1_nrfi_actual"].notna()].copy()
+                    if len(_nrfi_mc) >= 10:
+                        _nrfi_mc["predicted"] = (_nrfi_mc["mc_nrfi_prob"] > 0.5).astype(int)
+                        _nrfi_mc["correct"]   = (_nrfi_mc["predicted"] == _nrfi_mc["f1_nrfi_actual"]).astype(int)
+                        _nrfi_mc["bucket"]    = pd.cut(
+                            _nrfi_mc["mc_nrfi_prob"],
+                            bins=[0, 0.40, 0.50, 0.60, 0.70, 1.0],
+                            labels=["<40%","40–50%","50–60%","60–70%",">70%"]
+                        )
+                        _cal = _nrfi_mc.groupby("bucket", observed=True).agg(
+                            Games=("correct","count"),
+                            Model_Prob=("mc_nrfi_prob","mean"),
+                            Actual_Rate=("f1_nrfi_actual","mean"),
+                            Accuracy=("correct","mean"),
+                        ).reset_index()
+                        st.markdown("**NRFI Model Calibration** (when MC predictions available)")
+                        _fig_nrfi_cal = go.Figure()
+                        _fig_nrfi_cal.add_trace(go.Bar(
+                            x=_cal["bucket"].astype(str),
+                            y=_cal["Actual_Rate"],
+                            marker_color=_AMBER,
+                            name="Actual NRFI Rate",
+                            text=[f"{v:.1%}" for v in _cal["Actual_Rate"]],
+                            textposition="outside",
+                        ))
+                        _fig_nrfi_cal.add_trace(go.Scatter(
+                            x=_cal["bucket"].astype(str),
+                            y=_cal["Model_Prob"],
+                            mode="lines+markers",
+                            line=dict(color=_BLUE, width=2),
+                            name="Model Probability",
+                        ))
+                        _pl_layout(_fig_nrfi_cal, title="NRFI Model Probability vs Actual Rate", height=300)
+                        _fig_nrfi_cal.update_layout(showlegend=True,
+                                                    legend=dict(font=dict(color="#e5e7eb")))
+                        st.plotly_chart(_fig_nrfi_cal, use_container_width=True)
+                    else:
+                        st.caption("🔜 NRFI model predictions will populate once MC columns are included in the backtest.")
+
+        # ══════════════════════════════════════════════════════════════════════
+        # SUB-TAB 5 — FIRST 5 INNINGS
+        # ══════════════════════════════════════════════════════════════════════
+        with _ptabs[4]:
+            _f5_available = _has_mh and "f5_total_actual" in _mhst.columns
+            if not _f5_available:
+                st.info("First-5 data not yet available.")
+            else:
+                _f5df = _mhst[_mhst["f5_total_actual"].notna()].copy()
+                if _f5df.empty:
+                    st.info("No F5 data yet.")
+                else:
+                    _f5_avg  = float(_f5df["f5_total_actual"].mean())
+                    _f5_n    = len(_f5df)
+                    _f5_over_5 = float((_f5df["f5_total_actual"] > 5).mean())
+
+                    _f51, _f52, _f53 = st.columns(3)
+                    _f51.metric("Avg F5 Total", f"{_f5_avg:.2f} runs")
+                    _f52.metric("Over 5 Rate", f"{_f5_over_5:.1%}", help="% of F5 totals > 5 runs")
+                    _f53.metric("Games Tracked", _f5_n)
+
+                    # ── F5 total distribution ──────────────────────────────
+                    _fig_f5 = go.Figure()
+                    _fig_f5.add_trace(go.Histogram(
+                        x=_f5df["f5_total_actual"],
+                        nbinsx=15,
+                        marker_color=_BLUE,
+                        opacity=0.75,
+                    ))
+                    _fig_f5.add_vline(x=_f5_avg, line_dash="dash", line_color=_GREEN,
+                                      annotation_text=f"Avg {_f5_avg:.2f}",
+                                      annotation_position="top right")
+                    _fig_f5.add_vline(x=5, line_dash="dot", line_color=_AMBER,
+                                      annotation_text="O/U 5",
+                                      annotation_position="top left")
+                    _pl_layout(_fig_f5, title="First 5 Innings — Total Runs Distribution", height=280)
+                    _fig_f5.update_xaxes(title="F5 Total Runs")
+                    _fig_f5.update_yaxes(title="Games")
+                    st.plotly_chart(_fig_f5, use_container_width=True)
+
+                    # MC F5 prediction accuracy (when available)
+                    if "mc_f5_total" in _mhst.columns:
+                        _f5_mc = _mhst[_mhst["mc_f5_total"].notna() & _mhst["f5_total_actual"].notna()].copy()
+                        if len(_f5_mc) >= 5:
+                            _f5_mae  = float((_f5_mc["mc_f5_total"] - _f5_mc["f5_total_actual"]).abs().mean())
+                            _f5_bias = float((_f5_mc["mc_f5_total"] - _f5_mc["f5_total_actual"]).mean())
+                            _fa1, _fa2 = st.columns(2)
+                            _fa1.metric("F5 Prediction MAE", f"{_f5_mae:.2f} runs")
+                            _fa2.metric("F5 Prediction Bias", f"{_f5_bias:+.2f}")
+                        else:
+                            st.caption("🔜 F5 model predictions will populate once MC F5 columns are included in the backtest.")
+
+        # ══════════════════════════════════════════════════════════════════════
+        # SUB-TAB 6 — STRIKEOUTS
+        # ══════════════════════════════════════════════════════════════════════
+        with _ptabs[5]:
+            _k_avail = _has_mh and "home_sp_k_actual" in _mhst.columns
+            if not _k_avail:
+                st.info("SP strikeout data not yet available.")
+            else:
+                _kdf = _mhst[_mhst["home_sp_k_actual"].notna() | _mhst["away_sp_k_actual"].notna()].copy()
+                # Build long format for combined K distribution
+                _k_home = _kdf[["date","home_sp","home_sp_k_actual"]].rename(
+                    columns={"home_sp":"Pitcher","home_sp_k_actual":"K"})
+                _k_home["Role"] = "Home SP"
+                _k_away = _kdf[["date","away_sp","away_sp_k_actual"]].rename(
+                    columns={"away_sp":"Pitcher","away_sp_k_actual":"K"})
+                _k_away["Role"] = "Away SP"
+                _k_long = pd.concat([_k_home, _k_away]).dropna(subset=["K"])
+
+                _k_avg_h = float(_kdf["home_sp_k_actual"].mean()) if "home_sp_k_actual" in _kdf else 0
+                _k_avg_a = float(_kdf["away_sp_k_actual"].mean()) if "away_sp_k_actual" in _kdf else 0
+                _k_avg_all = float(_k_long["K"].mean())
+
+                _k1, _k2, _k3 = st.columns(3)
+                _k1.metric("Home SP Avg K", f"{_k_avg_h:.1f}")
+                _k2.metric("Away SP Avg K", f"{_k_avg_a:.1f}")
+                _k3.metric("Overall SP Avg K", f"{_k_avg_all:.1f}")
+
+                # ── K distribution by home/away ────────────────────────────
+                _fig_k = go.Figure()
+                _fig_k.add_trace(go.Histogram(
+                    x=_kdf["home_sp_k_actual"].dropna(),
+                    nbinsx=15,
+                    name="Home SP",
+                    marker_color=_BLUE,
+                    opacity=0.65,
+                ))
+                _fig_k.add_trace(go.Histogram(
+                    x=_kdf["away_sp_k_actual"].dropna(),
+                    nbinsx=15,
+                    name="Away SP",
+                    marker_color=_GREEN,
+                    opacity=0.65,
+                ))
+                _fig_k.update_layout(barmode="overlay")
+                _pl_layout(_fig_k, title="SP Strikeout Distribution — Home vs Away", height=280)
+                _fig_k.update_xaxes(title="Strikeouts")
+                _fig_k.update_yaxes(title="Starts")
+                _fig_k.update_layout(showlegend=True, legend=dict(font=dict(color="#e5e7eb")))
+                st.plotly_chart(_fig_k, use_container_width=True)
+
+                # ── Top K performers ──────────────────────────────────────
+                _k_by_sp = _k_long.groupby("Pitcher").agg(
+                    Starts=("K","count"),
+                    Avg_K=("K","mean"),
+                    Max_K=("K","max"),
+                    Total_K=("K","sum"),
+                ).reset_index().sort_values("Avg_K", ascending=False)
+                _k_by_sp = _k_by_sp[_k_by_sp["Starts"] >= 2].head(15)
+                _k_by_sp["Avg_K"] = _k_by_sp["Avg_K"].map("{:.1f}".format)
+                st.markdown("**Top K Performers** (min 2 starts)")
+                st.dataframe(_k_by_sp, hide_index=True, use_container_width=True)
+
+                # MC K accuracy (when available)
+                if _has_mh and "mc_home_sp_k_mean" in _mhst.columns:
+                    _k_mc = _mhst[_mhst["mc_home_sp_k_mean"].notna() & _mhst["home_sp_k_actual"].notna()].copy()
+                    if len(_k_mc) >= 5:
+                        _k_mae  = float((_k_mc["mc_home_sp_k_mean"] - _k_mc["home_sp_k_actual"]).abs().mean())
+                        _k_bias = float((_k_mc["mc_home_sp_k_mean"] - _k_mc["home_sp_k_actual"]).mean())
+                        _km1, _km2 = st.columns(2)
+                        _km1.metric("K Prediction MAE", f"{_k_mae:.2f} Ks")
+                        _km2.metric("K Prediction Bias", f"{_k_bias:+.2f} Ks",
+                                    help="Positive = model over-predicts Ks")
+                    else:
+                        st.caption("🔜 K model predictions will show once MC K columns are included in the backtest.")
+
+        # ══════════════════════════════════════════════════════════════════════
+        # SUB-TAB 7 — MODEL CALIBRATION (label/train analysis)
+        # ══════════════════════════════════════════════════════════════════════
+        with _ptabs[6]:
+            st.markdown("#### Model Calibration — How well do predicted probabilities match actual outcomes?")
+            st.caption("A well-calibrated model has actual win rates that closely track predicted probabilities.")
+
+            _src = _bt if (_has_bt and "blended_rl" in _bt.columns and "home_covers_rl" in _bt.columns) else None
+            if _src is None:
+                st.info("Calibration data not yet available.")
+            else:
+                _cal_df = _src[_src["blended_rl"].notna() & _src["home_covers_rl"].notna()].copy()
+                _cal_df["home_covers_rl"] = pd.to_numeric(_cal_df["home_covers_rl"], errors="coerce")
+
+                if len(_cal_df) >= 20:
+                    _cal_df["bucket"] = pd.cut(
+                        _cal_df["blended_rl"],
+                        bins=[0, .35, .40, .45, .50, .55, .60, .65, 1.0],
+                        labels=["<35%","35–40%","40–45%","45–50%",
+                                "50–55%","55–60%","60–65%",">65%"]
+                    )
+                    _cal = _cal_df.groupby("bucket", observed=True).agg(
+                        Games=("home_covers_rl","count"),
+                        Model_Prob=("blended_rl","mean"),
+                        Actual_Cover=("home_covers_rl","mean"),
+                    ).reset_index()
+
+                    # ── Calibration chart ──────────────────────────────────
+                    _fig_cal = go.Figure()
+                    # Perfect calibration diagonal
+                    _fig_cal.add_trace(go.Scatter(
+                        x=[0, 1], y=[0, 1],
+                        mode="lines",
+                        line=dict(color=_GRAY, dash="dash", width=1.5),
+                        name="Perfect Calibration",
+                    ))
+                    _fig_cal.add_trace(go.Scatter(
+                        x=_cal["Model_Prob"],
+                        y=_cal["Actual_Cover"],
+                        mode="markers+lines",
+                        marker=dict(color=_GREEN, size=10,
+                                    line=dict(color="white", width=1.5)),
+                        line=dict(color=_GREEN, width=2),
+                        customdata=_cal[["Games","bucket"]].values,
+                        hovertemplate="Bucket: %{customdata[1]}<br>Model: %{x:.1%}<br>Actual: %{y:.1%}<br>Games: %{customdata[0]}<extra></extra>",
+                        name="Model",
+                    ))
+                    _pl_layout(_fig_cal, title="RL Probability Calibration — Blended Model", height=340)
+                    _fig_cal.update_xaxes(title="Model Predicted Probability", tickformat=".0%", range=[0.2, 0.8])
+                    _fig_cal.update_yaxes(title="Actual Home Cover Rate", tickformat=".0%", range=[0.0, 1.0])
+                    _fig_cal.update_layout(showlegend=True, legend=dict(font=dict(color="#e5e7eb")))
+                    st.plotly_chart(_fig_cal, use_container_width=True)
+
+                    # ── Calibration table ──────────────────────────────────
+                    _cal_disp = _cal.copy()
+                    _cal_disp["Model_Prob"]    = _cal_disp["Model_Prob"].map("{:.1%}".format)
+                    _cal_disp["Actual_Cover"]  = _cal_disp["Actual_Cover"].map("{:.1%}".format)
+                    _cal_disp = _cal_disp.rename(columns={
+                        "bucket":"Prob Bucket","Games":"Games",
+                        "Model_Prob":"Avg Model Prob","Actual_Cover":"Actual Cover Rate"
+                    })
+                    st.dataframe(_cal_disp, hide_index=True, use_container_width=True)
+
+                    # ── MC vs XGB comparison ───────────────────────────────
+                    if "mc_rl" in _src.columns and "xgb_rl" in _src.columns:
+                        _comp2 = _cal_df.copy()
+                        _mc_cal = _comp2.groupby("bucket", observed=True).agg(
+                            MC_Prob=("mc_rl","mean"),
+                            XGB_Prob=("xgb_rl","mean"),
+                            Actual=("home_covers_rl","mean"),
+                        ).reset_index()
+                        st.divider()
+                        st.markdown("**MC vs XGBoost — Individual Model Calibration**")
+                        _fig_comp = go.Figure()
+                        _fig_comp.add_trace(go.Scatter(
+                            x=_mc_cal["bucket"].astype(str),
+                            y=_mc_cal["Actual"],
+                            mode="lines+markers",
+                            line=dict(color=_GRAY, dash="dash"),
+                            name="Actual Cover Rate",
+                            marker=dict(color=_GRAY, size=6),
+                        ))
+                        _fig_comp.add_trace(go.Scatter(
+                            x=_mc_cal["bucket"].astype(str),
+                            y=_mc_cal["MC_Prob"],
+                            mode="lines+markers",
+                            line=dict(color=_BLUE, width=2),
+                            name="Monte Carlo",
+                            marker=dict(color=_BLUE, size=8),
+                        ))
+                        _fig_comp.add_trace(go.Scatter(
+                            x=_mc_cal["bucket"].astype(str),
+                            y=_mc_cal["XGB_Prob"],
+                            mode="lines+markers",
+                            line=dict(color=_GREEN, width=2),
+                            name="XGBoost",
+                            marker=dict(color=_GREEN, size=8),
+                        ))
+                        _pl_layout(_fig_comp, title="MC vs XGB Predicted Probability by Bucket", height=300)
+                        _fig_comp.update_yaxes(title="Probability", tickformat=".0%")
+                        _fig_comp.update_layout(showlegend=True, legend=dict(font=dict(color="#e5e7eb")))
+                        st.plotly_chart(_fig_comp, use_container_width=True)
+                else:
+                    st.info(f"Need at least 20 games for calibration analysis (have {len(_cal_df)}).")
 
 
 # ── Footer ────────────────────────────────────────────────────────────────────
