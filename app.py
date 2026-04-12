@@ -282,20 +282,37 @@ def load_backtest() -> pd.DataFrame:
 
 @st.cache_data(ttl=300)
 def load_historical_backtest() -> pd.DataFrame:
-    """Load multi-year historical backtest from wizard_backtest_historical."""
+    """Load multi-year historical backtest from wizard_backtest_historical.
+
+    Paginates in chunks of 1000 (Supabase default max) to get all rows.
+    Only rows with a signal (bet rows) are stored in the table.
+    """
     if USE_SUPABASE:
         client = _supabase()
         try:
-            resp = client.table("wizard_backtest_historical").select("*").execute()
-            return pd.DataFrame(resp.data) if resp.data else pd.DataFrame()
+            all_rows = []
+            page_size = 1000
+            offset = 0
+            while True:
+                resp = client.table("wizard_backtest_historical").select("*") \
+                    .range(offset, offset + page_size - 1).execute()
+                if not resp.data:
+                    break
+                all_rows.extend(resp.data)
+                if len(resp.data) < page_size:
+                    break
+                offset += page_size
+            return pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
         except Exception:
             return pd.DataFrame()
-    # Local fallback: concatenate all year CSVs
+    # Local fallback: concatenate all year CSVs (signal rows only)
     dfs = []
     for yr in [2023, 2024, 2025]:
         p = Path(__file__).parent / f"backtest_{yr}_results.csv"
         if p.exists():
             df = pd.read_csv(p)
+            if "signal" in df.columns and "bet_win" in df.columns:
+                df = df[df["signal"].notna() & (df["signal"] != "") & df["bet_win"].notna()]
             df["season"] = yr
             dfs.append(df)
     return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()

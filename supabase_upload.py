@@ -285,6 +285,15 @@ def upload_historical_backtest() -> int:
             logger.warning(f"  [SKIP] backtest_{year}_results.csv is empty")
             continue
 
+        # Only upload rows where a bet signal was generated (not all games)
+        # This keeps the table small (~1,100 rows/year vs 2,400) and avoids
+        # hitting Supabase's 1,000-row default page limit on reads.
+        if "signal" in df.columns and "bet_win" in df.columns:
+            df = df[df["signal"].notna() & (df["signal"] != "") & df["bet_win"].notna()]
+        if df.empty:
+            logger.warning(f"  [SKIP] {year}: no signal rows after filtering")
+            continue
+
         df["season"] = year
 
         # Float columns that may have landed as object dtype
