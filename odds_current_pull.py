@@ -451,6 +451,15 @@ def fetch_pitcher_strikeout_props(target_date: str) -> pd.DataFrame:
         try:
             resp = requests.get(url, params=params, timeout=15)
             resp.raise_for_status()
+        except requests.HTTPError as exc:
+            # 404 = props not posted yet (normal before ~2h before first pitch)
+            status = getattr(exc.response, "status_code", None)
+            if status == 404:
+                log.info("K props not yet available for %s @ %s (404 — props post ~2h before game)",
+                         away_team, home_team)
+            else:
+                log.warning("K props fetch failed for %s @ %s: %s", away_team, home_team, exc)
+            continue
         except requests.RequestException as exc:
             log.warning("K props fetch failed for %s @ %s: %s", away_team, home_team, exc)
             continue
