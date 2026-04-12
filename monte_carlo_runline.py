@@ -133,6 +133,31 @@ def load_xgb_models():
     return models.get("rl"), models.get("total"), feat_cols
 
 
+# Calibrator cache — loaded once per process
+_calibrators: dict = {}
+
+
+def load_calibrator(name: str):
+    """
+    Load an isotonic regression calibrator from models/calibrator_{name}.pkl.
+    Returns the calibrator object, or None if the file doesn't exist.
+    Results are cached so the file is only read once per process.
+    """
+    if name in _calibrators:
+        return _calibrators[name]
+    import pickle
+    path = MODELS_DIR / f"calibrator_{name}.pkl"
+    if path.exists():
+        try:
+            cal = pickle.loads(path.read_bytes())
+            _calibrators[name] = cal
+            return cal
+        except Exception:
+            pass
+    _calibrators[name] = None
+    return None
+
+
 _NAME_SUFFIXES = {"JR", "SR", "II", "III", "IV"}
 
 
@@ -737,13 +762,22 @@ def predict_game(
             home_team_stats=home_team_stats,
             away_team_stats=away_team_stats)
         if xgb_row is not None:
-            xgb_rl_prob = float(rl_model.predict_proba(xgb_row)[0, 1])
-            xgb_tot     = float(tot_model.predict(xgb_row)[0]) \
+            xgb_rl_prob_raw = float(rl_model.predict_proba(xgb_row)[0, 1])
+            xgb_tot         = float(tot_model.predict(xgb_row)[0]) \
                 if tot_model else mc_total
+
+            # Apply isotonic calibration if calibrator is available
+            cal_rl = load_calibrator("rl")
+            if cal_rl is not None:
+                xgb_rl_prob = float(cal_rl.predict([xgb_rl_prob_raw])[0])
+                result["xgb_home_covers_rl_raw"] = round(xgb_rl_prob_raw, 4)
+            else:
+                xgb_rl_prob = xgb_rl_prob_raw
+
             result["xgb_home_covers_rl"] = round(xgb_rl_prob, 4)
             result["xgb_expected_total"] = round(xgb_tot, 2)
 
-            # Blend MC + XGBoost
+            # Blend MC + (calibrated) XGBoost
             w = XGB_BLEND_WEIGHT
             blended_rl  = (1 - w) * mc_covers_rl + w * xgb_rl_prob
             blended_tot = (1 - w) * mc_total      + w * xgb_tot
