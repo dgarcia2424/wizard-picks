@@ -36,38 +36,88 @@ st.set_page_config(
 # ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-/* Login page */
-.login-wrap { max-width: 380px; margin: 80px auto; text-align: center; }
-.login-title { font-size: 2.4rem; font-weight: 800; margin-bottom: 4px; }
-.login-sub   { color: #6b7280; margin-bottom: 32px; }
+/* ─── Login ───────────────────────────────────────── */
+.login-wrap  { max-width:380px; margin:80px auto; text-align:center; }
+.login-title { font-size:2.4rem; font-weight:800; margin-bottom:4px; }
+.login-sub   { color:#6b7280; margin-bottom:32px; }
 
-/* Cards */
+/* ─── Cards ───────────────────────────────────────── */
 .bet-card-strong {
-    background: linear-gradient(135deg, #0f2f1a 0%, #1a4731 100%);
-    border: 2px solid #22c55e;
-    border-radius: 12px; padding: 20px 24px; margin-bottom: 16px;
+    background: linear-gradient(135deg,#0a2016 0%,#13362a 100%);
+    border: 2px solid #22c55e; border-radius:14px;
+    padding:22px 26px; margin-bottom:20px;
 }
 .bet-card-lean {
-    background: linear-gradient(135deg, #1c1f0a 0%, #2d3310 100%);
-    border: 2px solid #eab308;
-    border-radius: 12px; padding: 20px 24px; margin-bottom: 16px;
+    background: linear-gradient(135deg,#181600 0%,#2a2700 100%);
+    border: 2px solid #eab308; border-radius:14px;
+    padding:22px 26px; margin-bottom:20px;
 }
-.bet-action        { font-size: 1.5rem; font-weight: 800; color: #f9fafb; letter-spacing:.03em; }
-.bet-action-lean   { font-size: 1.3rem; font-weight: 700; color: #f9fafb; }
-.bet-tag-strong    { display:inline-block; background:#16a34a; color:white; font-size:.75rem;
-                     font-weight:700; padding:2px 10px; border-radius:99px; margin-left:10px;
-                     vertical-align:middle; letter-spacing:.08em; }
-.bet-tag-lean      { display:inline-block; background:#ca8a04; color:white; font-size:.75rem;
-                     font-weight:700; padding:2px 10px; border-radius:99px; margin-left:10px;
-                     vertical-align:middle; letter-spacing:.08em; }
-.bet-meta  { color:#9ca3af; font-size:.9rem; margin-top:4px; }
-.bet-why   { color:#d1fae5; font-size:.95rem; margin-top:10px; font-style:italic; }
-.bet-also  { color:#fef08a; font-size:.9rem; margin-top:6px; font-weight:600; }
-.bet-stats { color:#6b7280; font-size:.82rem; margin-top:10px;
-             border-top:1px solid #374151; padding-top:8px; }
+
+/* Card header */
+.card-head       { display:flex; align-items:flex-start; gap:14px; margin-bottom:12px; }
+.card-num        { font-size:1rem; font-weight:700; color:#6b7280;
+                   background:#1f2937; border-radius:6px; padding:2px 8px;
+                   white-space:nowrap; margin-top:4px; }
+.card-pick       { flex:1; }
+.card-pick-line  { font-size:1.6rem; font-weight:800; color:#f9fafb; line-height:1.1; }
+.card-pick-sub   { font-size:.88rem; color:#9ca3af; margin-top:2px; }
+.badge-strong    { background:#16a34a; color:#fff; font-size:.72rem; font-weight:700;
+                   padding:4px 12px; border-radius:99px; letter-spacing:.08em;
+                   white-space:nowrap; margin-top:4px; display:inline-block; }
+.badge-lean      { background:#ca8a04; color:#fff; font-size:.72rem; font-weight:700;
+                   padding:4px 12px; border-radius:99px; letter-spacing:.08em;
+                   white-space:nowrap; margin-top:4px; display:inline-block; }
+
+/* Confidence bar */
+.conf-wrap  { margin:12px 0; }
+.conf-label { font-size:.75rem; color:#6b7280; text-transform:uppercase;
+              letter-spacing:.08em; margin-bottom:4px; }
+.conf-row   { display:flex; align-items:center; gap:10px; }
+.conf-bar   { flex:1; height:8px; background:#1f2937; border-radius:99px; overflow:hidden; }
+.conf-fill-strong { height:100%; background:#22c55e; border-radius:99px; }
+.conf-fill-lean   { height:100%; background:#eab308; border-radius:99px; }
+.conf-pct   { font-size:1.2rem; font-weight:700; color:#f9fafb; min-width:44px; text-align:right; }
+.conf-detail { font-size:.82rem; color:#6b7280; margin-top:4px; }
+
+/* Score prediction */
+.score-section { background:rgba(255,255,255,.04); border-radius:8px;
+                 padding:12px 16px; margin:12px 0; }
+.score-label   { font-size:.72rem; color:#6b7280; text-transform:uppercase;
+                 letter-spacing:.08em; margin-bottom:6px; }
+.score-main    { font-size:1.25rem; font-weight:700; color:#f9fafb; }
+.score-range   { font-size:.82rem; color:#6b7280; margin-top:3px; }
+.score-total   { font-size:.85rem; color:#9ca3af; margin-top:4px; }
+
+/* Why */
+.why-section { margin:12px 0; }
+.why-label   { font-size:.72rem; color:#6b7280; text-transform:uppercase;
+               letter-spacing:.08em; margin-bottom:5px; }
+.why-item    { font-size:.92rem; color:#d1fae5; margin-bottom:3px; }
+.why-item::before { content:"▶ "; font-size:.65rem; opacity:.7; }
+
+/* Also play */
+.also-play   { background:rgba(234,179,8,.08); border:1px solid rgba(234,179,8,.25);
+               border-radius:6px; padding:8px 14px; margin:10px 0;
+               font-size:.9rem; color:#fef08a; font-weight:600; }
+
+/* Meta bar */
+.meta-bar    { font-size:.8rem; color:#4b5563; margin-top:10px;
+               border-top:1px solid #1f2937; padding-top:8px; }
+
+/* Skip games */
+.skip-card { background:#111827; border:1px solid #1f2937; border-radius:10px;
+             padding:14px 18px; margin-bottom:10px; }
 .skip-game { color:#6b7280; font-size:.88rem; }
-.section-header { font-size:1.1rem; font-weight:700; color:#9ca3af;
-                  letter-spacing:.1em; text-transform:uppercase; margin:24px 0 12px 0; }
+.skip-game strong { color:#9ca3af; }
+
+/* Section headers */
+.section-hdr { font-size:.9rem; font-weight:700; color:#6b7280;
+               letter-spacing:.12em; text-transform:uppercase;
+               margin:24px 0 10px 0; border-bottom:1px solid #1f2937;
+               padding-bottom:6px; }
+
+/* Tracker date buttons */
+div[data-testid="column"] button { font-size:.8rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -75,7 +125,6 @@ st.markdown("""
 # ── Password gate ─────────────────────────────────────────────────────────────
 import hashlib
 
-# Password stored as SHA256 hash — never plaintext in code or secrets
 _PWD_HASH = "a00efb424a310a6b1e1621c32f5914fadffd6a7df22c7333524515487e372854"
 
 def _check_pwd(entered: str) -> bool:
@@ -84,7 +133,6 @@ def _check_pwd(entered: str) -> bool:
 def check_password() -> bool:
     if st.session_state.get("authenticated"):
         return True
-
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.markdown('<div class="login-wrap">', unsafe_allow_html=True)
@@ -126,9 +174,7 @@ USE_SUPABASE = _supabase() is not None
 
 @st.cache_data(ttl=300)
 def load_card(date_str: str) -> list[dict]:
-    """Load picks — Supabase if hosted, local run_card() if local."""
     if USE_SUPABASE:
-        # Hosted mode: read from Supabase only
         client = _supabase()
         try:
             resp = client.table("wizard_daily_card").select("*").eq("game_date", date_str).execute()
@@ -136,7 +182,7 @@ def load_card(date_str: str) -> list[dict]:
             st.error(f"Supabase error: {e}")
             return []
         if not resp.data:
-            return []  # No data yet — show "pipeline hasn't run" message
+            return []
         rows = []
         for row in resp.data:
             r = row.get("data", {}) or {}
@@ -146,12 +192,13 @@ def load_card(date_str: str) -> list[dict]:
                         "home_sp_xwoba","away_sp_xwoba","home_sp_flag","away_sp_flag",
                         "temp_f","lineup_confirmed",
                         "best_line","best_tier","best_model_prob","best_market_odds","best_edge",
-                        "mc_home_win","mc_home_cvr25","mc_away_cvr25"]:
+                        "mc_home_win","mc_home_cvr25","mc_away_cvr25",
+                        "home_runs_mean","away_runs_mean",
+                        "home_runs_lo","home_runs_hi","away_runs_lo","away_runs_hi"]:
                 if col not in r:
                     r[col] = row.get(col)
             rows.append(r)
         return rows
-    # Local dev fallback
     try:
         from run_today import run_card
         return run_card(date_str)
@@ -164,8 +211,11 @@ def load_card(date_str: str) -> list[dict]:
 def load_backtest() -> pd.DataFrame:
     if USE_SUPABASE:
         client = _supabase()
-        resp = client.table("wizard_backtest").select("*").execute()
-        return pd.DataFrame(resp.data) if resp.data else pd.DataFrame()
+        try:
+            resp = client.table("wizard_backtest").select("*").execute()
+            return pd.DataFrame(resp.data) if resp.data else pd.DataFrame()
+        except Exception:
+            return pd.DataFrame()
     path = Path(__file__).parent / "backtest_2026_results.csv"
     return pd.read_csv(path) if path.exists() else pd.DataFrame()
 
@@ -185,292 +235,603 @@ def load_tracker() -> pd.DataFrame:
 
 # ── Card helpers ──────────────────────────────────────────────────────────────
 
-def _why(r: dict) -> str:
-    """Plain-English reason for the bet, adapts to whatever line was chosen."""
-    parts = []
-    home_x = float(r.get("home_sp_xwoba") or 0)
-    away_x = float(r.get("away_sp_xwoba") or 0)
-    best_line = str(r.get("best_line") or r.get("rl_signal") or "")
-    is_home_bet = "home" in best_line.lower() or ("ML" in best_line and home_x < away_x)
+def _safe_float(v, default=0.0):
+    try:
+        return float(v) if v is not None else default
+    except (TypeError, ValueError):
+        return default
 
-    sp_name  = r.get("home_sp","").title() if is_home_bet else r.get("away_sp","").title()
-    sp_x     = home_x if is_home_bet else away_x
-    opp_name = r.get("away_sp","").title() if is_home_bet else r.get("home_sp","").title()
+def _model_prob(r: dict) -> float:
+    """Return probability from the perspective of the recommended bet (always > 0.5 if there's edge)."""
+    if r.get("best_model_prob") is not None:
+        return _safe_float(r["best_model_prob"])
+    # Fallback: derive from blended_rl based on signal direction
+    bl   = _safe_float(r.get("blended_rl"), 0.5)
+    sig  = str(r.get("rl_signal") or "")
+    return (1 - bl) if "AWAY" in sig else bl
+
+def _edge_pct(r: dict) -> float:
+    """Edge in percentage points vs market implied probability."""
+    if r.get("best_edge") is not None:
+        return _safe_float(r["best_edge"]) * 100
+    # Estimate: model prob minus breakeven at -110
+    return (_model_prob(r) - 0.5238) * 100
+
+def _why_bullets(r: dict) -> list[str]:
+    home_x = _safe_float(r.get("home_sp_xwoba"))
+    away_x = _safe_float(r.get("away_sp_xwoba"))
+    best_line = str(r.get("best_line") or r.get("rl_signal") or "")
+    is_home_bet = "home" in best_line.lower() or (
+        "ML" in best_line and home_x > 0 and home_x < away_x)
+
+    fav_sp   = r.get("home_sp","").title() if is_home_bet else r.get("away_sp","").title()
+    fav_x    = home_x if is_home_bet else away_x
+    opp_sp   = r.get("away_sp","").title() if is_home_bet else r.get("home_sp","").title()
     opp_x    = away_x if is_home_bet else home_x
 
-    if sp_x and sp_x < 0.280:
-        parts.append(f"{sp_name} is elite (xwOBA {sp_x:.3f})")
-    elif sp_x and sp_x < 0.305:
-        parts.append(f"{sp_name} is strong (xwOBA {sp_x:.3f})")
+    bullets = []
+    if fav_x and fav_x < 0.280:
+        bullets.append(f"{fav_sp} is elite (xwOBA {fav_x:.3f})")
+    elif fav_x and fav_x < 0.305:
+        bullets.append(f"{fav_sp} is strong (xwOBA {fav_x:.3f})")
+    elif fav_x and fav_x < 0.320:
+        bullets.append(f"{fav_sp} is above average (xwOBA {fav_x:.3f})")
+
     if opp_x and opp_x > 0.360:
-        parts.append(f"{opp_name} is struggling (xwOBA {opp_x:.3f})")
-    elif opp_x and opp_x > 0.330:
-        parts.append(f"{opp_name} is below average (xwOBA {opp_x:.3f})")
+        bullets.append(f"{opp_sp} is struggling (xwOBA {opp_x:.3f})")
+    elif opp_x and opp_x > 0.340:
+        bullets.append(f"{opp_sp} is below average (xwOBA {opp_x:.3f})")
 
     # Velocity flags
-    if not is_home_bet and r.get("home_sp_flag") == "VOLATILE":
-        parts.append(f"{r.get('home_sp','').title()} velocity declining")
-    if is_home_bet and r.get("away_sp_flag") == "VOLATILE":
-        parts.append(f"{r.get('away_sp','').title()} velocity declining")
-    if not is_home_bet and r.get("away_sp_flag") == "GAINER":
-        parts.append(f"{r.get('away_sp','').title()} velo trending up")
+    h_flag = r.get("home_sp_flag","")
+    a_flag = r.get("away_sp_flag","")
+    if not is_home_bet and h_flag == "VOLATILE":
+        bullets.append(f"{r.get('home_sp','').title()} velocity declining")
+    if is_home_bet and a_flag == "VOLATILE":
+        bullets.append(f"{r.get('away_sp','').title()} velocity declining")
+    if not is_home_bet and a_flag == "GAINER":
+        bullets.append(f"{r.get('away_sp','').title()} velo trending up")
 
-    temp = r.get("temp_f") or 72
-    if float(temp) > 82:
-        parts.append(f"hot weather ({float(temp):.0f}°F)")
-    elif float(temp) < 48:
-        parts.append(f"cold weather ({float(temp):.0f}°F, suppresses scoring)")
+    temp = _safe_float(r.get("temp_f"), 72)
+    if temp > 82:
+        bullets.append(f"Hot weather ({temp:.0f}°F, ball carries)")
+    elif temp < 48:
+        bullets.append(f"Cold weather ({temp:.0f}°F, suppresses scoring)")
 
-    # Line-specific reason
-    line = best_line.lower()
-    if "-2.5" in line:
-        parts.append("dominant SP matchup — expect comfortable margin")
-    elif "ml" in line:
-        parts.append("outright win probability misvalued by market")
+    line_l = best_line.lower()
+    if "-2.5" in line_l:
+        bullets.append("Dominant pitching matchup — expect comfortable margin")
+    elif "ml" in line_l:
+        bullets.append("Moneyline offers better value than run line")
 
-    return " · ".join(parts) if parts else "Model edge on run differential"
+    return bullets if bullets else ["Model edge on run differential"]
 
 
-def _format_bet_label(r: dict) -> str:
-    """Convert best_line to human-readable bet string, e.g. 'NYY -1.5 (-115)'."""
+def _format_bet_label(r: dict) -> tuple[str, str]:
+    """Return (bet_label, subtitle) e.g. ('TEX +1.5', 'Texas Rangers covering 1.5 runs vs. LAD')."""
     away, home = r.get("away_team",""), r.get("home_team","")
     line  = str(r.get("best_line") or "")
     odds  = r.get("best_market_odds")
     odds_str = f" ({int(odds):+d})" if odds is not None else ""
 
-    if not line:
-        return ""
-
     line_l = line.lower()
     if "-2.5" in line_l and "home" in line_l:
-        return f"{home} -2.5{odds_str}"
+        label = f"{home} -2.5{odds_str}"
+        sub   = f"{away} @ {home}  ·  Home wins by 3+"
     elif "+2.5" in line_l and "away" in line_l:
-        return f"{away} +2.5{odds_str}"
+        label = f"{away} +2.5{odds_str}"
+        sub   = f"{away} @ {home}  ·  Away stays within 2 or wins"
     elif "-1.5" in line_l and "home" in line_l:
-        return f"{home} -1.5{odds_str}"
+        label = f"{home} -1.5{odds_str}"
+        sub   = f"{away} @ {home}  ·  Home wins by 2+"
     elif "+1.5" in line_l and "away" in line_l:
-        return f"{away} +1.5{odds_str}"
+        label = f"{away} +1.5{odds_str}"
+        sub   = f"{away} @ {home}  ·  Away stays within 1 or wins"
     elif "ml" in line_l and "home" in line_l:
-        return f"{home} ML{odds_str}"
+        label = f"{home} ML{odds_str}"
+        sub   = f"{away} @ {home}  ·  Home wins outright"
     elif "ml" in line_l and "away" in line_l:
-        return f"{away} ML{odds_str}"
-    return f"{line}{odds_str}"
-
-
-def render_card(r: dict, n: int, units: int, tier: str):
-    away, home = r.get("away_team",""), r.get("home_team","")
-
-    bet_label = _format_bet_label(r)
-    # Fall back gracefully when best_bet fields are missing (old Supabase rows)
-    model_prob = float(r.get("best_model_prob") or r.get("blended_rl") or 0.5)
-    edge_raw   = float(r.get("best_edge") or 0.0)
-    if not bet_label:
-        # Reconstruct from legacy rl_signal
-        sig = str(r.get("rl_signal") or "")
+        label = f"{away} ML{odds_str}"
+        sub   = f"{away} @ {home}  ·  Away wins outright"
+    else:
+        # Legacy fallback
+        sig = str(r.get("rl_signal",""))
         if "AWAY" in sig:
-            bet_label = f"{r.get('away_team','')} +1.5"
+            label = f"{away} +1.5"
+            sub   = f"{away} @ {home}  ·  Away stays within 1 or wins"
         elif "HOME" in sig:
-            bet_label = f"{r.get('home_team','')} -1.5"
+            label = f"{home} -1.5"
+            sub   = f"{away} @ {home}  ·  Home wins by 2+"
         else:
-            bet_label = r.get("game", "")
-    c          = int(model_prob * 100)
-    e          = edge_raw * 100   # already edge vs implied
+            label = r.get("game","")
+            sub   = ""
+    return label, sub
 
-    has_v    = r.get("vegas_ml_home") is not None
-    ou_str   = f"O/U {r['vegas_total']}" if has_v and r.get("vegas_total") else ""
-    conf_str = "" if r.get("lineup_confirmed") else \
-               " <span style='color:#6b7280;font-size:0.8rem'>(projected)</span>"
 
-    card_cls  = "bet-card-strong" if tier == "strong" else "bet-card-lean"
-    act_cls   = "bet-action"      if tier == "strong" else "bet-action-lean"
-    tag       = ('<span class="bet-tag-strong">STRONG · 2 units</span>' if tier == "strong"
-                 else '<span class="bet-tag-lean">LEAN · 1 unit</span>')
+def render_card(r: dict, n: int, tier: str):
+    away, home = r.get("away_team",""), r.get("home_team","")
+    bet_label, bet_sub = _format_bet_label(r)
+    model_prob = _model_prob(r)
+    edge       = _edge_pct(r)
+    conf_pct   = int(model_prob * 100)
 
-    total_html = (f'<div class="bet-also">Also consider: {r["total_signal"]}</div>'
-                  if r.get("total_signal") else "")
+    fill_cls  = "conf-fill-strong" if tier == "strong" else "conf-fill-lean"
+    card_cls  = "bet-card-strong"  if tier == "strong" else "bet-card-lean"
+    badge_cls = "badge-strong"     if tier == "strong" else "badge-lean"
+    badge_txt = "★★ STRONG  ·  Bet 2 units" if tier == "strong" else "★ LEAN  ·  Bet 1 unit"
 
-    hf = f" <b>[{r['home_sp_flag']}]</b>" if r.get("home_sp_flag") not in ("NORMAL","UNKNOWN","","None",None) else ""
-    af = f" <b>[{r['away_sp_flag']}]</b>" if r.get("away_sp_flag") not in ("NORMAL","UNKNOWN","","None",None) else ""
-    xgb_str = f"{float(r['xgb_rl']):.0%}" if r.get("xgb_rl") else "N/A"
-    bl  = float(r.get("blended_rl", 0.5))
-    mc  = float(r.get("mc_rl", 0.5))
-    mw  = float(r.get("mc_home_win") or 0.5)
+    # Confidence sub-line
+    market_odds = r.get("best_market_odds")
+    if market_odds is not None:
+        implied = abs(float(market_odds)) / (abs(float(market_odds)) + 100) if float(market_odds) < 0 \
+                  else 100 / (float(market_odds) + 100)
+        conf_detail = (f"Market implied: {implied:.0%}  ·  Your edge: {edge:+.1f}%")
+    else:
+        conf_detail = f"Breakeven at -110: 52.4%  ·  Model edge: {edge:+.1f}%"
 
-    # Show alt line probabilities if relevant
-    mc25h = r.get("mc_home_cvr25")
-    mc25a = r.get("mc_away_cvr25")
-    alt_str = ""
-    if mc25h:
-        alt_str += f"&nbsp;·&nbsp; -2.5 cover: {float(mc25h):.0%}"
-    if mc25a:
-        alt_str += f"&nbsp;·&nbsp; +2.5 cover: {float(mc25a):.0%}"
+    # Predicted score
+    hm = r.get("home_runs_mean")
+    am = r.get("away_runs_mean")
+    hl = r.get("home_runs_lo"); hh = r.get("home_runs_hi")
+    al = r.get("away_runs_lo"); ah = r.get("away_runs_hi")
+    if hm is not None and am is not None:
+        score_main  = f"{away} {_safe_float(am):.1f} — {home} {_safe_float(hm):.1f}"
+        score_range = ""
+        if al is not None:
+            score_range = (f"Typical range: {away} {int(al)}–{int(ah)}  |  "
+                           f"{home} {int(hl)}–{int(hh)}")
+    else:
+        score_main  = "Score prediction: re-run pipeline for latest"
+        score_range = ""
+
+    bt = r.get("blended_total") or r.get("mc_total")
+    vt = r.get("vegas_total")
+    if bt and vt:
+        diff = _safe_float(bt) - _safe_float(vt)
+        ou_dir = "OVER" if diff > 0 else "UNDER"
+        score_total = (f"Total: {_safe_float(bt):.1f} runs  "
+                       f"(Market O/U: {vt}  →  Model says {ou_dir})")
+    elif bt:
+        score_total = f"Expected total: {_safe_float(bt):.1f} runs"
+    else:
+        score_total = ""
+
+    # Why bullets
+    bullets_html = "".join(f'<div class="why-item">{b}</div>' for b in _why_bullets(r))
+
+    # Also play
+    total_sig = r.get("total_signal","")
+    also_html = (f'<div class="also-play">Also consider: {total_sig}</div>'
+                 if total_sig else "")
+
+    # Meta bar
+    lineup_str = "Confirmed lineup" if r.get("lineup_confirmed") else "Projected lineup"
+    temp_f = _safe_float(r.get("temp_f"), 72)
+    ml_str = ""
+    if r.get("vegas_ml_home") is not None:
+        ml_str = (f"ML: {home} {int(r['vegas_ml_home']):+d}"
+                  + (f" / {away} {int(r['vegas_ml_away']):+d}" if r.get("vegas_ml_away") else ""))
+
+    # SP flags
+    hf = f" [{r['home_sp_flag']}]" if r.get("home_sp_flag") not in ("NORMAL","UNKNOWN","","None",None) else ""
+    af = f" [{r['away_sp_flag']}]" if r.get("away_sp_flag") not in ("NORMAL","UNKNOWN","","None",None) else ""
+    sp_str = (f"{home} SP: {r.get('home_sp','').title()}{hf} xwOBA {_safe_float(r.get('home_sp_xwoba')):.3f}  "
+              f"|  {away} SP: {r.get('away_sp','').title()}{af} xwOBA {_safe_float(r.get('away_sp_xwoba')):.3f}")
+
+    score_range_html = f'<div class="score-range">{score_range}</div>' if score_range else ""
+    score_total_html = f'<div class="score-total">{score_total}</div>' if score_total else ""
 
     st.markdown(f"""
 <div class="{card_cls}">
-  <div class="{act_cls}">[{n}] BET: {bet_label} {tag}</div>
-  <div class="bet-meta">{away} @ {home} &nbsp;·&nbsp; {ou_str} &nbsp;·&nbsp; {float(r.get('temp_f',72)):.0f}°F{conf_str}</div>
-  <div class="bet-why">Why: {_why(r)}</div>
-  {total_html}
-  <div class="bet-stats">
-    Model prob: {c}% &nbsp;|&nbsp; Edge vs market: {e:+.1f}%<br>
-    Win%: {mw:.0%} &nbsp;·&nbsp; RL cover (-1.5): {bl:.0%}{alt_str}<br>
-    {home} SP: {r.get('home_sp','').title()}{hf} &nbsp;xwOBA {float(r.get('home_sp_xwoba') or 0):.3f}
-    &nbsp;&nbsp;|&nbsp;&nbsp;
-    {away} SP: {r.get('away_sp','').title()}{af} &nbsp;xwOBA {float(r.get('away_sp_xwoba') or 0):.3f}<br>
-    <span style="color:#4b5563">MC RL: {mc:.0%} &nbsp;·&nbsp; XGB: {xgb_str} &nbsp;·&nbsp; Blend: {bl:.0%}</span>
+
+  <div class="card-head">
+    <div class="card-num">#{n}</div>
+    <div class="card-pick">
+      <div class="card-pick-line">{bet_label}</div>
+      <div class="card-pick-sub">{bet_sub}</div>
+    </div>
+    <div><span class="{badge_cls}">{badge_txt}</span></div>
   </div>
+
+  <div class="conf-wrap">
+    <div class="conf-label">Model confidence</div>
+    <div class="conf-row">
+      <div class="conf-bar"><div class="{fill_cls}" style="width:{conf_pct}%"></div></div>
+      <div class="conf-pct">{conf_pct}%</div>
+    </div>
+    <div class="conf-detail">{conf_detail}</div>
+  </div>
+
+  <div class="score-section">
+    <div class="score-label">Predicted score</div>
+    <div class="score-main">{score_main}</div>
+    {score_range_html}
+    {score_total_html}
+  </div>
+
+  <div class="why-section">
+    <div class="why-label">Why this bet</div>
+    {bullets_html}
+  </div>
+
+  {also_html}
+
+  <div class="meta-bar">
+    {temp_f:.0f}°F &nbsp;·&nbsp; {lineup_str}
+    {'&nbsp;·&nbsp; ' + ml_str if ml_str else ''}
+    <br>{sp_str}
+  </div>
+
 </div>""", unsafe_allow_html=True)
 
 
 # ── App header ────────────────────────────────────────────────────────────────
 st.markdown("## 🧙 The Wizard — MLB Picks")
-st.caption("Daily card refreshes after 10 AM ET · Sorted by strongest edge first")
-
-col_date, col_refresh = st.columns([3, 1])
-with col_date:
-    today    = datetime.date.today()
-    selected = st.date_input("Date", value=today,
-                             min_value=datetime.date(2026, 3, 28), max_value=today)
-with col_refresh:
-    st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("Refresh"):
-        st.cache_data.clear()
-
-date_str = selected.isoformat()
-
-# ── Load & sort ───────────────────────────────────────────────────────────────
-with st.spinner("Loading picks..."):
-    results = load_card(date_str)
-
-if not results:
-    st.warning(f"No predictions for {selected.strftime('%B %d, %Y')} — pipeline may not have run yet.")
-    st.stop()
-
-def _sort(r):
-    tier_str = r.get("best_tier") or r.get("rl_signal", "")
-    tier = 0 if "**" in tier_str else (1 if "*" in tier_str else 2)
-    edge = float(r.get("best_edge") or abs(float(r.get("blended_rl", 0.5)) - 0.5))
-    return (tier, -edge)
-
-results = sorted(results, key=_sort)
-strong  = [r for r in results if r.get("best_tier") == "**"
-           or ("**" in r.get("rl_signal","") and not r.get("best_tier"))]
-lean    = [r for r in results if r.get("best_tier") == "*"
-           or ("*" in r.get("rl_signal","") and "**" not in r.get("rl_signal","") and not r.get("best_tier"))]
-skip    = [r for r in results if not r.get("best_tier") and not r.get("rl_signal","")]
-
-# ── Summary bar ───────────────────────────────────────────────────────────────
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Games Today",  len(results))
-c2.metric("Strong Plays", len(strong), delta="2 units each")
-c3.metric("Lean Plays",   len(lean),   delta="1 unit each")
-c4.metric("Skip",         len(skip))
-st.divider()
+st.caption("Picks updated daily after 9 AM ET  ·  Sorted by strongest edge first")
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_picks, tab_season, tab_log = st.tabs(["Today's Picks", "Season Tracker", "Bet Log"])
+tab_picks, tab_season, tab_log = st.tabs(["📋 Today's Picks", "📈 Season Tracker", "📓 Bet Log"])
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 1 — TODAY'S PICKS
+# ══════════════════════════════════════════════════════════════════════════════
 with tab_picks:
+    col_date, col_refresh = st.columns([3, 1])
+    with col_date:
+        today    = datetime.date.today()
+        selected = st.date_input("Date", value=today,
+                                 min_value=datetime.date(2026, 3, 28),
+                                 max_value=today, label_visibility="collapsed")
+    with col_refresh:
+        if st.button("🔄 Refresh", use_container_width=True):
+            st.cache_data.clear()
+
+    date_str = selected.isoformat()
+    st.caption(f"Showing picks for **{selected.strftime('%A, %B %d %Y')}**")
+
+    with st.spinner("Loading picks..."):
+        results = load_card(date_str)
+
+    if not results:
+        st.warning(f"No predictions for {selected.strftime('%B %d, %Y')} — "
+                   "pipeline may not have run yet.")
+        st.info("Run `python run_today.py --csv && python supabase_upload.py` "
+                "to generate today's card.")
+        st.stop()
+
+    def _sort_key(r):
+        tier  = r.get("best_tier") or ("**" if "**" in r.get("rl_signal","") else
+                                        "*"  if "*"  in r.get("rl_signal","") else "")
+        order = 0 if tier == "**" else (1 if tier == "*" else 2)
+        edge  = _safe_float(r.get("best_edge")) or abs(_safe_float(r.get("blended_rl"),0.5) - 0.5)
+        return (order, -edge)
+
+    results = sorted(results, key=_sort_key)
+
+    def _is_strong(r):
+        return r.get("best_tier") == "**" or \
+               ("**" in r.get("rl_signal","") and not r.get("best_tier"))
+    def _is_lean(r):
+        return r.get("best_tier") == "*" or \
+               ("*" in r.get("rl_signal","") and "**" not in r.get("rl_signal","")
+                and not r.get("best_tier"))
+
+    strong = [r for r in results if _is_strong(r)]
+    lean   = [r for r in results if _is_lean(r)]
+    skip   = [r for r in results if not _is_strong(r) and not _is_lean(r)]
+
+    # Summary bar
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Games Today",  len(results))
+    c2.metric("Strong Plays", len(strong), delta="2 units each" if strong else None)
+    c3.metric("Lean Plays",   len(lean),   delta="1 unit each"  if lean   else None)
+    c4.metric("No Edge",      len(skip))
+    st.divider()
+
     n = 1
     if strong:
-        st.markdown('<div class="section-header">Strong Plays</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-hdr">Strong Plays</div>', unsafe_allow_html=True)
         for r in strong:
-            render_card(r, n, 2, "strong")
+            render_card(r, n, "strong")
             n += 1
+
     if lean:
-        st.markdown('<div class="section-header">Lean Plays</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-hdr">Lean Plays</div>', unsafe_allow_html=True)
         for r in lean:
-            render_card(r, n, 1, "lean")
+            render_card(r, n, "lean")
             n += 1
+
     if skip:
-        with st.expander(f"No edge — {len(skip)} games skipped"):
+        with st.expander(f"No edge — {len(skip)} game{'s' if len(skip)!=1 else ''} skipped"):
             for r in skip:
-                away, home = r.get("away_team",""), r.get("home_team","")
-                ou   = f" · O/U {r['vegas_total']}" if r.get("vegas_total") else ""
-                tsig = f" → **{r['total_signal']}**" if r.get("total_signal") else ""
-                bl   = float(r.get("blended_rl", 0.5))
+                a, h = r.get("away_team",""), r.get("home_team","")
+                vt   = r.get("vegas_total","")
+                bl   = _safe_float(r.get("blended_rl"), 0.5)
+                mw   = _safe_float(r.get("mc_home_win"), 0.5)
+                tsig = r.get("total_signal","")
+                tsig_html = f"  →  <b>{tsig}</b>" if tsig else ""
                 st.markdown(
-                    f'<div class="skip-game">{away} @ {home}{ou}{tsig} &nbsp;·&nbsp; blend={bl:.0%}</div>',
+                    f'<div class="skip-card"><div class="skip-game">'
+                    f'<strong>{a} @ {h}</strong>'
+                    f'{f"  ·  O/U {vt}" if vt else ""}{tsig_html}'
+                    f'<br><span style="font-size:.78rem">RL blend: {bl:.0%}  ·  Win%: {mw:.0%}  ·  '
+                    f'No significant edge found</span>'
+                    f'</div></div>',
                     unsafe_allow_html=True)
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 2 — SEASON TRACKER
+# ══════════════════════════════════════════════════════════════════════════════
 with tab_season:
     bt = load_backtest()
+
     if bt.empty:
         st.info("Season tracker populates as games complete each day.")
     else:
-        sig = bt[bt.get("signal", pd.Series(dtype=str)) != ""] if "signal" in bt.columns else pd.DataFrame()
-        if not sig.empty:
-            wins   = int(sig["bet_win"].sum())
-            n_bets = len(sig)
-            losses = n_bets - wins
-            roi    = (wins * (100/110) - losses) / n_bets * 100
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Record",   f"{wins}-{losses}")
-            m2.metric("Win Rate", f"{wins/n_bets:.1%}")
-            m3.metric("ROI",      f"{roi:+.1f}%")
-            m4.metric("Games",    f"{len(bt)} tracked")
+        bt["date"] = pd.to_datetime(bt["date"], errors="coerce")
+        bt = bt.dropna(subset=["date"])
+
+        # ── Date range selector ───────────────────────────────────────────────
+        st.markdown("**Date range**")
+        dr_cols = st.columns(5)
+        today_dt = datetime.date.today()
+
+        # Use session state to track selected range
+        if "tracker_range" not in st.session_state:
+            st.session_state.tracker_range = "season"
+
+        if dr_cols[0].button("Today",      use_container_width=True):
+            st.session_state.tracker_range = "today"
+        if dr_cols[1].button("This Week",  use_container_width=True):
+            st.session_state.tracker_range = "week"
+        if dr_cols[2].button("This Month", use_container_width=True):
+            st.session_state.tracker_range = "month"
+        if dr_cols[3].button("Full Season",use_container_width=True):
+            st.session_state.tracker_range = "season"
+
+        with dr_cols[4]:
+            custom_range = st.date_input(
+                "Custom", value=(bt["date"].min().date(), today_dt),
+                key="custom_range", label_visibility="collapsed")
+
+        rng = st.session_state.tracker_range
+        if rng == "today":
+            mask = bt["date"].dt.date == today_dt
+            rng_label = "Today"
+        elif rng == "week":
+            week_start = today_dt - datetime.timedelta(days=today_dt.weekday())
+            mask = bt["date"].dt.date >= week_start
+            rng_label = "This Week"
+        elif rng == "month":
+            mask = (bt["date"].dt.year == today_dt.year) & \
+                   (bt["date"].dt.month == today_dt.month)
+            rng_label = "This Month"
+        else:
+            if isinstance(custom_range, (list, tuple)) and len(custom_range) == 2:
+                mask = (bt["date"].dt.date >= custom_range[0]) & \
+                       (bt["date"].dt.date <= custom_range[1])
+                rng_label = f"{custom_range[0]} – {custom_range[1]}"
+            else:
+                mask = pd.Series([True] * len(bt), index=bt.index)
+                rng_label = "Full Season"
+
+        view = bt[mask].copy()
+        st.divider()
+
+        if view.empty:
+            st.warning(f"No games in range: {rng_label}")
+        else:
+            # ── Only count games WITH a signal ────────────────────────────────
+            if "signal" in view.columns:
+                bet_view = view[view["signal"].notna() & (view["signal"] != "")]
+            else:
+                bet_view = pd.DataFrame()
+
+            total_games = len(view)
+            total_bets  = len(bet_view)
+
+            st.caption(f"**{rng_label}**  ·  {total_games} games tracked  ·  "
+                       f"{total_bets} generated a signal")
+
+            if not bet_view.empty and "bet_win" in bet_view.columns:
+                wins   = int(bet_view["bet_win"].sum())
+                losses = total_bets - wins
+                roi    = (wins * (100/110) - losses) / total_bets * 100
+
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Record",   f"{wins}–{losses}")
+                m2.metric("Win Rate", f"{wins/total_bets:.1%}")
+                m3.metric("ROI",      f"{roi:+.1f}%",
+                          delta="profitable" if roi > 0 else "losing",
+                          delta_color="normal" if roi > 0 else "inverse")
+                m4.metric("Bets",     f"{total_bets}")
+            else:
+                st.info("No completed bet signals in this range yet.")
+
             st.divider()
 
-        if "date" in bt.columns:
-            bt["week"] = pd.to_datetime(bt["date"]).dt.to_period("W").astype(str)
-            rows = []
-            for week, wdf in bt.groupby("week"):
-                s = wdf[wdf.get("signal", pd.Series(dtype=str)) != ""] if "signal" in wdf.columns else pd.DataFrame()
-                if s.empty:
-                    continue
-                w = int(s["bet_win"].sum())
-                l = len(s) - w
-                r_roi = (w * (100/110) - l) / len(s) * 100
-                rows.append({"Week": week, "Bets": len(s), "Wins": w,
-                             "Win%": f"{w/len(s):.1%}", "ROI": f"{r_roi:+.1f}%"})
-            if rows:
-                st.subheader("Weekly Breakdown")
-                st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+            # ── Weekly breakdown (bet games only) ─────────────────────────────
+            if not bet_view.empty and len(bet_view) > 0:
+                bet_view["week"] = bet_view["date"].dt.to_period("W").astype(str)
+                rows = []
+                for week, wdf in bet_view.groupby("week"):
+                    w = int(wdf["bet_win"].sum())
+                    l = len(wdf) - w
+                    r_roi = (w * (100/110) - l) / len(wdf) * 100
+                    rows.append({"Week": week, "Bets": len(wdf),
+                                 "Wins": w, "Losses": l,
+                                 "Win%": f"{w/len(wdf):.1%}",
+                                 "ROI":  f"{r_roi:+.1f}%"})
+                if rows:
+                    st.subheader("Weekly Breakdown  (bet signals only)")
+                    st.dataframe(pd.DataFrame(rows), hide_index=True,
+                                 use_container_width=True)
 
-        if "signal" in bt.columns:
-            sig_rows = []
-            for s in ["AWAY +1.5 **","AWAY +1.5 *","HOME -1.5 **","HOME -1.5 *"]:
-                sub = bt[bt["signal"] == s]
-                if sub.empty:
-                    continue
-                w = int(sub["bet_win"].sum())
-                l = len(sub) - w
-                r_roi = (w * (100/110) - l) / len(sub) * 100
-                sig_rows.append({"Signal": s, "Bets": len(sub), "Wins": w,
-                                  "Win%": f"{w/len(sub):.1%}", "ROI": f"{r_roi:+.1f}%"})
-            if sig_rows:
-                st.subheader("By Signal Type")
-                st.dataframe(pd.DataFrame(sig_rows), hide_index=True, use_container_width=True)
+            # ── By signal type ─────────────────────────────────────────────────
+            if "signal" in view.columns:
+                sig_rows = []
+                for s in ["AWAY +1.5 **","AWAY +1.5 *","HOME -1.5 **","HOME -1.5 *"]:
+                    sub = view[view["signal"] == s]
+                    if sub.empty:
+                        continue
+                    w = int(sub["bet_win"].sum())
+                    l = len(sub) - w
+                    r_roi = (w * (100/110) - l) / len(sub) * 100
+                    sig_rows.append({"Signal": s, "Bets": len(sub),
+                                     "Wins": w, "Losses": l,
+                                     "Win%": f"{w/len(sub):.1%}",
+                                     "ROI":  f"{r_roi:+.1f}%"})
+                if sig_rows:
+                    st.subheader("By Signal Type")
+                    st.dataframe(pd.DataFrame(sig_rows), hide_index=True,
+                                 use_container_width=True)
 
+            # ── Home cover rate calibration ────────────────────────────────────
+            if "blended_rl" in view.columns and "home_covers_rl" in view.columns:
+                with st.expander("Model calibration (blended RL prob vs actual cover rate)"):
+                    cal_data = view[["blended_rl","home_covers_rl"]].dropna()
+                    if len(cal_data) >= 20:
+                        cal_data["bucket"] = pd.cut(
+                            cal_data["blended_rl"],
+                            bins=[0,.30,.35,.40,.45,.50,.55,.60,1.0],
+                            labels=["<.30",".30-.35",".35-.40",".40-.45",
+                                    ".45-.50",".50-.55",".55-.60",">.60"])
+                        cal = cal_data.groupby("bucket", observed=True).agg(
+                            Games=("home_covers_rl","count"),
+                            Actual=("home_covers_rl","mean"),
+                            Model=("blended_rl","mean"),
+                        ).reset_index()
+                        cal["Actual"] = cal["Actual"].map("{:.1%}".format)
+                        cal["Model"]  = cal["Model"].map("{:.1%}".format)
+                        st.dataframe(cal, hide_index=True, use_container_width=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 3 — BET LOG
+# ══════════════════════════════════════════════════════════════════════════════
 with tab_log:
     tracker = load_tracker()
-    if tracker.empty:
-        st.info("No bets logged yet.")
-    else:
-        if {"result","profit_loss"}.issubset(tracker.columns):
-            wins   = (tracker["result"] == "WIN").sum()
-            losses = (tracker["result"] == "LOSS").sum()
-            pushes = (tracker["result"] == "PUSH").sum()
-            total_pl = pd.to_numeric(tracker["profit_loss"], errors="coerce").sum()
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    if not tracker.empty and {"result","profit_loss"}.issubset(tracker.columns):
+        completed = tracker[tracker["result"].isin(["WIN","LOSS","PUSH"])]
+        if not completed.empty:
+            wins    = (completed["result"] == "WIN").sum()
+            losses  = (completed["result"] == "LOSS").sum()
+            pushes  = (completed["result"] == "PUSH").sum()
+            total_pl = pd.to_numeric(completed["profit_loss"], errors="coerce").sum()
             n_bets   = wins + losses + pushes
             t1, t2, t3, t4 = st.columns(4)
-            t1.metric("Record",    f"{wins}-{losses}-{pushes}")
-            t2.metric("Win %",     f"{wins/n_bets*100:.1f}%" if n_bets else "—")
-            t3.metric("P&L (units)", f"{total_pl:+.2f}")
+            t1.metric("Record",     f"{wins}–{losses}–{pushes}")
+            t2.metric("Win %",      f"{wins/n_bets*100:.1f}%" if n_bets else "—")
+            t3.metric("P&L (units)",f"{total_pl:+.2f}",
+                      delta_color="normal" if total_pl >= 0 else "inverse")
             t4.metric("Total Bets", n_bets)
             st.divider()
 
-        def _style(row):
+    # ── Log a new bet ─────────────────────────────────────────────────────────
+    with st.expander("➕ Log a new bet", expanded=tracker.empty):
+        st.caption("Enter each leg of a parlay as a separate row and check 'Part of a parlay'.")
+        with st.form("log_bet_form", clear_on_submit=True):
+            fc1, fc2 = st.columns(2)
+            bet_date  = fc1.date_input("Date", value=datetime.date.today())
+            bet_game  = fc2.text_input("Game", placeholder="e.g. TEX @ LAD")
+
+            fc3, fc4, fc5 = st.columns(3)
+            bet_type  = fc3.selectbox("Bet type",
+                ["RL +1.5","RL -1.5","ML","OVER","UNDER","RL +2.5","RL -2.5","Other"])
+            bet_team  = fc4.text_input("Team / Side", placeholder="e.g. TEX")
+            bet_odds  = fc5.number_input("Odds (American)", value=-110, step=5)
+
+            fc6, fc7, fc8 = st.columns(3)
+            bet_units = fc6.number_input("Units", value=1.0, step=0.5, min_value=0.5)
+            bet_result= fc7.selectbox("Result", ["PENDING","WIN","LOSS","PUSH"])
+            bet_pl    = fc8.number_input("P&L (units)", value=0.0, step=0.1)
+
+            fc9, fc10 = st.columns([1, 2])
+            is_parlay = fc9.checkbox("Part of a parlay")
+            parlay_id = fc10.text_input("Parlay name / ID (if parlay)",
+                                         placeholder="e.g. Sunday 3-leg parlay")
+            notes     = st.text_input("Notes (optional)")
+
+            submitted = st.form_submit_button("Log Bet", type="primary",
+                                              use_container_width=True)
+
+        if submitted:
+            new_row = {
+                "date":        str(bet_date),
+                "game":        bet_game,
+                "bet_type":    bet_type,
+                "team":        bet_team,
+                "odds":        int(bet_odds),
+                "units":       float(bet_units),
+                "is_parlay":   is_parlay,
+                "parlay_id":   parlay_id if is_parlay else "",
+                "result":      bet_result,
+                "profit_loss": float(bet_pl),
+                "notes":       notes,
+            }
+            if USE_SUPABASE:
+                try:
+                    _supabase().table("bet_tracker").insert(new_row).execute()
+                    st.success("Bet logged! Refresh the page to see it.")
+                    st.cache_data.clear()
+                except Exception as e:
+                    st.error(f"Could not save to Supabase: {e}")
+                    st.info("Make sure the bet_tracker table exists in Supabase.")
+            else:
+                # Save locally
+                path = Path(__file__).parent / "data" / "raw" / "bet_tracker.csv"
+                existing_local = pd.read_csv(path) if path.exists() else pd.DataFrame()
+                updated = pd.concat([existing_local, pd.DataFrame([new_row])],
+                                    ignore_index=True)
+                updated.to_csv(path, index=False)
+                st.success(f"Bet saved to {path.name}")
+                st.cache_data.clear()
+
+    # ── Bet table ─────────────────────────────────────────────────────────────
+    if tracker.empty:
+        st.info("No bets logged yet. Use the form above to log your first bet.")
+    else:
+        # Parlay summary
+        if "is_parlay" in tracker.columns:
+            parlays = tracker[tracker["is_parlay"] == True]
+            singles = tracker[tracker["is_parlay"] != True]
+            if not parlays.empty:
+                st.caption(f"**Singles:** {len(singles)}  ·  **Parlay legs:** {len(parlays)}")
+
+        def _style_result(row):
             styles = [""] * len(row)
             if "result" in row.index:
                 idx = row.index.get_loc("result")
                 v = str(row["result"])
                 styles[idx] = ("color:#4ade80;font-weight:bold" if v == "WIN"
-                                else "color:#f87171;font-weight:bold" if v == "LOSS" else "")
+                                else "color:#f87171;font-weight:bold" if v == "LOSS"
+                                else "color:#facc15" if v == "PUSH" else "")
             return styles
-        st.dataframe(tracker.style.apply(_style, axis=1),
+
+        st.dataframe(tracker.style.apply(_style_result, axis=1),
                      hide_index=True, use_container_width=True)
+
+        # Parlay breakdown
+        if "is_parlay" in tracker.columns and "parlay_id" in tracker.columns:
+            parlays_df = tracker[tracker["is_parlay"] == True]
+            if not parlays_df.empty:
+                with st.expander("Parlay breakdown"):
+                    for pid, pdf in parlays_df.groupby("parlay_id"):
+                        st.markdown(f"**{pid}**")
+                        st.dataframe(pdf[["date","game","bet_type","team","odds","units",
+                                         "result","profit_loss"]],
+                                     hide_index=True, use_container_width=True)
+
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.divider()
-st.caption("Breakeven at -110 juice: 52.4%  ·  Model: 60% Monte Carlo + 40% XGBoost  ·  Base home -1.5 cover rate ~35.7%")
+st.caption(
+    "Breakeven at -110 juice: 52.4%  ·  "
+    "Model: 60% Monte Carlo + 40% XGBoost  ·  "
+    "Base home -1.5 cover rate ~35.7%  ·  "
+    "Score range = 25th–75th percentile of 50,000 simulations"
+)

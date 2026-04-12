@@ -487,6 +487,13 @@ def predict_game(
         "mc_home_covers_rl":   round(float(mc_covers_rl), 4),   # home -1.5
         "mc_home_covers_25":   round(float(mc_home_cvr_25), 4), # home -2.5
         "mc_away_covers_25":   round(float(mc_away_25), 4),     # away +2.5
+        # Per-team run expectations
+        "mc_home_runs_mean":   round(float(home_runs.mean()), 1),
+        "mc_away_runs_mean":   round(float(away_runs.mean()), 1),
+        "mc_home_runs_lo":     int(np.percentile(home_runs, 25)),   # 25th pctl
+        "mc_home_runs_hi":     int(np.percentile(home_runs, 75)),   # 75th pctl
+        "mc_away_runs_lo":     int(np.percentile(away_runs, 25)),
+        "mc_away_runs_hi":     int(np.percentile(away_runs, 75)),
         # Totals
         "mc_expected_total":   round(mc_total, 2),
         "mc_total_median":     mc_total_median,
