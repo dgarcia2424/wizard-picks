@@ -358,7 +358,7 @@ def render_card(r: dict, n: int, tier: str):
     fill_cls  = "conf-fill-strong" if tier == "strong" else "conf-fill-lean"
     card_cls  = "bet-card-strong"  if tier == "strong" else "bet-card-lean"
     badge_cls = "badge-strong"     if tier == "strong" else "badge-lean"
-    badge_txt = "★★ STRONG  ·  Bet 2 units" if tier == "strong" else "★ LEAN  ·  Bet 1 unit"
+    badge_txt = "★★ STRONG  ·  High Confidence" if tier == "strong" else "★ LEAN  ·  Moderate Confidence"
 
     # Confidence sub-line
     market_odds = r.get("best_market_odds")
@@ -386,11 +386,18 @@ def render_card(r: dict, n: int, tier: str):
 
     bt = r.get("blended_total") or r.get("mc_total")
     vt = r.get("vegas_total")
+    total_sig = str(r.get("total_signal") or "")
+
     if bt and vt:
-        diff = _safe_float(bt) - _safe_float(vt)
+        diff   = _safe_float(bt) - _safe_float(vt)
         ou_dir = "OVER" if diff > 0 else "UNDER"
-        score_total = (f"Total: {_safe_float(bt):.1f} runs  "
-                       f"(Market O/U: {vt}  →  Model says {ou_dir})")
+        # If there's an explicit signal, make it a clear action
+        if total_sig:
+            score_total = (f"Total: {_safe_float(bt):.1f} runs  ·  Market O/U: {vt}"
+                           f"  →  <b style='color:#fef08a'>Also play: {total_sig}</b>")
+        else:
+            score_total = (f"Total: {_safe_float(bt):.1f} runs  "
+                           f"(Market O/U: {vt}  ·  model leans {ou_dir})")
     elif bt:
         score_total = f"Expected total: {_safe_float(bt):.1f} runs"
     else:
@@ -399,10 +406,8 @@ def render_card(r: dict, n: int, tier: str):
     # Why bullets
     bullets_html = "".join(f'<div class="why-item">{b}</div>' for b in _why_bullets(r))
 
-    # Also play
-    total_sig = r.get("total_signal","")
-    also_html = (f'<div class="also-play">Also consider: {total_sig}</div>'
-                 if total_sig else "")
+    # No separate "Also consider" block — it's now inline in the score section
+    also_html = ""
 
     # Meta bar
     lineup_str = "Confirmed lineup" if r.get("lineup_confirmed") else "Projected lineup"
