@@ -492,6 +492,9 @@ def render_card(r: dict, n: int, tier: str):
             f'</div>'
         )
 
+    score_main = (f"{away} {_safe_float(am):.1f} — {home} {_safe_float(hm):.1f}"
+                  if hm is not None and am is not None else "")
+
     if hm is not None and am is not None:
         # Determine which team is the bet (green bar) vs opponent (grey)
         is_home_bet_score = "home" in str(r.get("best_line") or "").lower()
@@ -609,20 +612,25 @@ with tab_picks:
     qc1, qc2, qc3, qc4, qc5 = st.columns([1, 1, 1, 2, 1])
     if qc1.button("Today",     use_container_width=True):
         st.session_state.pick_date = today
+        st.rerun()
     if qc2.button("Yesterday", use_container_width=True):
         st.session_state.pick_date = today - datetime.timedelta(days=1)
+        st.rerun()
     if qc3.button("–1 day",    use_container_width=True):
         st.session_state.pick_date = max(
             st.session_state.pick_date - datetime.timedelta(days=1),
             datetime.date(2026, 3, 28))
+        st.rerun()
     with qc4:
-        selected = st.date_input("Date", value=st.session_state.pick_date,
+        selected = st.date_input("", value=st.session_state.pick_date,
                                  min_value=datetime.date(2026, 3, 28),
-                                 max_value=today, label_visibility="collapsed",
-                                 key="pick_date_input")
-        st.session_state.pick_date = selected
-    if qc5.button("🔄",        use_container_width=True):
+                                 max_value=today, label_visibility="collapsed")
+        if selected != st.session_state.pick_date:
+            st.session_state.pick_date = selected
+            st.rerun()
+    if qc5.button("🔄 Refresh", use_container_width=True):
         st.cache_data.clear()
+        st.rerun()
 
     date_str = st.session_state.pick_date.isoformat()
     st.caption(f"Showing picks for **{st.session_state.pick_date.strftime('%A, %B %d, %Y')}**")

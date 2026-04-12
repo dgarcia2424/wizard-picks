@@ -187,7 +187,7 @@ def _best_bet(
     candidates = []
 
     def add(line, model_prob, market_odds, raw_model_prob=None):
-        if market_odds is None or (isinstance(market_odds, float) and np.isnan(market_odds)):
+        if _is_missing(market_odds):
             return
         market_odds_f = float(market_odds)
         edge = _edge_vs_line(model_prob, market_odds_f)
