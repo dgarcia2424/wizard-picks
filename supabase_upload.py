@@ -214,26 +214,70 @@ def upload_model_history(csv_path: Path = None) -> int:
         logger.warning("  [SKIP] backtest_mc_2026_results.csv is empty")
         return 0
 
+    # Pre-convert boolean/object columns that Supabase expects as integers.
+    # bet_win arrives as object dtype with Python True/False/NaN.
+    # Convert at DataFrame level so row.get() never returns a bool.
+    for _bool_col in ["bet_win", "home_covers_rl"]:
+        if _bool_col in df.columns:
+            df[_bool_col] = df[_bool_col].map(
+                lambda x: None if (x is None or (isinstance(x, float) and x != x)) else int(x)
+            )
+
     client = _get_client()
 
     # Full replace — delete all existing rows then re-insert
     client.table("wizard_model_history").delete().neq("date", "1900-01-01").execute()
 
-    # Columns to promote to top-level (all others are silently ignored)
-    TOP_LEVEL_COLS = [
-        "date", "home_team", "away_team", "home_sp", "away_sp",
-        "blended_rl", "mc_rl",
-        "home_covers_rl", "bet_win", "signal",
-        "mc_f5_total", "f5_total_actual",
-        "mc_nrfi_prob", "f1_nrfi_actual",
-        "mc_home_sp_k_mean", "home_sp_k_actual",
-        "mc_away_sp_k_mean", "away_sp_k_actual",
-    ]
+    # CSV column name → Supabase column name mapping
+    # (CSV was built by backtest_mc_2026.py; schema uses more explicit names)
+    COL_MAP = {
+        "game_date":    "date",
+        "home_team":    "home_team",
+        "away_team":    "away_team",
+        "home_sp":      "home_sp",
+        "away_sp":      "away_sp",
+        "blended_rl":   "blended_rl",
+        "mc_rl":        "mc_rl",
+        "home_covers_rl": "home_covers_rl",
+        "bet_win":      "bet_win",
+        "signal":       "signal",
+        # MC prediction columns (may be absent if MC not yet run)
+        "mc_f5_total":      "mc_f5_total",
+        "mc_nrfi_prob":     "mc_nrfi_prob",
+        "mc_home_sp_k_mean":"mc_home_sp_k_mean",
+        "mc_away_sp_k_mean":"mc_away_sp_k_mean",
+        # Actual result columns — CSV uses shorter names
+        "f5_total":     "f5_total_actual",
+        "f1_nrfi":      "f1_nrfi_actual",
+        "home_sp_k":    "home_sp_k_actual",
+        "away_sp_k":    "away_sp_k_actual",
+    }
+
+    # Integer columns that may arrive as Python booleans from pandas
+    BOOL_AS_INT = {"home_covers_rl", "bet_win", "f1_nrfi_actual"}
 
     success = 0
     for _, row in df.iterrows():
-        # Build record with only the schema columns present in the CSV
-        record = _clean({col: row.get(col) for col in TOP_LEVEL_COLS})
+        # Build record using the column mapping (CSV name → Supabase name)
+        raw = {}
+        for csv_col, db_col in COL_MAP.items():
+            val = row.get(csv_col)
+            raw[db_col] = val
+
+        # Convert bool/NaN → int (0/1/None) for integer columns
+        for col in BOOL_AS_INT:
+            if col in raw:
+                v = raw[col]
+                if v is None:
+                    pass  # leave as None
+                else:
+                    try:
+                        import math
+                        raw[col] = None if (isinstance(v, float) and math.isnan(v)) else int(v)
+                    except (ValueError, TypeError):
+                        raw[col] = None
+
+        record = _clean(raw)
         try:
             client.table("wizard_model_history").insert(record).execute()
             success += 1
