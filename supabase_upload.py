@@ -96,6 +96,10 @@ def upload_daily_card(csv_path: Path = None) -> int:
         # New fields (best_edge, mc_home_win, etc.) live inside 'data' only.
         full_data = _clean(row.to_dict())
 
+        # Only include columns that exist in the wizard_daily_card schema.
+        # All new fields (lineup_wrc, mc_nrfi_prob, F5, K props, etc.) are
+        # stored in the 'data' JSONB column and read by the dashboard from there.
+        # This avoids 400 errors when new model fields are added without ALTER TABLE.
         record = _clean({
             "game_date":    game_date,
             "game":         row.get("game", ""),
@@ -118,17 +122,7 @@ def upload_daily_card(csv_path: Path = None) -> int:
             "away_sp_flag": row.get("away_sp_flag", ""),
             "temp_f":       row.get("temp_f"),
             "lineup_confirmed": bool(row.get("lineup_confirmed", False)),
-            # --- New queryable fields added by run_today.py ---
-            "home_lineup_wrc":      row.get("home_lineup_wrc"),
-            "away_lineup_wrc":      row.get("away_lineup_wrc"),
-            "mc_nrfi_prob":         row.get("mc_nrfi_prob"),
-            "mc_f5_total":          row.get("mc_f5_total"),
-            "mc_f5_home_win_prob":  row.get("mc_f5_home_win_prob"),
-            "home_sp_expected_ip":  row.get("home_sp_expected_ip"),
-            "away_sp_expected_ip":  row.get("away_sp_expected_ip"),
-            "market_deviation":     row.get("market_deviation"),
-            "best_tier_capped":     row.get("best_tier_capped"),
-            "data":         full_data,   # all fields including new ones
+            "data":         full_data,   # all fields — dashboard reads from here
         })
         try:
             client.table("wizard_daily_card").insert(record).execute()
