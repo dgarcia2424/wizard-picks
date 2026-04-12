@@ -501,21 +501,23 @@ with tab_picks:
         st.stop()
 
     def _sort_key(r):
-        tier  = r.get("best_tier") or ("**" if "**" in r.get("rl_signal","") else
-                                        "*"  if "*"  in r.get("rl_signal","") else "")
-        order = 0 if tier == "**" else (1 if tier == "*" else 2)
-        edge  = _safe_float(r.get("best_edge")) or abs(_safe_float(r.get("blended_rl"),0.5) - 0.5)
+        rl_sig = str(r.get("rl_signal") or "")
+        tier   = str(r.get("best_tier") or ("**" if "**" in rl_sig else
+                                             "*"  if "*"  in rl_sig else ""))
+        order  = 0 if tier == "**" else (1 if tier == "*" else 2)
+        edge   = _safe_float(r.get("best_edge")) or abs(_safe_float(r.get("blended_rl"), 0.5) - 0.5)
         return (order, -edge)
 
     results = sorted(results, key=_sort_key)
 
     def _is_strong(r):
-        return r.get("best_tier") == "**" or \
-               ("**" in r.get("rl_signal","") and not r.get("best_tier"))
+        rl_sig = str(r.get("rl_signal") or "")
+        return str(r.get("best_tier") or "") == "**" or \
+               ("**" in rl_sig and not r.get("best_tier"))
     def _is_lean(r):
-        return r.get("best_tier") == "*" or \
-               ("*" in r.get("rl_signal","") and "**" not in r.get("rl_signal","")
-                and not r.get("best_tier"))
+        rl_sig = str(r.get("rl_signal") or "")
+        return str(r.get("best_tier") or "") == "*" or \
+               ("*" in rl_sig and "**" not in rl_sig and not r.get("best_tier"))
 
     strong = [r for r in results if _is_strong(r)]
     lean   = [r for r in results if _is_lean(r)]
