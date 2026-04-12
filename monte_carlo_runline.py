@@ -261,6 +261,8 @@ def simulate_game(
     away_bullpen_xwoba: float = DEFAULT_BULLPEN_XWOBA,
     home_team_rs_per_game: float | None = None,   # season-to-date RS/G
     away_team_rs_per_game: float | None = None,
+    home_expected_ip: float = INNINGS_SP,   # avg innings home SP actually pitches
+    away_expected_ip: float = INNINGS_SP,   # avg innings away SP actually pitches
     rng: np.random.Generator | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -270,6 +272,8 @@ def simulate_game(
 
     Team offensive quality (RS/G) scales the pitcher-derived lambda so that
     elite offenses score more than the SP xwOBA alone would suggest.
+    Per-pitcher expected_ip replaces the global INNINGS_SP constant, so
+    pitchers on strict innings limits (post-TJ, openers) are modeled correctly.
     """
     if rng is None:
         rng = np.random.default_rng()
@@ -302,14 +306,23 @@ def simulate_game(
     # --- SP innings: runs allowed per game from SP portion -----------------
     # home_xwoba_sp = xwOBA home SP allows opponents (= away team offensive output)
     # away_xwoba_sp = xwOBA away SP allows opponents (= home team offensive output)
-    sp_frac = INNINGS_SP / INNINGS_GAME   # fraction of game covered by SP
-    bp_frac = 1 - sp_frac
+    # Each pitcher uses their own SP/BP split based on actual 2026 IP/start.
+    # A pitcher on an innings limit (e.g. 4.5 IP/start) means more bullpen
+    # exposure for the opposing team, changing the lambda calculation.
+    home_sp_ip = float(np.clip(home_expected_ip, 1.0, INNINGS_GAME))
+    away_sp_ip = float(np.clip(away_expected_ip, 1.0, INNINGS_GAME))
+    home_sp_frac = home_sp_ip / INNINGS_GAME
+    home_bp_frac = 1.0 - home_sp_frac
+    away_sp_frac = away_sp_ip / INNINGS_GAME
+    away_bp_frac = 1.0 - away_sp_frac
 
     # Runs allowed by each pitcher / bullpen (= opponent's scoring)
-    home_sp_concedes = xwoba_to_runs_per_game(home_xwoba_sp) * sp_frac
-    away_sp_concedes = xwoba_to_runs_per_game(away_xwoba_sp) * sp_frac
-    home_bp_concedes = xwoba_to_runs_per_game(home_bullpen_xwoba) * bp_frac
-    away_bp_concedes = xwoba_to_runs_per_game(away_bullpen_xwoba) * bp_frac
+    # home SP (home_xwoba_sp) pitches to AWAY batters for home_sp_frac of game
+    # away SP (away_xwoba_sp) pitches to HOME batters for away_sp_frac of game
+    home_sp_concedes = xwoba_to_runs_per_game(home_xwoba_sp) * home_sp_frac
+    away_sp_concedes = xwoba_to_runs_per_game(away_xwoba_sp) * away_sp_frac
+    home_bp_concedes = xwoba_to_runs_per_game(home_bullpen_xwoba) * home_bp_frac
+    away_bp_concedes = xwoba_to_runs_per_game(away_bullpen_xwoba) * away_bp_frac
 
     # --- Total expected runs (environment + team offense adjusted) ----------
     # Home team scores = away pitching concedes × home team offensive quality
@@ -531,6 +544,12 @@ def predict_game(
         if away_team_stats is not None and pd.notna(away_team_stats.get("bullpen_xwoba")) \
         else DEFAULT_BULLPEN_XWOBA
 
+    # Per-pitcher expected innings (from 2026 actual IP/start data)
+    home_ip = float(home_prof.get("expected_ip") or INNINGS_SP)
+    away_ip = float(away_prof.get("expected_ip") or INNINGS_SP)
+    if pd.isna(home_ip): home_ip = INNINGS_SP
+    if pd.isna(away_ip): away_ip = INNINGS_SP
+
     # Monte Carlo simulation
     rng = np.random.default_rng(seed=42)
     home_runs, away_runs = simulate_game(
@@ -542,6 +561,8 @@ def predict_game(
         away_bullpen_xwoba=away_bp_xwoba,
         home_team_rs_per_game=home_rs_pg,
         away_team_rs_per_game=away_rs_pg,
+        home_expected_ip=home_ip,
+        away_expected_ip=away_ip,
         rng=rng,
     )
 
@@ -571,6 +592,8 @@ def predict_game(
         "away_sp_velocity_flag":  str(away_prof.get("velocity_flag", "NORMAL")),
         "home_sp_age_bucket":  str(home_prof.get("age_bucket", "unknown")),
         "away_sp_age_bucket":  str(away_prof.get("age_bucket", "unknown")),
+        "home_sp_expected_ip": round(home_ip, 1),
+        "away_sp_expected_ip": round(away_ip, 1),
         "park_elevation_ft":   elev,
         "temp_f":              temp_f,
         # Moneyline probabilities

@@ -256,6 +256,7 @@ def _game_level_stats(df: pd.DataFrame) -> pd.DataFrame:
     g["bb_pct"]      = g["bb"]        / g["pa"].clip(lower=1)
     g["gb_pct"]      = g["gb"]        / g["bip"].clip(lower=1)
     g["xrv_per_pitch"] = g["xrv_total"] / g["n_pitches"].clip(lower=1)
+    g["est_ip"] = (g["n_pitches"] / 15.5).clip(lower=1.0, upper=9.0)
     return g
 
 
@@ -395,6 +396,8 @@ def build_trailing_2026(verbose: bool = True) -> pd.DataFrame:
             # Per-start std — early season volatility in actual 2026 data
             "trailing_xwoba_std":    grp["xwoba"].std() if n > 1 else np.nan,
             "trailing_k_pct_std":    grp["k_pct"].std() if n > 1 else np.nan,
+            "trailing_avg_pitches":  grp["n_pitches"].mean(),
+            "trailing_avg_ip":       grp["est_ip"].mean() if "est_ip" in grp.columns else np.nan,
         })
 
     trail = (games.groupby("pitcher")
@@ -867,6 +870,17 @@ def assemble_profiles(vel, dist, trail, flags, stuff, age_arm, buyllow,
             trust * trail_val.fillna(career_val) +
             (1 - trust) * career_val.fillna(trail_val)
         )
+
+    # ---- Expected innings per start (for Monte Carlo SP/BP split) ----------
+    # Use actual 2026 IP/start when we have 2+ starts, otherwise league avg.
+    # This captures innings limits (e.g. post-TJ pitchers, openers, piggybacks).
+    LEAGUE_AVG_IP = 5.5
+    df["expected_ip"] = (
+        df["trailing_avg_ip"]
+        .where(df["trailing_n_starts"].fillna(0) >= 2)
+        .clip(lower=3.0, upper=7.5)
+        .fillna(LEAGUE_AVG_IP)
+    )
 
     # ---- New pitch K% multiplier (decaying advantage) ---------------------
     # +7.5% K% boost in the first ~30 starts after adoption
