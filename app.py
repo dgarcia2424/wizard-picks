@@ -610,15 +610,15 @@ with tab_picks:
         st.session_state.pick_date = today
 
     qc1, qc2, qc3 = st.columns([1, 1, 1])
-    if qc1.button("Today", use_container_width=True):
+    if qc1.button("Today",        use_container_width=True, key="picks_today"):
         st.session_state.pick_date = today
         st.rerun()
-    if qc2.button("◀ Prior Day", use_container_width=True):
+    if qc2.button("◀ Prior Day", use_container_width=True, key="picks_prior"):
         st.session_state.pick_date = max(
             st.session_state.pick_date - datetime.timedelta(days=1),
             datetime.date(2026, 3, 28))
         st.rerun()
-    if qc3.button("🔄 Refresh", use_container_width=True):
+    if qc3.button("🔄 Refresh",  use_container_width=True, key="picks_refresh"):
         st.cache_data.clear()
         st.rerun()
 
@@ -764,13 +764,13 @@ with tab_season:
         if "tracker_range" not in st.session_state:
             st.session_state.tracker_range = "season"
 
-        if dr_cols[0].button("Today",      use_container_width=True):
+        if dr_cols[0].button("Today",       use_container_width=True, key="trk_today"):
             st.session_state.tracker_range = "today"
-        if dr_cols[1].button("This Week",  use_container_width=True):
+        if dr_cols[1].button("This Week",   use_container_width=True, key="trk_week"):
             st.session_state.tracker_range = "week"
-        if dr_cols[2].button("This Month", use_container_width=True):
+        if dr_cols[2].button("This Month",  use_container_width=True, key="trk_month"):
             st.session_state.tracker_range = "month"
-        if dr_cols[3].button("Full Season",use_container_width=True):
+        if dr_cols[3].button("Full Season", use_container_width=True, key="trk_season"):
             st.session_state.tracker_range = "season"
 
         with dr_cols[4]:
