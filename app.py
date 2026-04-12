@@ -74,28 +74,43 @@ st.markdown("""
                background:rgba(255,255,255,.06); border-radius:6px;
                padding:7px 12px; display:inline-block; }
 
+/* Game matchup header */
+.game-matchup   { font-size:1.55rem; font-weight:800; color:#f1f5f9;
+                  letter-spacing:.01em; margin-bottom:2px; line-height:1.2; }
+.game-matchup-sub { font-size:.82rem; color:#94a3b8; margin-bottom:10px; }
+.bet-label-row  { font-size:.78rem; font-weight:700; color:#6b7280;
+                  text-transform:uppercase; letter-spacing:.08em; margin-bottom:4px; }
+
 /* Score prediction */
 .score-section  { background:rgba(255,255,255,.04); border-radius:8px;
                   padding:14px 18px; margin:12px 0; }
-.score-label    { font-size:.72rem; color:#6b7280; text-transform:uppercase;
+.score-label    { font-size:.72rem; color:#94a3b8; text-transform:uppercase;
                   letter-spacing:.08em; margin-bottom:10px; }
+.score-main     { font-size:1.15rem; font-weight:800; color:#f1f5f9;
+                  margin-bottom:6px; }
 .bp-row         { display:flex; align-items:center; gap:12px; margin:6px 0; }
-.bp-team        { font-size:.82rem; font-weight:700; color:#9ca3af;
+.bp-team        { font-size:.84rem; font-weight:700; color:#cbd5e1;
                   width:36px; text-align:right; }
-.bp-avg         { font-size:1.05rem; font-weight:800; color:#f9fafb; width:28px; }
+.bp-avg         { font-size:1.05rem; font-weight:800; color:#f1f5f9; width:28px; }
 .bp-chart       { flex:1; height:18px; position:relative; max-width:160px; }
-.bp-track       { height:4px; background:rgba(255,255,255,.1); border-radius:2px;
+.bp-track       { height:4px; background:rgba(255,255,255,.15); border-radius:2px;
                   position:absolute; top:7px; width:100%; }
 .bp-fill        { height:4px; border-radius:2px; position:absolute; top:0; }
 .bp-fill-a      { background:#22c55e; }
 .bp-fill-b      { background:#6b7280; }
-.bp-dot         { width:12px; height:12px; border-radius:50%; background:#f9fafb;
+.bp-dot         { width:12px; height:12px; border-radius:50%; background:#f1f5f9;
                   position:absolute; top:-4px; transform:translateX(-50%);
                   border:2px solid #111827; }
-.bp-range       { font-size:.78rem; color:#6b7280; white-space:nowrap; }
+.bp-range       { font-size:.78rem; color:#94a3b8; white-space:nowrap; }
 .score-divider  { border:none; border-top:1px solid rgba(255,255,255,.06);
                   margin:10px 0; }
-.score-total    { font-size:.85rem; color:#9ca3af; }
+.score-total    { font-size:.87rem; color:#cbd5e1; }
+.ats-ci         { font-size:.84rem; color:#cbd5e1; margin-top:8px;
+                  padding:6px 10px; background:rgba(255,255,255,.05);
+                  border-radius:6px; border-left:3px solid #6366f1; }
+.bet-action     { background:rgba(34,197,94,.10); border:1px solid rgba(34,197,94,.3);
+                  border-radius:6px; padding:10px 16px; margin:10px 0;
+                  font-size:.95rem; color:#d1fae5; font-weight:600; line-height:1.6; }
 
 /* Why */
 .why-section { margin:12px 0; }
@@ -110,7 +125,7 @@ st.markdown("""
                font-size:.9rem; color:#fef08a; font-weight:600; }
 
 /* Meta bar */
-.meta-bar    { font-size:.8rem; color:#4b5563; margin-top:10px;
+.meta-bar    { font-size:.8rem; color:#94a3b8; margin-top:10px;
                border-top:1px solid #1f2937; padding-top:8px; }
 
 /* Skip games */
@@ -237,6 +252,8 @@ def load_card(date_str: str) -> list[dict]:
         rows = []
         for row in resp.data:
             r = row.get("data", {}) or {}
+            # Always pull game_date from the top-level row
+            r["game_date"] = row.get("game_date", date_str)
             for col in ["game","home_team","away_team","rl_signal","total_signal",
                         "blended_rl","mc_rl","xgb_rl","mc_total","blended_total",
                         "vegas_total","vegas_ml_home","vegas_ml_away","home_sp","away_sp",
@@ -579,6 +596,55 @@ def _format_bet_label(r: dict) -> tuple[str, str]:
     return label, sub
 
 
+def _bet_description(r: dict) -> str:
+    """Return a plain-English one-liner explaining exactly what to bet and why it wins."""
+    away  = r.get("away_team", "")
+    home  = r.get("home_team", "")
+    line  = str(r.get("best_line") or "")
+    odds  = r.get("best_market_odds")
+    odds_str = f" ({int(odds):+d})" if odds is not None else ""
+    line_l = line.lower()
+
+    if "-2.5" in line_l and "home" in line_l:
+        return (f"Bet <b>{home} -2.5{odds_str}</b> — back {home} to win by 3 or more runs. "
+                f"You win if {home} wins by at least 3. You lose if {home} wins by 1–2 or {away} wins.")
+    elif "+2.5" in line_l and "away" in line_l:
+        return (f"Bet <b>{away} +2.5{odds_str}</b> — back {away} with a 2-run cushion. "
+                f"You win if {away} wins outright, or loses by 1–2. You lose only if {home} wins by 3+.")
+    elif "+2.5" in line_l and "home" in line_l:
+        return (f"Bet <b>{home} +2.5{odds_str}</b> — back {home} with a 2-run cushion. "
+                f"You win if {home} wins outright, or loses by 1–2. You lose only if {away} wins by 3+.")
+    elif "-2.5" in line_l and "away" in line_l:
+        return (f"Bet <b>{away} -2.5{odds_str}</b> — back {away} to win by 3 or more runs. "
+                f"You win if {away} wins by at least 3. You lose if {away} wins by 1–2 or {home} wins.")
+    elif "-1.5" in line_l and "home" in line_l:
+        return (f"Bet <b>{home} -1.5{odds_str}</b> — back {home} to win by 2 or more runs. "
+                f"You win if {home} wins by 2+. You lose if {home} wins by exactly 1, or {away} wins.")
+    elif "+1.5" in line_l and "away" in line_l:
+        return (f"Bet <b>{away} +1.5{odds_str}</b> — back {away} with a 1-run cushion. "
+                f"You win if {away} wins outright or loses by exactly 1. You lose only if {home} wins by 2+.")
+    elif "+1.5" in line_l and "home" in line_l:
+        return (f"Bet <b>{home} +1.5{odds_str}</b> — back {home} with a 1-run cushion. "
+                f"You win if {home} wins outright or loses by exactly 1. You lose only if {away} wins by 2+.")
+    elif "-1.5" in line_l and "away" in line_l:
+        return (f"Bet <b>{away} -1.5{odds_str}</b> — back {away} to win by 2 or more runs. "
+                f"You win if {away} wins by 2+. You lose if {away} wins by exactly 1, or {home} wins.")
+    elif "ml" in line_l and "home" in line_l:
+        return (f"Bet <b>{home} ML{odds_str}</b> — back {home} to win the game outright. "
+                f"No spread — {home} just needs to win. You lose if {away} wins by any margin.")
+    elif "ml" in line_l and "away" in line_l:
+        return (f"Bet <b>{away} ML{odds_str}</b> — back {away} to win the game outright. "
+                f"No spread — {away} just needs to win. You lose if {home} wins by any margin.")
+    else:
+        # Fallback using legacy signal
+        sig = str(r.get("rl_signal", ""))
+        if "AWAY" in sig:
+            return (f"Bet <b>{away} +1.5{odds_str}</b> — {away} wins or loses by exactly 1.")
+        elif "HOME" in sig:
+            return (f"Bet <b>{home} -1.5{odds_str}</b> — {home} must win by 2 or more.")
+        return ""
+
+
 def render_card(r: dict, n: int, tier: str):
     away, home = r.get("away_team",""), r.get("home_team","")
     bet_label, bet_sub = _format_bet_label(r)
@@ -603,6 +669,9 @@ def render_card(r: dict, n: int, tier: str):
     else:
         badge_txt = (f"★★ STRONG  ·  {conf_pct}% confidence{capped_note}" if tier == "strong"
                      else f"★ LEAN  ·  {conf_pct}% confidence{capped_note}")
+
+    # Plain-English recommendation description
+    bet_desc = _bet_description(r)
 
     # Confidence / market comparison line
     market_odds    = r.get("best_market_odds")
@@ -682,71 +751,74 @@ def render_card(r: dict, n: int, tier: str):
     score_main = (f"{away} {_safe_float(am):.1f} — {home} {_safe_float(hm):.1f}"
                   if hm is not None and am is not None else "")
 
+    # ── ATS confidence interval ──────────────────────────────────────────────
+    # Derived from the 25th/75th score percentiles: spread = away_mean - home_mean
+    # CI bounds: (away_lo - home_hi) to (away_hi - home_lo)
+    ats_ci_html = ""
+    if (hm is not None and am is not None and
+            al is not None and ah is not None and
+            hl is not None and hh is not None and
+            deviation < 0.35):
+        spread_mean = _safe_float(am) - _safe_float(hm)  # positive = away leads
+        spread_lo   = _safe_float(al) - _safe_float(hh)  # away low - home high
+        spread_hi   = _safe_float(ah) - _safe_float(hl)  # away high - home low
+        # Format: "Model spread: TEX +0.5 (range: -1.8 to +2.8)"
+        lead_team   = away if spread_mean >= 0 else home
+        spread_abs  = abs(spread_mean)
+        lo_fmt = f"{spread_lo:+.1f}"
+        hi_fmt = f"{spread_hi:+.1f}"
+        ats_ci_html = (
+            f'<div class="ats-ci">'
+            f'📐 <b>Model spread:</b> {lead_team} by {spread_abs:.1f} runs &nbsp;·&nbsp; '
+            f'80% range: <b>{lo_fmt} to {hi_fmt}</b> (away minus home) &nbsp;·&nbsp; '
+            f'Vegas RL: {away} {"+" if _safe_float(r.get("blended_rl"),0.5)<0.5 else "-"}1.5'
+            f'</div>'
+        )
+
+    # ── Score bands ──────────────────────────────────────────────────────────
     if hm is not None and am is not None and deviation < 0.35:
-        # Determine which team is the bet (green bar) vs opponent (grey)
         is_home_bet_score = "home" in str(r.get("best_line") or "").lower()
         away_cls = "bp-fill-a" if not is_home_bet_score else "bp-fill-b"
         home_cls = "bp-fill-a" if is_home_bet_score  else "bp-fill-b"
-
         bands_html = (
             f'<div style="margin:8px 0">'
             + _bp_row(away, _safe_float(am), al, ah, away_cls)
             + _bp_row(home, _safe_float(hm), hl, hh, home_cls)
-            + f'<div style="font-size:.7rem;color:#4b5563;margin-top:4px">'
-            f'Bars show 25th–75th percentile of 50,000 simulations · '
+            + f'<div style="font-size:.72rem;color:#64748b;margin-top:4px">'
+            f'Bars = 25th–75th percentile · 50,000 simulations · '
             f'<span style="color:#22c55e">■</span> = recommended side</div>'
             + f'</div>'
         )
     elif deviation >= 0.35:
         bands_html = (
-            '<div style="font-size:.82rem;color:#6b7280;padding:6px 0">'
+            '<div style="font-size:.82rem;color:#64748b;padding:6px 0">'
             '📊 Score bands hidden — model and market diverge too much for reliable score prediction.'
             '</div>'
         )
     else:
-        bands_html = '<div style="font-size:.8rem;color:#4b5563">Re-run pipeline for score prediction</div>'
+        bands_html = '<div style="font-size:.8rem;color:#64748b">Re-run pipeline for score prediction</div>'
 
+    # ── O/U line ─────────────────────────────────────────────────────────────
     bt = r.get("blended_total") or r.get("mc_total")
     vt = r.get("vegas_total")
     total_sig = str(r.get("total_signal") or "")
-
     if bt and vt:
         diff   = _safe_float(bt) - _safe_float(vt)
         ou_dir = "OVER" if diff > 0 else "UNDER"
         if total_sig:
-            score_total = (f"Total: {_safe_float(bt):.1f} runs  ·  Market {T_OU}: {vt}"
+            score_total = (f"Model total: {_safe_float(bt):.1f} runs  ·  Vegas O/U: {vt}"
                            f"  →  <b style='color:#fef08a'>Also play: {total_sig}</b>")
         else:
-            score_total = (f"Total: {_safe_float(bt):.1f} runs  "
-                           f"(Market {T_OU}: {vt}  ·  model leans {ou_dir})")
+            score_total = (f"Model total: {_safe_float(bt):.1f} runs  "
+                           f"(Vegas O/U: {vt}  ·  model leans {ou_dir})")
     elif bt:
         score_total = f"Expected total: {_safe_float(bt):.1f} runs"
     else:
         score_total = ""
 
-    # Why bullets
-    bullets_html = "".join(f'<div class="why-item">{b}</div>' for b in _why_bullets(r))
-
-    # No separate "Also consider" block — it's now inline in the score section
-    also_html = ""
-
-    # Meta bar
-    lineup_str = "Confirmed lineup" if r.get("lineup_confirmed") else "Projected lineup"
-    temp_f = _safe_float(r.get("temp_f"), 72)
-    ml_str = ""
-    if r.get("vegas_ml_home") is not None:
-        ml_str = (f"ML: {home} {int(r['vegas_ml_home']):+d}"
-                  + (f" / {away} {int(r['vegas_ml_away']):+d}" if r.get("vegas_ml_away") else ""))
-
-    # SP flags
-    hf = f" [{r['home_sp_flag']}]" if r.get("home_sp_flag") not in ("NORMAL","UNKNOWN","","None",None) else ""
-    af = f" [{r['away_sp_flag']}]" if r.get("away_sp_flag") not in ("NORMAL","UNKNOWN","","None",None) else ""
-    sp_str = (f"{home} SP: {r.get('home_sp','').title()}{hf} {T_XWOBA} {_safe_float(r.get('home_sp_xwoba')):.3f}  "
-              f"|  {away} SP: {r.get('away_sp','').title()}{af} {T_XWOBA} {_safe_float(r.get('away_sp_xwoba')):.3f}")
-
     score_total_html = f'<div class="score-total">{score_total}</div>' if score_total else ""
 
-    # Props snapshot (F5, NRFI, K)
+    # ── Props snapshot (F5, NRFI, K) ─────────────────────────────────────────
     nrfi_prob  = _safe_float(r.get("mc_nrfi_prob"), 0.0)
     f5_total   = _safe_float(r.get("mc_f5_total"))
     f5_hw      = _safe_float(r.get("mc_f5_home_win_prob"), 0.0)
@@ -757,32 +829,68 @@ def render_card(r: dict, n: int, tier: str):
 
     props_parts = []
     if nrfi_prob > 0:
-        nrfi_color = "#4ade80" if nrfi_prob >= 0.65 else "#fde047" if nrfi_prob >= 0.55 else "#9ca3af"
+        nrfi_color = "#4ade80" if nrfi_prob >= 0.65 else "#fde047" if nrfi_prob >= 0.55 else "#94a3b8"
         props_parts.append(f'<span style="color:{nrfi_color}">NRFI: {nrfi_prob:.0%}</span>')
     if f5_total > 0:
         props_parts.append(f'F5 total: {f5_total:.1f} runs')
     if f5_hw > 0:
         props_parts.append(f'F5 {home} win: {f5_hw:.0%}')
     if home_k > 0:
-        props_parts.append(f'{home} SP K: {home_k:.1f} ({home_ip:.1f}ip)')
+        props_parts.append(f'{home} SP Ks: {home_k:.1f} ({home_ip:.1f}ip)')
     if away_k > 0:
-        props_parts.append(f'{away} SP K: {away_k:.1f} ({away_ip:.1f}ip)')
+        props_parts.append(f'{away} SP Ks: {away_k:.1f} ({away_ip:.1f}ip)')
 
     props_html = ""
     if props_parts:
         props_inner = "  &nbsp;·&nbsp;  ".join(props_parts)
-        props_html = f'<div style="font-size:.8rem;color:#9ca3af;margin-top:6px;padding:6px 0;border-top:1px solid rgba(255,255,255,.06)">{props_inner}</div>'
+        props_html = f'<div style="font-size:.82rem;color:#94a3b8;margin-top:8px;padding:8px 0;border-top:1px solid rgba(255,255,255,.08)">{props_inner}</div>'
 
+    # ── Why bullets ──────────────────────────────────────────────────────────
+    bullets_html = "".join(f'<div class="why-item">{b}</div>' for b in _why_bullets(r))
+
+    # ── Meta bar ─────────────────────────────────────────────────────────────
+    lineup_str = "✅ Confirmed lineup" if r.get("lineup_confirmed") else "📋 Projected lineup"
+    temp_f = _safe_float(r.get("temp_f"), 72)
+    ml_str = ""
+    if r.get("vegas_ml_home") is not None:
+        ml_str = (f"ML: {home} {int(r['vegas_ml_home']):+d}"
+                  + (f" / {away} {int(r['vegas_ml_away']):+d}" if r.get("vegas_ml_away") else ""))
+
+    hf = f" [{r['home_sp_flag']}]" if r.get("home_sp_flag") not in ("NORMAL","UNKNOWN","","None",None) else ""
+    af = f" [{r['away_sp_flag']}]" if r.get("away_sp_flag") not in ("NORMAL","UNKNOWN","","None",None) else ""
+    sp_str = (f"{home} SP: {r.get('home_sp','').title()}{hf} xwOBA {_safe_float(r.get('home_sp_xwoba')):.3f}  "
+              f"|  {away} SP: {r.get('away_sp','').title()}{af} xwOBA {_safe_float(r.get('away_sp_xwoba')):.3f}")
+
+    # ── Game date + time label ────────────────────────────────────────────────
+    game_date_val = r.get("game_date") or ""
+    game_time_val = str(r.get("game_time_et") or "").strip()
+    try:
+        import datetime as _dt
+        _d = _dt.date.fromisoformat(str(game_date_val)[:10])
+        date_label = _d.strftime("%A, %B %d")
+    except Exception:
+        date_label = str(game_date_val)[:10] if game_date_val else ""
+    if game_time_val:
+        date_label = f"{date_label} · {game_time_val}"
+
+    # ── Assemble card ────────────────────────────────────────────────────────
     st.markdown(f"""
 <div class="{card_cls}">
 
-  <div class="card-head">
-    <div class="card-num">#{n}</div>
-    <div class="card-pick">
-      <div class="card-pick-line">{bet_label}</div>
-      <div class="card-pick-sub">{bet_sub}</div>
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:4px">
+    <div>
+      <div style="font-size:.72rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:2px">#{n} &nbsp;·&nbsp; {date_label}</div>
+      <div class="game-matchup">{away} @ {home}</div>
     </div>
-    <div><span class="{badge_cls}">{badge_txt}</span></div>
+    <div style="margin-top:4px"><span class="{badge_cls}">{badge_txt}</span></div>
+  </div>
+
+  <div style="margin-bottom:10px">
+    <div style="font-size:.72rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:3px">Recommended bet</div>
+    <div style="display:flex;align-items:center;gap:12px">
+      <div style="font-size:1.25rem;font-weight:800;color:#4ade80">{bet_label}</div>
+      <div style="font-size:.85rem;color:#94a3b8">{bet_sub.split('·')[-1].strip() if '·' in bet_sub else bet_sub}</div>
+    </div>
   </div>
 
   <div class="conf-wrap">
@@ -794,16 +902,19 @@ def render_card(r: dict, n: int, tier: str):
     <div class="score-label">Predicted score</div>
     <div class="score-main">{score_main}</div>
     {bands_html}
+    {ats_ci_html}
     {score_total_html}
     {props_html}
+  </div>
+
+  <div class="bet-action">
+    🎯 <b>The play:</b> {bet_desc if bet_desc else bet_label}
   </div>
 
   <div class="why-section">
     <div class="why-label">Why this bet</div>
     {bullets_html}
   </div>
-
-  {also_html}
 
   <div class="meta-bar">
     {temp_f:.0f}°F &nbsp;·&nbsp; {lineup_str}
@@ -829,16 +940,23 @@ tab_picks, tab_season, tab_history, tab_performance = st.tabs([
 # TAB 1 — TODAY'S PICKS
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_picks:
-    today = datetime.date.today()
-    st.session_state.pick_date = today
+    today    = datetime.date.today()
+    tomorrow = today + datetime.timedelta(days=1)
 
-    col_refresh, = st.columns([1])
-    if st.button("🔄 Refresh picks", key="picks_refresh"):
-        st.cache_data.clear()
-        st.rerun()
-
-    date_str = today.isoformat()
-    st.caption(f"Showing picks for **{today.strftime('%A, %B %d, %Y')}**")
+    # ── Top controls ──────────────────────────────────────────────────────────
+    ctrl_left, ctrl_mid, ctrl_right = st.columns([2, 3, 1])
+    with ctrl_left:
+        day_filter = st.radio(
+            "Show games for",
+            options=["Today", "Tomorrow", "Both"],
+            index=0,
+            horizontal=True,
+            key="day_filter",
+        )
+    with ctrl_right:
+        if st.button("🔄 Refresh", key="picks_refresh"):
+            st.cache_data.clear()
+            st.rerun()
 
     # Pipeline health banner
     _health = load_pipeline_health()
@@ -877,12 +995,23 @@ with tab_picks:
 - **Projected lineup** — Starters are based on rotation projections, not yet confirmed.
 """)
 
-    with st.spinner("Loading picks..."):
-        results = load_card(date_str)
+    # ── Load data for selected day(s) ─────────────────────────────────────────
+    dates_to_show = []
+    if day_filter in ("Today", "Both"):
+        dates_to_show.append(today)
+    if day_filter in ("Tomorrow", "Both"):
+        dates_to_show.append(tomorrow)
 
-    if not results:
-        st.warning(f"No predictions for {today.strftime('%B %d, %Y')} — pipeline may not have run yet.")
-        st.info("Run `python run_pipeline.py --daily` to generate today's card, or start the scheduler with `python run_daily_scheduler.py`.")
+    with st.spinner("Loading picks..."):
+        cards_by_date = {}
+        for d in dates_to_show:
+            cards_by_date[d] = load_card(d.isoformat())
+
+    all_results = [r for d in dates_to_show for r in cards_by_date[d]]
+
+    if not all_results:
+        st.warning(f"No predictions available — pipeline may not have run yet.")
+        st.info("Run `python run_pipeline.py --daily` to generate picks, or start the scheduler with `python run_daily_scheduler.py`.")
         st.stop()
 
     def _sort_key(r):
@@ -893,8 +1022,6 @@ with tab_picks:
         edge   = _safe_float(r.get("best_edge")) or abs(_safe_float(r.get("blended_rl"), 0.5) - 0.5)
         return (order, -edge)
 
-    results = sorted(results, key=_sort_key)
-
     def _is_strong(r):
         rl_sig = str(r.get("rl_signal") or "")
         return str(r.get("best_tier") or "") == "**" or \
@@ -904,59 +1031,98 @@ with tab_picks:
         return str(r.get("best_tier") or "") == "*" or \
                ("*" in rl_sig and "**" not in rl_sig and not r.get("best_tier"))
 
-    strong = [r for r in results if _is_strong(r)]
-    lean   = [r for r in results if _is_lean(r)]
-    skip   = [r for r in results if not _is_strong(r) and not _is_lean(r)]
+    def _render_day_section(results: list, label: str, date_obj: datetime.date):
+        """Render a full day's picks with section header, summary bar, and cards."""
+        if not results:
+            st.info(f"No predictions for {date_obj.strftime('%A, %B %d')} — run the pipeline to generate.")
+            return
 
-    # Summary bar
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Games Today",  len(results))
-    c2.metric("Strong Plays", len(strong))
-    c3.metric("Lean Plays",   len(lean))
-    c4.metric("No Edge",      len(skip))
+        results = sorted(results, key=_sort_key)
+        strong  = [r for r in results if _is_strong(r)]
+        lean    = [r for r in results if _is_lean(r)]
+        skip    = [r for r in results if not _is_strong(r) and not _is_lean(r)]
 
-    # Quick-picks chip bar — all bets at a glance
-    if strong or lean:
-        chips_html = ""
-        for r in strong + lean:
-            label, _ = _format_bet_label(r)
-            conf = int(_model_prob(r) * 100)
-            cls = "pick-chip-strong" if _is_strong(r) else "pick-chip-lean"
-            chips_html += f'<span class="pick-chip {cls}">{label} · {conf}%</span>'
-        st.markdown(f'<div style="margin:8px 0 4px 0">{chips_html}</div>',
-                    unsafe_allow_html=True)
-    st.divider()
+        # Summary metrics
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Games", len(results))
+        c2.metric("Strong", len(strong))
+        c3.metric("Lean",   len(lean))
+        c4.metric("No Edge", len(skip))
 
-    n = 1
-    if strong:
-        st.markdown('<div class="section-hdr">Strong Plays</div>', unsafe_allow_html=True)
-        for r in strong:
-            render_card(r, n, "strong")
-            n += 1
+        # Quick-picks chip bar
+        if strong or lean:
+            chips_html = ""
+            for r in strong + lean:
+                lbl, _ = _format_bet_label(r)
+                conf   = int(_model_prob(r) * 100)
+                cls    = "pick-chip-strong" if _is_strong(r) else "pick-chip-lean"
+                chips_html += f'<span class="pick-chip {cls}">{lbl} · {conf}%</span>'
+            st.markdown(f'<div style="margin:8px 0 4px 0">{chips_html}</div>',
+                        unsafe_allow_html=True)
 
-    if lean:
-        st.markdown('<div class="section-hdr">Lean Plays</div>', unsafe_allow_html=True)
-        for r in lean:
-            render_card(r, n, "lean")
-            n += 1
+        n = 1
+        if strong:
+            st.markdown('<div class="section-hdr">Strong Plays</div>', unsafe_allow_html=True)
+            for r in strong:
+                render_card(r, n, "strong")
+                n += 1
 
-    if skip:
-        with st.expander(f"No edge — {len(skip)} game{'s' if len(skip)!=1 else ''} skipped"):
-            for r in skip:
-                a, h = r.get("away_team",""), r.get("home_team","")
-                vt   = r.get("vegas_total","")
-                bl   = _safe_float(r.get("blended_rl"), 0.5)
-                mw   = _safe_float(r.get("mc_home_win"), 0.5)
-                tsig = r.get("total_signal","")
-                tsig_html = f"  →  <b>{tsig}</b>" if tsig else ""
-                st.markdown(
-                    f'<div class="skip-card"><div class="skip-game">'
-                    f'<strong>{a} @ {h}</strong>'
-                    f'{f"  ·  O/U {vt}" if vt else ""}{tsig_html}'
-                    f'<br><span style="font-size:.78rem">RL blend: {bl:.0%}  ·  Win%: {mw:.0%}  ·  '
-                    f'No significant edge found</span>'
-                    f'</div></div>',
-                    unsafe_allow_html=True)
+        if lean:
+            st.markdown('<div class="section-hdr">Lean Plays</div>', unsafe_allow_html=True)
+            for r in lean:
+                render_card(r, n, "lean")
+                n += 1
+
+        if skip:
+            with st.expander(f"No edge — {len(skip)} game{'s' if len(skip)!=1 else ''} skipped"):
+                for r in skip:
+                    a, h   = r.get("away_team",""), r.get("home_team","")
+                    vt     = r.get("vegas_total","")
+                    bl     = _safe_float(r.get("blended_rl"), 0.5)
+                    mw     = _safe_float(r.get("mc_home_win"), 0.5)
+                    tsig   = r.get("total_signal","")
+                    tsig_html = f"  →  <b>{tsig}</b>" if tsig else ""
+                    st.markdown(
+                        f'<div class="skip-card"><div class="skip-game">'
+                        f'<strong>{a} @ {h}</strong>'
+                        f'{f"  ·  O/U {vt}" if vt else ""}{tsig_html}'
+                        f'<br><span style="font-size:.78rem">RL blend: {bl:.0%}  ·  '
+                        f'Win%: {mw:.0%}  ·  No significant edge found</span>'
+                        f'</div></div>',
+                        unsafe_allow_html=True)
+
+    # ── Render section(s) ─────────────────────────────────────────────────────
+    if day_filter == "Both":
+        # Today section
+        st.markdown(
+            f'<h3 style="margin:0 0 8px 0; color:#e2e8f0">📅 Today — '
+            f'{today.strftime("%A, %B %d")}</h3>',
+            unsafe_allow_html=True)
+        _render_day_section(cards_by_date[today], "Today", today)
+
+        st.divider()
+
+        # Tomorrow section
+        tomorrow_confirmed = any(
+            r.get("lineup_confirmed") for r in cards_by_date.get(tomorrow, [])
+        )
+        lineup_note = "" if tomorrow_confirmed else " *(probable pitchers — lineups TBD)*"
+        st.markdown(
+            f'<h3 style="margin:16px 0 8px 0; color:#e2e8f0">📅 Tomorrow — '
+            f'{tomorrow.strftime("%A, %B %d")}{lineup_note}</h3>',
+            unsafe_allow_html=True)
+        _render_day_section(cards_by_date.get(tomorrow, []), "Tomorrow", tomorrow)
+
+    elif day_filter == "Tomorrow":
+        tomorrow_confirmed = any(
+            r.get("lineup_confirmed") for r in cards_by_date.get(tomorrow, [])
+        )
+        if not tomorrow_confirmed:
+            st.caption("⚠️ Tomorrow's lineups not yet confirmed — showing probable pitchers.")
+        _render_day_section(cards_by_date.get(tomorrow, []), "Tomorrow", tomorrow)
+
+    else:  # Today
+        _render_day_section(cards_by_date.get(today, []), "Today", today)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

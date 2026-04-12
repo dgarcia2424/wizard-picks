@@ -157,23 +157,39 @@ def schedule_et(time_str: str, job_fn, label: str) -> None:
 # ---------------------------------------------------------------------------
 
 def morning_run() -> None:
-    """06:00 ET — pull lineups, odds, and health-check."""
+    """06:00 ET — pull lineups + odds for today AND tomorrow, health-check."""
     try:
-        log_header("MORNING RUN — lineups + odds")
-        run_step("lineup_pull.py", "lineups")
-        run_step("odds_current_pull.py", "odds")
+        log_header("MORNING RUN — lineups + odds (today + tomorrow)")
+        tomorrow = (date.today() + __import__("datetime").timedelta(days=1)).isoformat()
+
+        # Today
+        run_step("lineup_pull.py", "lineups_today")
+        run_step("odds_current_pull.py", "odds_today")
+
+        # Tomorrow — probable pitchers + next-day odds (best-effort)
+        run_step(f"lineup_pull.py --date {tomorrow}", "lineups_tmrw")
+        run_step(f"odds_current_pull.py --date {tomorrow}", "odds_tmrw")
+
         run_step("pipeline_health.py --upload", "health")
     except Exception:
         log.exception("Unhandled exception in morning_run — scheduler will continue.")
 
 
 def picks_run() -> None:
-    """08:30 ET — build profiles, generate picks, upload."""
+    """08:30 ET — build profiles, generate picks for today + tomorrow, upload."""
     try:
-        log_header("PICKS RUN — profiles + picks + upload")
+        log_header("PICKS RUN — profiles + picks (today + tomorrow) + upload")
+        tomorrow = (date.today() + __import__("datetime").timedelta(days=1)).isoformat()
+
         run_step("build_pitcher_profile.py", "profiles")
         run_step("build_team_stats_2026.py", "team_stats")
-        run_step("run_today.py --csv", "picks")
+
+        # Generate today's card
+        run_step("run_today.py --csv", "picks_today")
+
+        # Generate tomorrow's card (uses tomorrow's lineup + odds files)
+        run_step(f"run_today.py --date {tomorrow} --csv", "picks_tmrw")
+
         run_step("supabase_upload.py", "upload")
         run_step("pipeline_health.py --upload", "health")
     except Exception:
@@ -182,11 +198,13 @@ def picks_run() -> None:
 
 def k_props_retry() -> None:
     """
-    Every 30 min, 10:00–18:30 ET — fetch K props if stale or missing.
+    Every 30 min, 10:00–18:30 ET — fetch K props if stale/missing, refresh
+    lineups + lineup quality if batting orders not yet confirmed, then
+    re-run picks and upload if anything changed.
 
     Conditions to run:
     1. Current ET time is within the 10:00–18:30 window.
-    2. The K props parquet for today is missing OR older than 6 hours.
+    2. K props parquet is missing/stale OR lineups are not yet confirmed.
     """
     try:
         now_et = _now_et()
@@ -200,28 +218,82 @@ def k_props_retry() -> None:
             log.debug("K props retry: outside 10:00-18:30 ET window -- skipping")
             return
 
-        today = date.today().isoformat()
-        kprops_path = Path("data/statcast") / f"k_props_{today}.parquet"
+        import datetime as _dt
+        today     = date.today().isoformat()
+        tomorrow  = (_dt.date.today() + _dt.timedelta(days=1)).isoformat()
+        kprops_path   = Path("data/statcast") / f"k_props_{today}.parquet"
+        lq_path       = Path("data/statcast") / "lineup_quality_today.parquet"
+        lineups_path  = Path("data/statcast") / "lineups_today.parquet"
+        tmrw_lineups  = Path("data/statcast") / f"lineups_{tomorrow}.parquet"
 
+        # ── Check if lineups are confirmed ────────────────────────────────
+        lineups_confirmed = False
+        if lineups_path.exists():
+            try:
+                import pandas as _pd
+                _ldf = _pd.read_parquet(lineups_path)
+                lineups_confirmed = bool(
+                    _ldf["home_lineup_confirmed"].any() or
+                    _ldf["away_lineup_confirmed"].any()
+                )
+            except Exception:
+                pass
+
+        # ── Check if K props need refreshing ──────────────────────────────
+        kprops_stale = True
         if kprops_path.exists():
             age_h = (time.time() - kprops_path.stat().st_mtime) / 3600
             if age_h < K_PROPS_MAX_AGE_HOURS:
-                log.info("K props fresh (%.1fh old) — skipping retry", age_h)
-                return
-            log.info("K props stale (%.1fh old) — re-fetching", age_h)
+                kprops_stale = False
+                log.info("K props fresh (%.1fh old)", age_h)
+            else:
+                log.info("K props stale (%.1fh old) — re-fetching", age_h)
         else:
-            log.info("K props file not found for %s — fetching", today)
+            log.info("K props missing for %s — fetching", today)
 
-        log_header("K PROPS RETRY")
-        rc, _ = run_step("odds_current_pull.py", "k_props")
-        if rc == 0 and kprops_path.exists():
-            log.info("K props successfully fetched — uploading updated picks")
+        # ── Check if lineup quality needs refreshing ───────────────────────
+        lq_missing = not lq_path.exists() or (
+            lq_path.exists() and _pd.read_parquet(lq_path).empty
+            if lq_path.exists() else True
+        )
+
+        if not kprops_stale and lineups_confirmed and not lq_missing:
+            log.info("K props fresh, lineups confirmed, lineup quality built — nothing to do")
+            return
+
+        log_header("K PROPS / LINEUP RETRY")
+        did_something = False
+
+        # Refresh lineups + lineup quality if not yet confirmed
+        if not lineups_confirmed or lq_missing:
+            log.info("Lineups not yet confirmed — refreshing lineups + lineup quality")
+            run_step("lineup_pull.py", "lineups")
+            run_step("build_lineup_quality.py", "lineup_quality")
+            did_something = True
+
+        # Also refresh tomorrow's lineups if file is missing/stale
+        if not tmrw_lineups.exists():
+            log.info("Tomorrow's lineups missing — fetching")
+            run_step(f"lineup_pull.py --date {tomorrow}", "lineups_tmrw")
+            run_step(f"build_lineup_quality.py --date {tomorrow}", "lineup_quality_tmrw")
+            did_something = True
+
+        # Refresh K props / odds if stale
+        if kprops_stale:
+            rc, _ = run_step("odds_current_pull.py", "k_props")
+            if rc == 0:
+                did_something = True
+            else:
+                log.warning("K props fetch failed (rc=%d) — will retry at next interval", rc)
+
+        # Re-run picks and upload if we updated any inputs
+        if did_something:
+            log.info("Inputs updated — regenerating picks (today + tomorrow) and uploading")
+            run_step("run_today.py --csv", "picks_today")
+            run_step(f"run_today.py --date {tomorrow} --csv", "picks_tmrw")
             run_step("supabase_upload.py", "upload")
             run_step("pipeline_health.py --upload", "health")
-        elif rc != 0:
-            log.warning("K props fetch failed (rc=%d) — will retry at next interval", rc)
-        else:
-            log.warning("K props script exited OK but parquet still absent — will retry")
+
     except Exception:
         log.exception("Unhandled exception in k_props_retry — scheduler will continue.")
 

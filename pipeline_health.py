@@ -56,7 +56,7 @@ _BOLD   = "\033[1m"
 ARTIFACT_DEFS = [
     ("lineups",          "data/statcast/lineups_today.parquet",            4,   True,  "Today's starting lineups"),
     ("lineups_long",     "data/statcast/lineups_today_long.parquet",       4,   False, "Batting order for lineup quality"),
-    ("odds_current",     "data/statcast/odds_current_2026_{date}.parquet", 4,   True,  "Today's ML/RL/total odds"),
+    ("odds_current",     "data/statcast/odds_current_{date_us}.parquet",   4,   True,  "Today's ML/RL/total odds"),
     ("k_props",          "data/statcast/k_props_{date}.parquet",           6,   False, "Pitcher K prop lines"),
     ("pitcher_profiles", "data/statcast/pitcher_profiles_2026.parquet",    26,  True,  "Pitcher xwOBA/K%/IP profiles"),
     ("team_stats",       "data/statcast/team_stats_2026.parquet",          26,  True,  "Team batting/bullpen stats"),
@@ -120,7 +120,8 @@ def _check_artifact(name: str, rel_path: str, max_age_hours: float,
                     critical: bool, description: str,
                     date_str: str) -> dict:
     """Return the status dict for a single artifact."""
-    path_str = rel_path.replace("{date}", date_str)
+    date_us   = date_str.replace("-", "_")   # 2026-04-12 → 2026_04_12
+    path_str  = rel_path.replace("{date}", date_str).replace("{date_us}", date_us)
     full_path = BASE_DIR / path_str
 
     result = {
@@ -190,7 +191,7 @@ def check_health(date_str: str = None, verbose: bool = True) -> dict:
                         "k_props: not yet available (props post ~2h before game time)"
                     )
                 else:
-                    warnings_list.append(f"{name}: file missing ({rel_path})")
+                    warnings_list.append(f"{name}: file missing ({info['path']})")
             else:  # stale
                 age = info["age_hours"]
                 warnings_list.append(

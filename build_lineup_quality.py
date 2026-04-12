@@ -136,7 +136,7 @@ def _refresh_lineups(date_str: str, verbose: bool = True) -> None:
         return
     wide_df = records_to_wide(records)
     long_df = records_to_long(records)
-    save_today_outputs(wide_df, long_df)
+    save_today_outputs(wide_df, long_df, date_str=date_str)
 
 
 # ---------------------------------------------------------------------------
@@ -167,37 +167,50 @@ def build(date_str: str, verbose: bool = True) -> dict:
     Compute lineup wRC+ for every (game_pk, team) playing on date_str.
 
     Steps:
-      1. Load (or refresh) lineups_today_long.parquet.
+      1. Load (or refresh) lineups long parquet for date_str.
+         Prefers date-stamped file (lineups_{date_str}_long.parquet);
+         falls back to lineups_today_long.parquet when date_str == today.
       2. Build wRC+ lookup from fangraphs_batters.csv.
       3. For each game+team, compute average wRC+ of confirmed starters.
-      4. Save lineup_quality_today.parquet.
+      4. Save lineup_quality_{date_str}.parquet (and lineup_quality_today.parquet
+         when date_str == today).
       5. Return dict keyed by (game_pk, team_abbr) → lineup_wrc_plus.
 
     Falls back gracefully: returns {} if no lineup data is available.
     """
+    import datetime as _dt
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    today_str = _dt.date.today().isoformat()
+    is_today  = (date_str == today_str)
 
     # --- Step 1: Load or refresh lineup data ---------------------------------
-    if _is_stale(LINEUP_LONG_PATH):
+    # Prefer date-stamped long file; fall back to canonical today file
+    dated_long_path = OUTPUT_DIR / f"lineups_{date_str}_long.parquet"
+    long_path = dated_long_path if dated_long_path.exists() else LINEUP_LONG_PATH
+
+    if _is_stale(long_path):
         try:
             _refresh_lineups(date_str, verbose=verbose)
+            # After refresh, prefer the newly written dated file
+            if dated_long_path.exists():
+                long_path = dated_long_path
         except Exception as exc:
             if verbose:
                 print(f"  [WARN] Could not refresh lineups: {exc}")
 
     try:
-        long_df = pd.read_parquet(LINEUP_LONG_PATH, engine="pyarrow")
+        long_df = pd.read_parquet(long_path, engine="pyarrow")
     except Exception as exc:
         if verbose:
-            print(f"  [WARN] Could not read {LINEUP_LONG_PATH}: {exc}")
+            print(f"  [WARN] Could not read {long_path}: {exc}")
         return {}
 
     if long_df.empty:
         if verbose:
-            print("  [INFO] lineups_today_long.parquet is empty — no lineup quality scores available.")
+            print(f"  [INFO] {long_path.name} is empty — no lineup quality scores available.")
         return {}
 
-    # Filter to today's date if game_date column is present
+    # Filter to the requested date if game_date column is present
     if "game_date" in long_df.columns:
         long_df = long_df[long_df["game_date"].astype(str).str.startswith(date_str[:10])]
         if long_df.empty:
@@ -239,16 +252,27 @@ def build(date_str: str, verbose: bool = True) -> dict:
                 f"lineup_wrc+={avg_wrc:.1f}  matched={n_matched}/{len(player_names)}"
             )
 
-    # --- Step 4: Save lineup_quality_today.parquet ---------------------------
+    # --- Step 4: Save quality parquet (dated + canonical today) --------------
     if quality_rows:
         quality_df = pd.DataFrame(quality_rows)
+        # Always save date-stamped file
+        dated_out = OUTPUT_DIR / f"lineup_quality_{date_str}.parquet"
         try:
-            quality_df.to_parquet(LINEUP_QUALITY_PATH, engine="pyarrow", index=False)
+            quality_df.to_parquet(dated_out, engine="pyarrow", index=False)
             if verbose:
-                print(f"  Saved {LINEUP_QUALITY_PATH}  shape={quality_df.shape}")
+                print(f"  Saved {dated_out}  shape={quality_df.shape}")
         except Exception as exc:
             if verbose:
-                print(f"  [WARN] Could not save {LINEUP_QUALITY_PATH}: {exc}")
+                print(f"  [WARN] Could not save {dated_out}: {exc}")
+        # Also save canonical today file when date_str == today
+        if is_today:
+            try:
+                quality_df.to_parquet(LINEUP_QUALITY_PATH, engine="pyarrow", index=False)
+                if verbose:
+                    print(f"  Saved {LINEUP_QUALITY_PATH}  shape={quality_df.shape}")
+            except Exception as exc:
+                if verbose:
+                    print(f"  [WARN] Could not save {LINEUP_QUALITY_PATH}: {exc}")
 
     return result_dict
 

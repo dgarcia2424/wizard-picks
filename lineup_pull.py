@@ -254,6 +254,24 @@ def parse_game(game: dict) -> dict:
     game_date = game.get("officialDate", game.get("gameDate", "")[:10])
     status    = game.get("status", {}).get("abstractGameState", "")
 
+    # Game time — parse UTC ISO string and convert to ET
+    game_time_et = ""
+    raw_dt = game.get("gameDate", "")
+    start_time_tbd = game.get("status", {}).get("startTimeTBD", False)
+    if raw_dt and not start_time_tbd:
+        try:
+            from datetime import datetime, timezone, timedelta
+            utc_dt = datetime.fromisoformat(raw_dt.replace("Z", "+00:00"))
+            et_offset = timedelta(hours=-4)   # EDT (UTC-4); adjust to -5 for EST in Nov
+            et_dt = utc_dt + et_offset
+            # Cross-platform hour formatting (no leading zero)
+            hour = et_dt.strftime("%I").lstrip("0") or "12"
+            minute = et_dt.strftime("%M")
+            ampm = et_dt.strftime("%p").lower()
+            game_time_et = f"{hour}:{minute} {ampm} ET"
+        except Exception:
+            game_time_et = ""
+
     teams = game.get("teams", {})
     home_raw = teams.get("home", {})
     away_raw = teams.get("away", {})
@@ -301,6 +319,7 @@ def parse_game(game: dict) -> dict:
         "game_date":               game_date,
         "game_pk":                 game_pk,
         "game_status":             status,
+        "game_time_et":            game_time_et,
         "home_team":               home_abbr,
         "away_team":               away_abbr,
         "home_starter_id":         home_sp_id,
@@ -338,7 +357,7 @@ def parse_schedule_response(data: dict) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 WIDE_COLUMNS = [
-    "game_date", "game_pk", "game_status",
+    "game_date", "game_pk", "game_status", "game_time_et",
     "home_team", "away_team",
     "home_starter_id", "home_starter_name",
     "away_starter_id", "away_starter_name",
@@ -391,29 +410,56 @@ def records_to_long(records: list[dict]) -> pd.DataFrame:
 # Save helpers
 # ---------------------------------------------------------------------------
 
-def save_today_outputs(wide_df: pd.DataFrame, long_df: pd.DataFrame) -> None:
-    """Save wide and long DataFrames to the 'today' output files."""
-    wide_parquet = OUTPUT_DIR / "lineups_today.parquet"
-    wide_csv     = OUTPUT_DIR / "lineups_today.csv"
-    long_parquet = OUTPUT_DIR / "lineups_today_long.parquet"
+def save_today_outputs(wide_df: pd.DataFrame, long_df: pd.DataFrame,
+                       date_str: str = None) -> None:
+    """Save wide and long DataFrames to output files.
 
-    try:
-        wide_df.to_parquet(wide_parquet, engine="pyarrow", index=False)
-        print(f"Saved {wide_parquet}  shape={wide_df.shape}")
-    except Exception as exc:
-        print(f"[ERROR] Could not save {wide_parquet}: {exc}")
+    Always writes the canonical 'today' files for backward compatibility.
+    When date_str is provided, also writes date-stamped files so multi-day
+    pipelines (today + tomorrow) can coexist without overwriting each other.
+    """
+    import datetime as _dt
+    today_str = _dt.date.today().isoformat()
+    is_today  = (date_str is None) or (date_str == today_str)
 
-    try:
-        wide_df.to_csv(wide_csv, index=False)
-        print(f"Saved {wide_csv}  shape={wide_df.shape}")
-    except Exception as exc:
-        print(f"[ERROR] Could not save {wide_csv}: {exc}")
+    # Canonical 'today' files — always written (or only when it IS today)
+    if is_today:
+        wide_parquet = OUTPUT_DIR / "lineups_today.parquet"
+        wide_csv     = OUTPUT_DIR / "lineups_today.csv"
+        long_parquet = OUTPUT_DIR / "lineups_today_long.parquet"
 
-    try:
-        long_df.to_parquet(long_parquet, engine="pyarrow", index=False)
-        print(f"Saved {long_parquet}  shape={long_df.shape}")
-    except Exception as exc:
-        print(f"[ERROR] Could not save {long_parquet}: {exc}")
+        try:
+            wide_df.to_parquet(wide_parquet, engine="pyarrow", index=False)
+            print(f"Saved {wide_parquet}  shape={wide_df.shape}")
+        except Exception as exc:
+            print(f"[ERROR] Could not save {wide_parquet}: {exc}")
+
+        try:
+            wide_df.to_csv(wide_csv, index=False)
+            print(f"Saved {wide_csv}  shape={wide_df.shape}")
+        except Exception as exc:
+            print(f"[ERROR] Could not save {wide_csv}: {exc}")
+
+        try:
+            long_df.to_parquet(long_parquet, engine="pyarrow", index=False)
+            print(f"Saved {long_parquet}  shape={long_df.shape}")
+        except Exception as exc:
+            print(f"[ERROR] Could not save {long_parquet}: {exc}")
+
+    # Date-stamped files — always written when date_str is provided
+    if date_str:
+        dated_wide = OUTPUT_DIR / f"lineups_{date_str}.parquet"
+        dated_long = OUTPUT_DIR / f"lineups_{date_str}_long.parquet"
+        try:
+            wide_df.to_parquet(dated_wide, engine="pyarrow", index=False)
+            print(f"Saved {dated_wide}  shape={wide_df.shape}")
+        except Exception as exc:
+            print(f"[ERROR] Could not save {dated_wide}: {exc}")
+        try:
+            long_df.to_parquet(dated_long, engine="pyarrow", index=False)
+            print(f"Saved {dated_long}  shape={long_df.shape}")
+        except Exception as exc:
+            print(f"[ERROR] Could not save {dated_long}: {exc}")
 
 
 def save_historical_year(year: int, records: list[dict]) -> None:
@@ -635,7 +681,7 @@ def main() -> None:
     print(preview.to_string(index=False))
 
     print()
-    save_today_outputs(wide_df, long_df)
+    save_today_outputs(wide_df, long_df, date_str=date_str)
 
     # Print lineup details for confirmed games
     confirmed = [r for r in records if r["home_lineup_confirmed"] or r["away_lineup_confirmed"]]

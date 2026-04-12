@@ -68,25 +68,37 @@ def _clean(row: dict) -> dict:
 # UPLOAD FUNCTIONS
 # ---------------------------------------------------------------------------
 
-def upload_daily_card(csv_path: Path = None) -> int:
-    """Upload today's run_today.py output to wizard_daily_card table."""
-    csv_path = csv_path or BASE_DIR / "daily_card.csv"
+def upload_daily_card(csv_path: Path = None, game_date: str = None) -> int:
+    """Upload a daily card CSV to wizard_daily_card table.
+
+    When csv_path is None, falls back to scanning for all dated
+    daily_card_{date}.csv files and uploading each one via upload_all_daily_cards().
+
+    game_date overrides the auto-detected date (useful for testing).
+    """
+    import datetime, re
+
+    # If no path given, scan for all dated files
+    if csv_path is None:
+        return upload_all_daily_cards()
+
     if not csv_path.exists():
         logger.warning(f"  [SKIP] {csv_path.name} not found")
         return 0
 
     df = pd.read_csv(csv_path)
     if df.empty:
-        logger.warning("  [SKIP] daily_card.csv is empty")
+        logger.warning(f"  [SKIP] {csv_path.name} is empty")
         return 0
 
-    client     = _get_client()
-    game_date  = str(df["game"].iloc[0])  # use date from filename fallback
-    # Try to get date from the data or use today
-    import datetime
-    game_date  = datetime.date.today().isoformat()
+    # Infer date from filename (daily_card_YYYY-MM-DD.csv) or fall back to today
+    if game_date is None:
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", csv_path.name)
+        game_date = m.group(1) if m else datetime.date.today().isoformat()
 
-    # Clear today's rows
+    client = _get_client()
+
+    # Clear existing rows for this date before re-inserting
     client.table("wizard_daily_card").delete().eq("game_date", game_date).execute()
 
     success = 0
@@ -132,6 +144,38 @@ def upload_daily_card(csv_path: Path = None) -> int:
 
     logger.info(f"  wizard_daily_card: {success}/{len(df)} rows uploaded for {game_date}")
     return success
+
+
+def upload_all_daily_cards() -> int:
+    """Scan for all daily_card_{date}.csv files and upload each one.
+
+    Uploads cards for today and tomorrow (and any other dated files present).
+    This replaces the single-file upload_daily_card() when no path is given.
+    """
+    import datetime, re
+    total = 0
+    # Find all daily_card_YYYY-MM-DD.csv files
+    dated_files = sorted(BASE_DIR.glob("daily_card_????-??-??.csv"))
+    # Also include legacy daily_card.csv (mapped to today)
+    legacy = BASE_DIR / "daily_card.csv"
+
+    files_to_upload = {}  # date_str → path (dated files take priority)
+    if legacy.exists():
+        files_to_upload[datetime.date.today().isoformat()] = legacy
+    for f in dated_files:
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", f.name)
+        if m:
+            files_to_upload[m.group(1)] = f  # overwrites legacy entry for today
+
+    if not files_to_upload:
+        logger.warning("  [SKIP] No daily_card files found")
+        return 0
+
+    for date_str, path in sorted(files_to_upload.items()):
+        n = upload_daily_card(csv_path=path, game_date=date_str)
+        total += n
+
+    return total
 
 
 def upload_backtest(csv_path: Path = None) -> int:
@@ -407,7 +451,7 @@ def main():
     # Each upload runs independently — one missing table won't stop the others
     results = {}
     for name, fn in [
-        ("daily_card",          upload_daily_card),
+        ("daily_card",          upload_all_daily_cards),
         ("backtest",            upload_backtest),
         ("model_history",       upload_model_history),
         ("historical_backtest", upload_historical_backtest),

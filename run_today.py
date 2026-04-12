@@ -56,10 +56,11 @@ BET_THRESHOLD_LOW_LEAN  = 0.40   # AWAY +1.5 lean
 # ---------------------------------------------------------------------------
 
 def load_lineups(date_str: str) -> pd.DataFrame:
-    """Load today's starters from lineups_today.parquet."""
-    path = DATA_DIR / "lineups_today.parquet"
+    """Load starters — prefers date-stamped file, falls back to lineups_today.parquet."""
+    dated = DATA_DIR / f"lineups_{date_str}.parquet"
+    path  = dated if dated.exists() else DATA_DIR / "lineups_today.parquet"
     if not path.exists():
-        raise FileNotFoundError(f"{path} not found")
+        raise FileNotFoundError(f"No lineup file found for {date_str}")
     df = pd.read_parquet(path, engine="pyarrow")
     df["game_date"] = pd.to_datetime(df["game_date"]).dt.date.astype(str)
 
@@ -70,11 +71,12 @@ def load_lineups(date_str: str) -> pd.DataFrame:
         print(f"  [WARN] No lineups for {date_str}, using most recent: {latest}")
         today = df[df["game_date"] == latest]
 
-    return today[[
-        "game_pk", "game_date", "home_team", "away_team",
-        "home_starter_name", "away_starter_name",
-        "home_lineup_confirmed", "away_lineup_confirmed",
-    ]]
+    cols = ["game_pk", "game_date", "home_team", "away_team",
+            "home_starter_name", "away_starter_name",
+            "home_lineup_confirmed", "away_lineup_confirmed"]
+    if "game_time_et" in today.columns:
+        cols.append("game_time_et")
+    return today[cols]
 
 
 def load_odds(date_str: str) -> pd.DataFrame:
@@ -173,6 +175,7 @@ def _best_bet(
     rl_home_odds,
     alt_home_25_odds,
     alt_away_25_odds,
+    rl_home_line: float = -1.5,
 ) -> dict:
     """
     Evaluate edge across all available lines and return the best bet.
@@ -210,15 +213,31 @@ def _best_bet(
         away_blended, _ = _blend_ml_prob(1 - mc_home_win, vegas_ml_away)
         add("ML (away)", away_blended, vegas_ml_away, raw_model_prob=1 - mc_home_win)
 
-    # Run line candidates — standard (-1.5)
-    add("RL -1.5 (home)", blended_rl,       rl_home_odds)
-    # Away +1.5: need away RL odds — estimate from home RL odds if not available
-    # At -1.5 the away is +1.5; if home RL is e.g. -130, away +1.5 is roughly +110
-    if rl_home_odds is not None and not pd.isna(rl_home_odds):
-        # Simple approximation: flip + 20 cents juice
+    # Run line candidates.
+    # rl_home_line is the actual spread for the home team from the odds file:
+    #   -1.5 means home team is favored (giving runs)
+    #   +1.5 means home team is the underdog (getting runs)
+    # We label bets correctly based on the actual line, not the hardcoded -1.5.
+    if not _is_missing(rl_home_odds):
         ho = float(rl_home_odds)
-        away_rl_est = int(round((-ho + 20) if ho < 0 else (-ho - 20)))
-        add("RL +1.5 (away)", 1 - blended_rl, away_rl_est)
+        # Estimate the other side: flip odds sign and subtract 20 cents juice
+        other_rl_est = int(round((-ho - 20) if ho < 0 else (-ho + 20)))
+
+        if float(rl_home_line) < 0:
+            # Home team is giving runs (-1.5): away team is getting runs (+1.5)
+            home_label = "RL -1.5 (home)"
+            away_label = "RL +1.5 (away)"
+            home_model_prob = blended_rl
+            away_model_prob = 1 - blended_rl
+        else:
+            # Home team is getting runs (+1.5): away team is giving runs (-1.5)
+            home_label = "RL +1.5 (home)"
+            away_label = "RL -1.5 (away)"
+            home_model_prob = 1 - blended_rl   # home covering +1.5 = away NOT covering -1.5
+            away_model_prob = blended_rl        # away covering -1.5 = blended_rl
+
+        add(home_label, home_model_prob, rl_home_odds)
+        add(away_label, away_model_prob, other_rl_est)
 
     # Alternate run line candidates
     add("RL -2.5 (home)", mc_home_covers_25, alt_home_25_odds)
@@ -322,7 +341,7 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
     # Merge odds and weather onto lineups
     if not odds.empty:
         odds_cols = ["home_team", "away_team", "close_ml_home",
-                     "close_ml_away", "close_total", "runline_home_odds"]
+                     "close_ml_away", "close_total", "runline_home", "runline_home_odds"]
         # Include alternate line odds if present in the odds file
         for alt_col in ["alt_rl_home_25_odds", "alt_rl_away_25_odds",
                         "alt_rl_home_ml_odds", "alt_rl_away_ml_odds"]:
@@ -367,9 +386,12 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
         home_sp_norm = norm(home_sp)
         away_sp_norm = norm(away_sp)
 
-        vegas_ml   = game.get("close_ml_home")
-        vegas_tot  = game.get("close_total")
-        rl_odds    = game.get("runline_home_odds")
+        vegas_ml      = game.get("close_ml_home")
+        vegas_tot     = game.get("close_total")
+        rl_odds       = game.get("runline_home_odds")
+        rl_home_line  = game.get("runline_home", -1.5)  # actual spread for home team
+        if _is_missing(rl_home_line):
+            rl_home_line = -1.5
 
         # Fetch team stats rows (None if team not found)
         home_ts = team_stats.loc[home] if (team_stats is not None and home in team_stats.index) else None
@@ -418,6 +440,7 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
             rl_home_odds     = rl_odds,
             alt_home_25_odds = alt_home_25_odds,
             alt_away_25_odds = alt_away_25_odds,
+            rl_home_line     = rl_home_line,
         )
 
         signal = best.get("signal", "")
@@ -488,6 +511,7 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
             "total_signal":   total_signal,
             "lineup_confirmed": bool(game.get("home_lineup_confirmed", False)
                                      and game.get("away_lineup_confirmed", False)),
+            "game_time_et":   game.get("game_time_et", ""),
             "home_lineup_wrc": round(home_lq, 1) if home_lq else None,
             "away_lineup_wrc": round(away_lq, 1) if away_lq else None,
             # F5 predictions
@@ -855,9 +879,14 @@ def main():
     print_card(results, min_edge=args.min_edge)
 
     if args.csv and results:
-        out = "daily_card.csv"
-        pd.DataFrame(results).to_csv(out, index=False)
-        print(f"  Saved -> {out}")
+        # Always save date-stamped file so today + tomorrow can coexist
+        dated_out = f"daily_card_{date_str}.csv"
+        pd.DataFrame(results).to_csv(dated_out, index=False)
+        print(f"  Saved -> {dated_out}")
+        # Also update the canonical daily_card.csv when running for today
+        if date_str == str(datetime.date.today()):
+            pd.DataFrame(results).to_csv("daily_card.csv", index=False)
+            print(f"  Saved -> daily_card.csv")
 
     if args.email and results:
         send_card_email(results, date_str)
