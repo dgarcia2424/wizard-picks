@@ -609,26 +609,16 @@ with tab_picks:
     if "pick_date" not in st.session_state:
         st.session_state.pick_date = today
 
-    qc1, qc2, qc3, qc4, qc5 = st.columns([1, 1, 1, 2, 1])
-    if qc1.button("Today",     use_container_width=True):
+    qc1, qc2, qc3 = st.columns([1, 1, 1])
+    if qc1.button("Today", use_container_width=True):
         st.session_state.pick_date = today
         st.rerun()
-    if qc2.button("Yesterday", use_container_width=True):
-        st.session_state.pick_date = today - datetime.timedelta(days=1)
-        st.rerun()
-    if qc3.button("–1 day",    use_container_width=True):
+    if qc2.button("◀ Prior Day", use_container_width=True):
         st.session_state.pick_date = max(
             st.session_state.pick_date - datetime.timedelta(days=1),
             datetime.date(2026, 3, 28))
         st.rerun()
-    with qc4:
-        selected = st.date_input("", value=st.session_state.pick_date,
-                                 min_value=datetime.date(2026, 3, 28),
-                                 max_value=today, label_visibility="collapsed")
-        if selected != st.session_state.pick_date:
-            st.session_state.pick_date = selected
-            st.rerun()
-    if qc5.button("🔄 Refresh", use_container_width=True):
+    if qc3.button("🔄 Refresh", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
