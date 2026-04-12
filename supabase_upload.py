@@ -309,21 +309,34 @@ def main():
     print("  supabase_upload.py")
     print("=" * 50)
 
-    try:
-        n1 = upload_daily_card()
-        n2 = upload_backtest()
-        n3 = upload_bet_tracker()
-        n4 = upload_model_history()
-        n5 = upload_pipeline_health()
-        total = n1 + n2 + n3 + n4 + n5
-        print(f"\n  Done. {total} total rows uploaded to Supabase.")
-        sys.exit(0)
-    except RuntimeError as e:
-        print(f"\n  [ERROR] {e}")
+    # Each upload runs independently — one missing table won't stop the others
+    results = {}
+    for name, fn in [
+        ("daily_card",      upload_daily_card),
+        ("backtest",        upload_backtest),
+        ("bet_tracker",     upload_bet_tracker),
+        ("model_history",   upload_model_history),
+        ("pipeline_health", upload_pipeline_health),
+    ]:
+        try:
+            results[name] = fn()
+        except RuntimeError as e:
+            logger.error(f"  [ERROR] {name}: {e}")
+            results[name] = 0
+        except Exception as e:
+            logger.error(f"  [ERROR] {name} unexpected: {e}")
+            results[name] = 0
+
+    total = sum(results.values())
+    print(f"\n  Done. {total} total rows uploaded.")
+    for name, n in results.items():
+        status = "OK" if n > 0 else "SKIP/FAIL"
+        print(f"    [{status:9s}] {name}: {n} rows")
+
+    # Exit non-zero only if the critical uploads (daily_card, backtest) both failed
+    if results["daily_card"] == 0 and results["backtest"] == 0:
         sys.exit(1)
-    except Exception as e:
-        print(f"\n  [ERROR] Unexpected: {e}")
-        sys.exit(1)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

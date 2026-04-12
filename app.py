@@ -309,29 +309,40 @@ def load_model_history() -> pd.DataFrame:
 @st.cache_data(ttl=60)
 def load_pipeline_health() -> dict:
     """Load pipeline health status from Supabase or local JSON."""
+    import json as _json
+
+    def _parse_row(row: dict) -> dict:
+        """Ensure list fields are actual lists (Supabase stores them as JSON strings)."""
+        for field in ["missing_critical", "missing_optional", "warnings"]:
+            val = row.get(field, [])
+            if isinstance(val, str):
+                try:
+                    row[field] = _json.loads(val)
+                except Exception:
+                    row[field] = []
+        try:
+            row["artifacts"] = _json.loads(row.get("artifacts_json", "{}"))
+        except Exception:
+            row["artifacts"] = {}
+        if "next_scheduled_runs" not in row and "next_scheduled_runs" in row.get("artifacts", {}):
+            row["next_scheduled_runs"] = row["artifacts"].get("next_scheduled_runs", {})
+        return row
+
     if USE_SUPABASE:
         client = _supabase()
         try:
             today = datetime.date.today().isoformat()
             resp = client.table("wizard_pipeline_health").select("*").eq("date", today).execute()
             if resp.data:
-                row = resp.data[0]
-                # Parse artifacts_json back to dict
-                import json as _json
-                try:
-                    row["artifacts"] = _json.loads(row.get("artifacts_json", "{}"))
-                except Exception:
-                    row["artifacts"] = {}
-                return row
+                return _parse_row(resp.data[0])
         except Exception:
             pass
-    # Fallback: local pipeline_status.json
-    import json as _json
+    # Fallback: local pipeline_status.json (only if <30 min old)
     path = Path(__file__).parent / "pipeline_status.json"
     if path.exists():
         try:
             age_min = (datetime.datetime.now().timestamp() - path.stat().st_mtime) / 60
-            if age_min < 30:  # only use if less than 30 minutes old
+            if age_min < 30:
                 return _json.loads(path.read_text())
         except Exception:
             pass
