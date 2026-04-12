@@ -73,22 +73,13 @@ st.markdown("""
 
 
 # ── Password gate ─────────────────────────────────────────────────────────────
-def _site_password() -> str:
-    # Try Streamlit secrets first (hosted), then env var (local)
-    try:
-        if hasattr(st, "secrets") and "SITE_PASSWORD" in st.secrets:
-            return str(st.secrets["SITE_PASSWORD"]).strip()
-    except Exception:
-        pass
-    return str(os.environ.get("SITE_PASSWORD", "")).strip()
+import hashlib
 
-def _debug_secrets() -> str:
-    """Temporary: show what secrets are visible (key names only, not values)."""
-    try:
-        keys = list(st.secrets.keys())
-        return f"Secrets loaded: {keys}"
-    except Exception as e:
-        return f"Secrets error: {e}"
+# Password stored as SHA256 hash — never plaintext in code or secrets
+_PWD_HASH = "a00efb424a310a6b1e1621c32f5914fadffd6a7df22c7333524515487e372854"
+
+def _check_pwd(entered: str) -> bool:
+    return hashlib.sha256(entered.strip().encode()).hexdigest() == _PWD_HASH
 
 def check_password() -> bool:
     if st.session_state.get("authenticated"):
@@ -102,12 +93,11 @@ def check_password() -> bool:
         pwd = st.text_input("Password", type="password", label_visibility="collapsed",
                             placeholder="Enter password")
         if st.button("Enter", use_container_width=True, type="primary"):
-            if pwd.strip() == _site_password():
+            if _check_pwd(pwd):
                 st.session_state.authenticated = True
                 st.rerun()
             else:
                 st.error("Incorrect password")
-                st.caption(_debug_secrets())  # temp: remove once login works
         st.markdown('</div>', unsafe_allow_html=True)
     return False
 
