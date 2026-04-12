@@ -287,12 +287,17 @@ def upload_historical_backtest() -> int:
 
         df["season"] = year
 
-        # Pre-convert bool/numeric columns
-        for _col in ["bet_win", "home_covers_rl"]:
+        # Float columns that may have landed as object dtype
+        for _col in ["home_sp_xwoba", "away_sp_xwoba", "blended_rl",
+                     "actual_total", "vegas_ml_home", "vegas_ml_away",
+                     "vegas_total", "home_score", "away_score",
+                     "edge", "vegas_implied"]:
             if _col in df.columns:
-                df[_col] = df[_col].map(
-                    lambda x: None if (x is None or (isinstance(x, float) and x != x)) else int(x)
-                )
+                df[_col] = pd.to_numeric(df[_col], errors="coerce")
+
+        # Integer columns: "True"/"False"/"0.0"/"1.0"/NaN → Python int or None
+        # Must coerce per-row (not via .map) so numpy types become Python ints
+        _INT_HIST_COLS = {"bet_win", "home_covers_rl", "actual_home_win"}
 
         client = _get_client()
 
@@ -304,7 +309,24 @@ def upload_historical_backtest() -> int:
 
         success = 0
         for _, row in df.iterrows():
-            record = _clean(row.to_dict())
+            raw = row.to_dict()
+            # Force int columns to Python int (numpy float 0.0/1.0 and bool strings)
+            for _c in _INT_HIST_COLS:
+                if _c in raw:
+                    v = raw[_c]
+                    if v is None or (isinstance(v, float) and v != v):
+                        raw[_c] = None
+                    else:
+                        try:
+                            s = str(v).strip().lower()
+                            raw[_c] = None if s in ("nan","none","") else (
+                                1 if s in ("true","1","1.0") else
+                                0 if s in ("false","0","0.0") else
+                                int(float(s))
+                            )
+                        except (ValueError, TypeError):
+                            raw[_c] = None
+            record = _clean(raw)
             try:
                 client.table("wizard_backtest_historical").insert(record).execute()
                 success += 1
