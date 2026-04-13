@@ -930,9 +930,9 @@ st.markdown("## 🧙 The Wizard — MLB Picks")
 st.caption("Picks updated daily after 8:30 AM ET  ·  Sorted by strongest edge first")
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_picks, tab_season, tab_history, tab_performance = st.tabs([
+tab_picks, tab_season, tab_history, tab_performance, tab_raw = st.tabs([
     "📋 Today's Picks", "📈 Season Tracker",
-    "🔬 Model History", "📊 Model Performance"
+    "🔬 Model History", "📊 Model Performance", "🗂️ Raw Data"
 ])
 
 
@@ -2065,6 +2065,139 @@ with tab_performance:
                         st.plotly_chart(_fig_comp, use_container_width=True)
                 else:
                     st.info(f"Need at least 20 games for calibration analysis (have {len(_cal_df)}).")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 5 — RAW DATA
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_raw:
+    import datetime as _rawdt
+
+    _today    = _rawdt.date.today()
+    _yd       = (_today - _rawdt.timedelta(days=1)).isoformat()
+    _tod      = _today.isoformat()
+    _tmrw     = (_today + _rawdt.timedelta(days=1)).isoformat()
+
+    _raw_frames = []
+    for _d in [_yd, _tod, _tmrw]:
+        _rows = load_card(_d)
+        if _rows:
+            _df = pd.DataFrame(_rows)
+            _df["game_date"] = _d
+            _raw_frames.append(_df)
+
+    if not _raw_frames:
+        st.info("No prediction data found for yesterday, today, or tomorrow.")
+    else:
+        _raw = pd.concat(_raw_frames, ignore_index=True)
+
+        # ── Determine who the model picks to win ─────────────────────────────
+        def _model_pick(row):
+            """Return the team the model favours and the confidence label."""
+            home = str(row.get("home_team", ""))
+            away = str(row.get("away_team", ""))
+            bl   = float(row["blended_rl"]) if pd.notna(row.get("blended_rl")) else 0.5
+            mw   = float(row["mc_home_win"]) if pd.notna(row.get("mc_home_win")) else 0.5
+            tier = str(row.get("best_tier") or "")
+            # Use ML win prob as primary win indicator; RL blend for confidence
+            if mw >= 0.55:
+                pick = home
+            elif mw <= 0.45:
+                pick = away
+            else:
+                # coin-flip zone — lean on RL blend direction
+                pick = away if bl < 0.46 else (home if bl > 0.54 else "—")
+            conf = "★★" if tier == "**" else ("★" if tier == "*" else "")
+            return pick, conf
+
+        _raw[["Model Pick", "Conf"]] = _raw.apply(
+            lambda r: pd.Series(_model_pick(r)), axis=1)
+
+        # ── Build display table ───────────────────────────────────────────────
+        def _fmt_odds(v):
+            try:
+                v = int(float(v))
+                return f"+{v}" if v > 0 else str(v)
+            except Exception:
+                return "—"
+
+        def _fmt_pct(v):
+            try:
+                return f"{float(v):.1%}"
+            except Exception:
+                return "—"
+
+        def _fmt_f(v, decimals=2):
+            try:
+                return f"{float(v):.{decimals}f}"
+            except Exception:
+                return "—"
+
+        _display_rows = []
+        for _, r in _raw.sort_values(["game_date", "game_time_et"] if "game_time_et" in _raw.columns else ["game_date"]).iterrows():
+            home = str(r.get("home_team", ""))
+            away = str(r.get("away_team", ""))
+            _display_rows.append({
+                "Date":          r.get("game_date", ""),
+                "Time (ET)":     r.get("game_time_et", "—") or "—",
+                "Matchup":       f"{away} @ {home}",
+                "Home SP":       str(r.get("home_sp", "—") or "—").title(),
+                "Away SP":       str(r.get("away_sp", "—") or "—").title(),
+                "Model Pick":    r.get("Model Pick", "—"),
+                "Conf":          r.get("Conf", ""),
+                "ML Win% (home)": _fmt_pct(r.get("mc_home_win")),
+                "RL Blend":      _fmt_pct(r.get("blended_rl")),
+                "Proj Total":    _fmt_f(r.get("blended_total") or r.get("mc_total"), 1),
+                "Vegas Total":   r.get("vegas_total", "—") or "—",
+                "ML Home":       _fmt_odds(r.get("vegas_ml_home")),
+                "ML Away":       _fmt_odds(r.get("vegas_ml_away")),
+                "Best Bet":      str(r.get("best_line", "") or ""),
+                "Best Odds":     _fmt_odds(r.get("best_market_odds")),
+                "Edge":          f"{float(r['best_edge'])*100:+.1f}%" if pd.notna(r.get("best_edge")) else "—",
+                "Lineup":        "✅" if r.get("lineup_confirmed") else "⏳",
+            })
+
+        _disp_df = pd.DataFrame(_display_rows)
+
+        # Summary counts
+        _c1, _c2, _c3 = st.columns(3)
+        _c1.metric("Yesterday", len(_raw[_raw["game_date"] == _yd]))
+        _c2.metric("Today",     len(_raw[_raw["game_date"] == _tod]))
+        _c3.metric("Tomorrow",  len(_raw[_raw["game_date"] == _tmrw]))
+
+        st.divider()
+        st.dataframe(
+            _disp_df,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Date":           st.column_config.TextColumn("Date", width="small"),
+                "Time (ET)":      st.column_config.TextColumn("Time", width="small"),
+                "Matchup":        st.column_config.TextColumn("Matchup", width="medium"),
+                "Home SP":        st.column_config.TextColumn("Home SP", width="medium"),
+                "Away SP":        st.column_config.TextColumn("Away SP", width="medium"),
+                "Model Pick":     st.column_config.TextColumn("Model Pick", width="small"),
+                "Conf":           st.column_config.TextColumn("★", width="small"),
+                "ML Win% (home)": st.column_config.TextColumn("Win% Home", width="small"),
+                "RL Blend":       st.column_config.TextColumn("RL Blend", width="small"),
+                "Proj Total":     st.column_config.TextColumn("Proj Total", width="small"),
+                "Vegas Total":    st.column_config.TextColumn("O/U", width="small"),
+                "ML Home":        st.column_config.TextColumn("ML Home", width="small"),
+                "ML Away":        st.column_config.TextColumn("ML Away", width="small"),
+                "Best Bet":       st.column_config.TextColumn("Best Bet", width="medium"),
+                "Best Odds":      st.column_config.TextColumn("Odds", width="small"),
+                "Edge":           st.column_config.TextColumn("Edge", width="small"),
+                "Lineup":         st.column_config.TextColumn("Lineup", width="small"),
+            },
+        )
+
+        # CSV download
+        st.download_button(
+            "⬇️ Download CSV",
+            data=_disp_df.to_csv(index=False).encode("utf-8"),
+            file_name=f"wizard_raw_{_tod}.csv",
+            mime="text/csv",
+        )
 
 
 # ── Footer ────────────────────────────────────────────────────────────────────
