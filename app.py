@@ -2073,6 +2073,10 @@ with tab_performance:
 with tab_raw:
     import datetime as _rawdt
 
+    if st.button("🔄 Refresh Data", key="raw_refresh"):
+        st.cache_data.clear()
+        st.rerun()
+
     _today    = _rawdt.date.today()
     _yd       = (_today - _rawdt.timedelta(days=1)).isoformat()
     _tod      = _today.isoformat()
