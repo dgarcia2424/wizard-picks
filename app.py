@@ -2143,9 +2143,14 @@ with tab_raw:
             bl   = row.get("blended_rl")
             mw   = row.get("mc_home_win")
             tier = str(row.get("best_tier") or "")
-            # No prediction available (starter missing)
-            if pd.isna(bl) and pd.isna(mw):
+
+            # No model prediction — fall back to Vegas pick if available
+            if (bl is None or pd.isna(bl)) and (mw is None or pd.isna(mw)):
+                vp = row.get("vegas_pick")
+                if vp and str(vp) not in ("", "None", "nan"):
+                    return str(vp), "💰"   # Vegas-only indicator
                 return "—", ""
+
             bl = float(bl) if pd.notna(bl) else 0.5
             mw = float(mw) if pd.notna(mw) else 0.5
             # Use ML win prob as primary win indicator; RL blend for confidence

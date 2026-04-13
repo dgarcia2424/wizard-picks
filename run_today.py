@@ -372,7 +372,30 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
         temp    = float(game.get("temp_f", 72.0))
 
         if not home_sp or home_sp == "nan" or not away_sp or away_sp == "nan":
-            print(f"  {away} @ {home}: missing starter(s) — skipping")
+            print(f"  {away} @ {home}: missing starter(s) — adding as TBD row (Vegas-only pick)")
+            # Use Vegas ML implied prob as best available pick
+            vegas_ml_h = game.get("close_ml_home")
+            vegas_ml_a = game.get("close_ml_away")
+            vegas_pick = None
+            if not _is_missing(vegas_ml_h):
+                home_imp = ml_to_prob(float(vegas_ml_h))
+                vegas_pick = home if home_imp >= 0.5 else away
+            results.append({
+                "game":          f"{away} @ {home}",
+                "home_team":     home,
+                "away_team":     away,
+                "home_sp":       home_sp.upper() if home_sp and home_sp != "nan" else "TBD",
+                "away_sp":       away_sp.upper() if away_sp and away_sp != "nan" else "TBD",
+                "game_time_et":  game.get("game_time_et", ""),
+                "lineup_confirmed": False,
+                "vegas_ml_home": vegas_ml_h,
+                "vegas_ml_away": vegas_ml_a,
+                "vegas_pick":    vegas_pick,   # best guess based on odds alone
+                "rl_signal":     "",
+                "total_signal":  "",
+                "best_line":     "",
+                "best_tier":     "",
+            })
             continue
 
         # Normalize name format: "Last, First" -> "FIRST LAST"
@@ -550,16 +573,20 @@ def print_card(results: list[dict], min_edge: float = 0.0) -> None:
     if not results:
         return
 
-    # Sort: ** signals first, then *, then no signal; within each group by strength
+    # Sort: ** signals first, then *, then no signal, then TBD; within each group by strength
     def sort_key(r):
-        sig = r["rl_signal"]
+        sig = str(r.get("rl_signal") or "")
+        bl  = r.get("blended_rl")
         if "**" in sig:
             tier = 0
         elif "*" in sig:
             tier = 1
-        else:
+        elif bl is not None and not pd.isna(bl):
             tier = 2
-        return (tier, -abs(r["blended_rl"] - 0.5))
+        else:
+            tier = 3  # TBD rows go last
+        strength = -abs(float(bl) - 0.5) if bl is not None and not pd.isna(bl) else 0
+        return (tier, strength)
 
     results = sorted(results, key=sort_key)
 
@@ -599,9 +626,20 @@ def print_card(results: list[dict], min_edge: float = 0.0) -> None:
 
 
 def _print_game_row(r: dict, highlight: bool) -> None:
+    # TBD row — missing starter, no model prediction
+    if r.get("blended_rl") is None or pd.isna(r.get("blended_rl", float("nan"))):
+        vp = r.get("vegas_pick", "")
+        print(f"  {r['game']}  [STARTER TBD]")
+        print(f"    HOME SP: {r.get('home_sp','TBD'):<28}")
+        print(f"    AWAY SP: {r.get('away_sp','TBD'):<28}")
+        if vp:
+            print(f"    Vegas pick: {vp}  (no model prediction — starter not posted)")
+        print()
+        return
+
     conf = "" if r["lineup_confirmed"] else " [PROJECTED]"
-    flag_h = f" [{r['home_sp_flag']}]" if r["home_sp_flag"] not in ("NORMAL", "UNKNOWN", "") else ""
-    flag_a = f" [{r['away_sp_flag']}]" if r["away_sp_flag"] not in ("NORMAL", "UNKNOWN", "") else ""
+    flag_h = f" [{r['home_sp_flag']}]" if r.get("home_sp_flag","") not in ("NORMAL", "UNKNOWN", "") else ""
+    flag_a = f" [{r['away_sp_flag']}]" if r.get("away_sp_flag","") not in ("NORMAL", "UNKNOWN", "") else ""
 
     print(f"  {r['game']}{conf}")
     print(f"    HOME SP: {r['home_sp']:<28} xwOBA={r['home_sp_xwoba']:.3f}{flag_h}")
@@ -876,7 +914,6 @@ def main():
     print("=" * 72)
 
     results = run_card(date_str, min_edge=args.min_edge)
-    print_card(results, min_edge=args.min_edge)
 
     if args.csv and results:
         # Always save date-stamped file so today + tomorrow can coexist
@@ -887,6 +924,8 @@ def main():
         if date_str == str(datetime.date.today()):
             pd.DataFrame(results).to_csv("daily_card.csv", index=False)
             print(f"  Saved -> daily_card.csv")
+
+    print_card(results, min_edge=args.min_edge)
 
     if args.email and results:
         send_card_email(results, date_str)
