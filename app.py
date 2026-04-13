@@ -258,7 +258,7 @@ def load_card(date_str: str) -> list[dict]:
                         "blended_rl","mc_rl","xgb_rl","mc_total","blended_total",
                         "vegas_total","vegas_ml_home","vegas_ml_away","home_sp","away_sp",
                         "home_sp_xwoba","away_sp_xwoba","home_sp_flag","away_sp_flag",
-                        "temp_f","lineup_confirmed",
+                        "temp_f","lineup_confirmed","game_time_et",
                         "best_line","best_tier","best_tier_capped","best_model_prob",
                         "best_market_odds","best_edge","best_market_implied","best_raw_model",
                         "market_deviation",
@@ -2078,12 +2078,52 @@ with tab_raw:
     _tod      = _today.isoformat()
     _tmrw     = (_today + _rawdt.timedelta(days=1)).isoformat()
 
+    def _load_raw_for_date(date_str):
+        """Load card predictions, supplemented by lineup file for any missing games."""
+        rows = load_card(date_str)
+        card_df = pd.DataFrame(rows) if rows else pd.DataFrame()
+        if not card_df.empty:
+            card_df["game_date"] = date_str
+
+        # Also pull lineup file so we catch games the card skipped (missing starter)
+        _lp = Path(__file__).parent / "data" / "statcast" / f"lineups_{date_str}.parquet"
+        if not _lp.exists():
+            _lp = Path(__file__).parent / "data" / "statcast" / "lineups_today.parquet"
+        if _lp.exists():
+            try:
+                ldf = pd.read_parquet(_lp)
+                ldf["game_date_col"] = pd.to_datetime(ldf["game_date"]).dt.date.astype(str)
+                ldf = ldf[ldf["game_date_col"] == date_str]
+                # Find games not already in the card
+                card_games = set(card_df["game"].tolist()) if not card_df.empty and "game" in card_df.columns else set()
+                extra_rows = []
+                for _, lr in ldf.iterrows():
+                    h = str(lr.get("home_team",""))
+                    a = str(lr.get("away_team",""))
+                    game_str = f"{a} @ {h}"
+                    if game_str not in card_games:
+                        extra_rows.append({
+                            "game": game_str,
+                            "game_date": date_str,
+                            "home_team": h,
+                            "away_team": a,
+                            "home_sp": str(lr.get("home_starter_name","") or "TBD"),
+                            "away_sp": str(lr.get("away_starter_name","") or "TBD"),
+                            "game_time_et": str(lr.get("game_time_et","") or ""),
+                            "lineup_confirmed": bool(lr.get("home_lineup_confirmed", False) and lr.get("away_lineup_confirmed", False)),
+                        })
+                if extra_rows:
+                    extra_df = pd.DataFrame(extra_rows)
+                    card_df = pd.concat([card_df, extra_df], ignore_index=True) if not card_df.empty else extra_df
+            except Exception:
+                pass
+
+        return card_df
+
     _raw_frames = []
     for _d in [_yd, _tod, _tmrw]:
-        _rows = load_card(_d)
-        if _rows:
-            _df = pd.DataFrame(_rows)
-            _df["game_date"] = _d
+        _df = _load_raw_for_date(_d)
+        if not _df.empty:
             _raw_frames.append(_df)
 
     if not _raw_frames:
@@ -2096,16 +2136,20 @@ with tab_raw:
             """Return the team the model favours and the confidence label."""
             home = str(row.get("home_team", ""))
             away = str(row.get("away_team", ""))
-            bl   = float(row["blended_rl"]) if pd.notna(row.get("blended_rl")) else 0.5
-            mw   = float(row["mc_home_win"]) if pd.notna(row.get("mc_home_win")) else 0.5
+            bl   = row.get("blended_rl")
+            mw   = row.get("mc_home_win")
             tier = str(row.get("best_tier") or "")
+            # No prediction available (starter missing)
+            if pd.isna(bl) and pd.isna(mw):
+                return "—", ""
+            bl = float(bl) if pd.notna(bl) else 0.5
+            mw = float(mw) if pd.notna(mw) else 0.5
             # Use ML win prob as primary win indicator; RL blend for confidence
             if mw >= 0.55:
                 pick = home
             elif mw <= 0.45:
                 pick = away
             else:
-                # coin-flip zone — lean on RL blend direction
                 pick = away if bl < 0.46 else (home if bl > 0.54 else "—")
             conf = "★★" if tier == "**" else ("★" if tier == "*" else "")
             return pick, conf
@@ -2160,6 +2204,8 @@ with tab_raw:
         _disp_df = pd.DataFrame(_display_rows)
 
         # Summary counts
+        st.caption("All games shown — including no-signal games. "
+                   "Games with no Model Pick had missing starter data at prediction time.")
         _c1, _c2, _c3 = st.columns(3)
         _c1.metric("Yesterday", len(_raw[_raw["game_date"] == _yd]))
         _c2.metric("Today",     len(_raw[_raw["game_date"] == _tod]))
