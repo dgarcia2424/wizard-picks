@@ -13,13 +13,13 @@ Usage:
 
 Schedule (all times ET):
     11:00  RUN_ALL     — full pipeline (lineups, pitcher profiles, team stats,
-                         odds, predictions, upload, health)
-    14:00  RUN_REFRESH — lightweight refresh (lineups, odds, predictions, upload)
-    17:00  RUN_REFRESH — lightweight refresh (lineups, odds, predictions, upload)
+                         lineup quality, odds, predictions, upload, health)
+    14:00  RUN_REFRESH — lineups, lineup quality, odds, predictions, upload, health
+    17:00  RUN_REFRESH — lineups, lineup quality, odds, predictions, upload, health
 
-The 2 PM and 5 PM refreshes skip the slow data builds (pitcher profiles,
-team stats) which don't change intraday.  They re-pull lineups to capture
-late starters and re-pull odds to get closer-to-closing lines.
+The 2 PM and 5 PM refreshes skip pitcher profiles and team stats (no intraday
+change) but re-run lineup quality after the fresh lineup pull so wRC+ scores
+reflect any late starters.  Odds are re-pulled to capture closing-line movement.
 """
 
 import argparse
@@ -160,6 +160,9 @@ def run_all() -> None:
         run_step("build_pitcher_profile.py", "pitcher_profiles")
         run_step("build_team_stats_2026.py", "team_stats")
 
+        # ── Step 2c: Lineup quality scores (wRC+ per team) ────────────────
+        run_step("build_lineup_quality.py", "lineup_quality")
+
         # ── Step 3: Fresh dual-region odds pull ───────────────────────────
         rc, _ = run_step("odds_current_pull.py", "odds_pull")
         if rc != 0:
@@ -194,6 +197,9 @@ def run_refresh(label: str) -> None:
         # ── Step 1: Lineups — capture any starters confirmed since 11 AM ──
         run_step("lineup_pull.py --recent", "lineups_today")
 
+        # ── Step 1b: Lineup quality — refresh wRC+ scores with new lineups ─
+        run_step("build_lineup_quality.py", "lineup_quality")
+
         # ── Step 2: Updated odds (closing lines sharper than morning) ──────
         rc, _ = run_step("odds_current_pull.py", "odds_pull")
         if rc != 0:
@@ -206,6 +212,9 @@ def run_refresh(label: str) -> None:
 
         # ── Step 4: Upload updated picks to Supabase ──────────────────────
         run_step("supabase_upload.py", "upload")
+
+        # ── Step 5: Health snapshot ───────────────────────────────────────
+        run_step("pipeline_health.py --upload", "health")
 
     except Exception:
         log.exception("Unhandled exception in run_refresh — scheduler will continue.")
