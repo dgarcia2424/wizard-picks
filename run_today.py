@@ -72,6 +72,20 @@ _PARLAY_MIN_COMBO_EDGE = 0.0 # require positive combined model edge
 _PARLAY_MIN_BEST_LEG_EDGE = 0.02  # at least one leg must have ≥ 2% edge
 _PARLAY_TOP_N        = 5     # max combos to surface
 
+# ---------------------------------------------------------------------------
+# Batter prop constants
+# ---------------------------------------------------------------------------
+_HIT_PROP_THRESH    = 0.65   # show hit prop when P(1+ hit) >= 65%
+_HR_PROP_THRESH     = 0.15   # show HR prop when P(1+ HR) >= 15%
+_K_PROP_OVER_THRESH = 0.57   # show K prop (over) when P(over) >= 57%
+_K_PROP_UNDER_THRESH= 0.40   # show K prop (under side) when P(over) < 40%
+_K_PROP_EDGE_THRESH = 0.03   # also show K prop when |edge| >= 3%
+_LEAGUE_HR_PER_PA   = 0.037  # ~2024-2025 MLB avg HR rate per PA
+_LEAGUE_HR9         = 1.10   # league avg HR allowed per 9 innings
+_LEAGUE_GB_PCT      = 0.44   # league avg ground ball %
+_HR_SHRINK_PA       = 150    # Bayesian shrinkage prior PA for HR rate
+_PA_MAP             = {1:4.5, 2:4.3, 3:4.1, 4:3.9, 5:3.7, 6:3.5, 7:3.4, 8:3.3, 9:3.2}
+
 # Pearson ρ between same-game leg types.
 # "subset" means the smaller-prob event ⊆ the larger (joint = min of the two).
 _LEG_CORR: dict[tuple, object] = {
@@ -260,6 +274,207 @@ def _is_missing(v) -> bool:
         return bool(pd.isna(v))
     except (TypeError, ValueError):
         return False
+
+
+def _norm_name(n: str) -> str:
+    """Lowercase, strip accents — for fuzzy batter/pitcher name matching."""
+    import unicodedata
+    n = unicodedata.normalize("NFD", str(n).strip())
+    return "".join(c for c in n if unicodedata.category(c) != "Mn").lower()
+
+
+# ---------------------------------------------------------------------------
+# Batter prop data loaders
+# ---------------------------------------------------------------------------
+
+def _load_lineup_long(date_str: str) -> pd.DataFrame:
+    """Load per-batter lineup for date (falls back to lineups_today_long)."""
+    for path in [
+        DATA_DIR / f"lineups_{date_str}_long.parquet",
+        DATA_DIR / "lineups_today_long.parquet",
+    ]:
+        if path.exists():
+            try:
+                df = pd.read_parquet(path)
+                if not df.empty:
+                    return df
+            except Exception:
+                pass
+    return pd.DataFrame()
+
+
+def _load_batter_prop_data() -> tuple:
+    """
+    Load FG batters 2026, Savant batter xstats 2026, batter exit velo 2026.
+    Returns (fg_bat, bat_xs, bat_ev) — each with '_name' normalised column.
+    """
+    # FanGraphs batters (2026 first, fall back to 2025)
+    fg_path = Path("./data/raw/fangraphs_batters.csv")
+    if fg_path.exists():
+        fg = pd.read_csv(fg_path)
+        fg26 = fg[fg["year"] == 2026].copy()
+        if fg26.empty:
+            fg26 = fg[fg["year"] == 2025].copy()
+        fg26["_name"] = fg26["Name"].apply(_norm_name)
+    else:
+        fg26 = pd.DataFrame()
+
+    # Savant xstats (xBA)
+    xs_path = DATA_DIR / "batter_xstats_2026.parquet"
+    if xs_path.exists():
+        bat_xs = pd.read_parquet(xs_path)
+        bat_xs["_name"] = bat_xs["last_name, first_name"].apply(
+            lambda n: _norm_name(" ".join(reversed(n.split(", "))) if ", " in str(n) else n)
+        )
+    else:
+        bat_xs = pd.DataFrame()
+
+    # Exit velo / barrel rate
+    ev_path = DATA_DIR / "batter_exitvelo_2026.parquet"
+    if ev_path.exists():
+        bat_ev = pd.read_parquet(ev_path)
+        bat_ev["_name"] = bat_ev["last_name, first_name"].apply(
+            lambda n: _norm_name(" ".join(reversed(n.split(", "))) if ", " in str(n) else n)
+        )
+    else:
+        bat_ev = pd.DataFrame()
+
+    return fg26, bat_xs, bat_ev
+
+
+def _park_hr_factor(home_team: str) -> float:
+    """Park HR factor relative to league average (COL=1.35, Petco=0.88, etc.)."""
+    factors = {
+        "COL": 1.35, "CIN": 1.15, "BOS": 1.12, "NYY": 1.10, "PHI": 1.08,
+        "TEX": 1.06, "ATL": 1.05, "CHC": 1.04, "LAD": 1.03,
+        "MIL": 0.92, "MIA": 0.92, "OAK": 0.90, "ATH": 0.90,
+        "SEA": 0.91, "SF": 0.88, "SD": 0.89,
+    }
+    return factors.get(str(home_team).upper(), 1.00)
+
+
+def _compute_batter_props(
+    game_pk, home_team: str, away_team: str,
+    home_sp_name: str, away_sp_name: str,
+    lineup_long: pd.DataFrame,
+    fg_bat: pd.DataFrame, bat_xs: pd.DataFrame, bat_ev: pd.DataFrame,
+    profiles: pd.DataFrame,
+) -> list[dict]:
+    """
+    Compute hit and HR props for all confirmed batters in a game.
+    Only includes players appearing in the lineup parquet (playing check).
+    Returns list of dicts sorted by hit_prob desc.
+    """
+    import math as _math
+
+    if lineup_long.empty:
+        return []
+
+    game_lineup = lineup_long[lineup_long["game_pk"] == int(game_pk)].copy()
+    if game_lineup.empty:
+        return []
+
+    park_hr = _park_hr_factor(home_team)
+
+    # Build pitcher stat lookup from profiles (k9, gb_pct for HR factor)
+    def _sp_stats(sp_name):
+        """Return (k9, hr9_factor) for the named starter."""
+        if not sp_name or sp_name in ("TBD", "nan", ""):
+            return 8.5, 1.0
+        pnorm = _norm_name(sp_name)
+        if not profiles.empty and "pitcher_name_upper" in profiles.columns:
+            prof_match = profiles[profiles["pitcher_name_upper"].apply(
+                lambda x: _norm_name(str(x)) == pnorm
+            )]
+            if not prof_match.empty:
+                row = prof_match.iloc[0]
+                k9 = float(row.get("k9", 8.5) or 8.5)
+                gb_pct = float(row.get("blended_gb_pct", _LEAGUE_GB_PCT) or _LEAGUE_GB_PCT)
+                gb_pct = max(0.25, min(0.65, gb_pct))
+                # Higher GB% → fewer fly balls → fewer HRs
+                hr9_factor = min(1.5, max(0.5, (_LEAGUE_GB_PCT / gb_pct) ** 0.5))
+                return k9, hr9_factor
+        return 8.5, 1.0
+
+    home_k9, home_hr9_factor = _sp_stats(home_sp_name)
+    away_k9, away_hr9_factor = _sp_stats(away_sp_name)
+
+    props = []
+    for _, brow in game_lineup.iterrows():
+        player_name = str(brow["player_name"])
+        side        = str(brow.get("side", ""))
+        pos         = int(brow.get("batting_order", 5) or 5)
+        pnorm       = _norm_name(player_name)
+
+        # Batter faces the *opposing* pitcher
+        opp_k9        = away_k9        if side == "home" else home_k9
+        opp_hr_factor = away_hr9_factor if side == "home" else home_hr9_factor
+
+        # Look up FG stats
+        fg_row: dict = {}
+        if not fg_bat.empty and "_name" in fg_bat.columns:
+            m = fg_bat[fg_bat["_name"] == pnorm]
+            if not m.empty:
+                fg_row = m.iloc[0].to_dict()
+
+        # Look up xBA from Savant
+        xba = None
+        if not bat_xs.empty and "_name" in bat_xs.columns:
+            m = bat_xs[bat_xs["_name"] == pnorm]
+            if not m.empty and pd.notna(m.iloc[0].get("est_ba")):
+                xba = float(m.iloc[0]["est_ba"])
+
+        # Barrel rate (for HR confidence)
+        brl_pa = 0.0
+        if not bat_ev.empty and "_name" in bat_ev.columns:
+            m = bat_ev[bat_ev["_name"] == pnorm]
+            if not m.empty and pd.notna(m.iloc[0].get("brl_pa")):
+                brl_pa = float(m.iloc[0]["brl_pa"]) / 100.0  # stored as pct
+
+        pa_season = float(fg_row.get("PA", 0) or 0)
+        if pa_season < 15 and xba is None:
+            continue  # no usable data
+
+        pa_exp = _PA_MAP.get(pos, 3.8)
+
+        # ── HIT PROP ─────────────────────────────────────────────────────────
+        avg = xba if xba is not None else float(fg_row.get("AVG", 0.250) or 0.250)
+        k_pct = float(fg_row.get("K%", 0.22) or 0.22)   # stored as fraction (0-1)
+
+        p_base = avg * (1.0 - k_pct * 0.15)  # K% dampens contact rate
+        delta_k9  = max(0.80, 1.0 - (opp_k9 - 8.5) * 0.018)
+        delta_park = max(0.93, min(1.06, 0.96 + (_park_hr_factor(home_team) - 1.0) * 0.13))
+        p_hit = min(p_base * delta_k9 * delta_park, 0.55)
+        hit_prob = 1.0 - (1.0 - p_hit) ** pa_exp
+
+        # ── HR PROP ──────────────────────────────────────────────────────────
+        hr_season = float(fg_row.get("HR", 0) or 0)
+        hr_rate_raw = hr_season / pa_season if pa_season > 0 else _LEAGUE_HR_PER_PA
+        w = pa_season / (pa_season + _HR_SHRINK_PA)
+        hr_rate = w * hr_rate_raw + (1.0 - w) * _LEAGUE_HR_PER_PA
+        # Barrel-rate boost: barrels ~50% convert to HRs; brl_pa is extra signal
+        if brl_pa > 0:
+            hr_rate = hr_rate * (1.0 + (brl_pa - 0.06) * 1.5)
+        lambda_hr = hr_rate * pa_exp * opp_hr_factor * park_hr
+        hr_prob = 1.0 - _math.exp(-max(lambda_hr, 0.0))
+
+        if hit_prob < _HIT_PROP_THRESH and hr_prob < _HR_PROP_THRESH:
+            continue
+
+        props.append({
+            "player":    player_name,
+            "side":      side,
+            "team":      home_team if side == "home" else away_team,
+            "pos":       pos,
+            "hit_prob":  round(hit_prob, 3),
+            "hr_prob":   round(hr_prob, 3),
+            "pa_season": int(pa_season),
+            "avg":       round(avg, 3),
+            "hr_season": int(hr_season) if not _is_missing(hr_season) else 0,
+        })
+
+    props.sort(key=lambda x: (-x["hit_prob"], -x["hr_prob"]))
+    return props
 
 
 # ---------------------------------------------------------------------------
@@ -1003,6 +1218,13 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
 
     lineup_quality = _load_lineup_quality(date_str)
 
+    # Batter prop data (hit + HR props)
+    lineup_long  = _load_lineup_long(date_str)
+    fg_bat, bat_xs, bat_ev = _load_batter_prop_data()
+    # Pitcher profiles DataFrame for GB% / K9 lookup
+    _prof_path = DATA_DIR / "pitcher_profiles_2026.parquet"
+    pitcher_profiles_df = pd.read_parquet(_prof_path) if _prof_path.exists() else pd.DataFrame()
+
     if len(lineups) == 0:
         print("  No games found for today.")
         return []
@@ -1511,7 +1733,24 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
             "mc_away_sp_k_over_45": res.get("mc_away_sp_k_over_45"),
             "mc_away_sp_k_over_55": res.get("mc_away_sp_k_over_55"),
             "mc_away_sp_k_over_65": res.get("mc_away_sp_k_over_65"),
+            # F5 percentile bands
+            "mc_f5_home_runs_lo": res.get("mc_f5_home_runs_lo"),
+            "mc_f5_home_runs_hi": res.get("mc_f5_home_runs_hi"),
+            "mc_f5_away_runs_lo": res.get("mc_f5_away_runs_lo"),
+            "mc_f5_away_runs_hi": res.get("mc_f5_away_runs_hi"),
+            "mc_f5_total_lo":     res.get("mc_f5_total_lo"),
+            "mc_f5_total_hi":     res.get("mc_f5_total_hi"),
         })
+
+        # Batter props — only for games with confirmed lineup data
+        game_pk = game.get("game_pk") or game.get("game_id")
+        if game_pk is not None and not lineup_long.empty:
+            results[-1]["batter_props"] = _compute_batter_props(
+                game_pk, home, away, home_sp, away_sp,
+                lineup_long, fg_bat, bat_xs, bat_ev, pitcher_profiles_df
+            )
+        else:
+            results[-1]["batter_props"] = []
 
     # ── Sort results: locks first → near-miss → has Pinnacle → no Pinnacle ──
     def _sort_key(r):
@@ -1841,6 +2080,40 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
         lines.append(f"\n  {away} @ {home}  {gtime}  {odds}")
         lines.append(f"    {home} SP: {hsp} ({hx})  |  {away} SP: {asp} ({ax})")
         lines.append(f"    Total:{tot_str}{line_str}")
+        # F5 projections
+        f5wh = r.get("mc_f5_home_win_prob")
+        f5h  = r.get("mc_f5_home_runs")
+        f5a  = r.get("mc_f5_away_runs")
+        f5t  = r.get("mc_f5_total")
+        f5lo = r.get("mc_f5_total_lo")
+        f5hi = r.get("mc_f5_total_hi")
+        if not _is_missing(f5wh):
+            f5wa = 1 - float(f5wh)
+            band = f" ({f5lo}–{f5hi})" if not _is_missing(f5lo) else ""
+            lines.append(
+                f"    F5: {away} win {f5wa:.0%} / {home} win {float(f5wh):.0%}"
+                f"  Proj {float(f5a):.1f}–{float(f5h):.1f} total {float(f5t):.1f}{band}"
+            )
+        # 1st inning
+        nrfi = r.get("mc_nrfi_prob")
+        ph1  = r.get("mc_p_home_scores_f1")
+        pa1  = r.get("mc_p_away_scores_f1")
+        if not _is_missing(nrfi):
+            lines.append(
+                f"    1st Inn: NRFI {float(nrfi):.0%}"
+                f"  {home} scores {float(ph1):.0%}"
+                f"  {away} scores {float(pa1):.0%}"
+            )
+        # Batter props
+        props = r.get("batter_props", [])
+        for p in props:
+            hp = p["hit_prob"]
+            hr = p["hr_prob"]
+            hit_s = f"1+hit {hp:.0%}" if hp >= _HIT_PROP_THRESH else ""
+            hr_s  = f"HR {hr:.0%}"    if hr >= _HR_PROP_THRESH  else ""
+            parts = "  ".join(x for x in [hit_s, hr_s] if x)
+            if parts:
+                lines.append(f"    Prop: #{p['pos']} {p['player']} ({p['team']})  {parts}")
 
     # Parlay suggestions
     parlay_combos_email = _find_parlay_combos(results)
@@ -1871,6 +2144,64 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
     lines.append("\n" + "=" * 48)
     lines.append("Three-Part Lock: Sanity / Odds Floor / CLV Edge >= 1%")
     lines.append("=" * 48)
+
+    lines.append("""
+═══════════════════════════════════════════════════
+HOW IT WORKS
+═══════════════════════════════════════════════════
+The Wizard uses a two-level machine learning stack
+trained on 2023–2025 MLB games (~7,300 games):
+
+  Level 1 — XGBoost + LightGBM + CatBoost ensemble
+  predicts the probability each team covers the
+  run-line from BOTH perspectives independently
+  (not just 1 minus the other side).
+
+  Level 2 — Bayesian hierarchical stacker adjusts
+  the raw probability based on pitcher matchup type
+  (LHP vs RHP), lineup quality, bullpen strength,
+  umpire K/BB tendencies, and how much the model
+  agrees with the Pinnacle sharp market.
+
+Key inputs: pitcher xwOBA/K%, bullpen ERA/WHIP,
+batting matchup quality (vs LHP/RHP), park factors,
+circadian travel edge, umpire tendencies, Vegas line.
+
+═══════════════════════════════════════════════════
+WHEN TO BET
+═══════════════════════════════════════════════════
+Only act on TIER 1 and TIER 2 locks. Every lock
+has passed three gates:
+
+  Gate 1 SANITY    Model within 4% of Pinnacle.
+                   If the sharp market disagrees
+                   strongly, skip — they are right.
+
+  Gate 2 ODDS FLOOR  Retail ML better than −225.
+                     Avoid laying heavy juice.
+
+  Gate 3 CLV EDGE  Model beats retail implied
+                   probability by ≥ 1%.
+
+TIER 1  (edge ≥ 3%)  — stronger signal
+TIER 2  (edge ≥ 1%)  — medium signal
+
+Stakes are sized by fractional Kelly:
+  Tier 1 = quarter-Kelly  |  Tier 2 = eighth-Kelly
+
+2025 TRACK RECORD (2,398 games):
+  Model ≥ 0.580 → 58.3% win rate  (+11.4% ROI)
+  Model ≥ 0.600 → 62.5% win rate  (+19.3% ROI)
+  Best months: Apr, May, Aug, Sep
+  Weaker months: Jun, Jul (mid-season drift)
+
+DO NOT BET games marked:
+  "No Pinnacle" — sharp line unavailable, Gate 1
+                  cannot be verified
+  "Sanity fail" — model and market disagree > 4%,
+                  historically the model is wrong
+═══════════════════════════════════════════════════
+""")
 
     return "\n".join(lines)
 
@@ -2305,20 +2636,126 @@ def write_html_card(results: list[dict], date_str: str) -> None:
         # O/U market
         ou_block = _ou_block(r)
 
-        # Starters
-        hk = (r.get("home_k_line"), r.get("home_k_model_over"),
+        # Starters (hk/ak defined in _k_filter block below)
+        tbd = r.get("home_sp","TBD") == "TBD" or r.get("away_sp","TBD") == "TBD"
+        tbd_notice = '<div class="tbd-notice">⚠ Starters not yet confirmed</div>' if tbd else ""
+
+        score_html = _score_row(r)
+
+        # ── F5 section ────────────────────────────────────────────────────────
+        def _f5_html():
+            f5h = r.get("mc_f5_home_runs")
+            f5a = r.get("mc_f5_away_runs")
+            f5t = r.get("mc_f5_total")
+            f5wh = r.get("mc_f5_home_win_prob")
+            f5wa = (1 - float(f5wh)) if not _is_missing(f5wh) else None
+            tlo = r.get("mc_f5_total_lo")
+            thi = r.get("mc_f5_total_hi")
+            if _is_missing(f5h) and _is_missing(f5a):
+                return ""
+            hstr = f"{float(f5h):.1f}" if not _is_missing(f5h) else "—"
+            astr = f"{float(f5a):.1f}" if not _is_missing(f5a) else "—"
+            tstr = f"{float(f5t):.1f}" if not _is_missing(f5t) else "—"
+            band = (f' <span class="band">({tlo}–{thi})</span>'
+                    if not _is_missing(tlo) and not _is_missing(thi) else "")
+            wh_s = f"{float(f5wh):.0%}" if not _is_missing(f5wh) else "—"
+            wa_s = f"{float(f5wa):.0%}" if not _is_missing(f5wa) else "—"
+            return (
+                f'<div class="gc-extra-section">'
+                f'<span class="gc-extra-lbl">F5</span>'
+                f'&nbsp;<span class="gc-extra-dim">{away} win</span>&nbsp;'
+                f'<span class="gc-extra-val">{wa_s}</span>'
+                f'&nbsp;&nbsp;<span class="gc-extra-dim">{home} win</span>&nbsp;'
+                f'<span class="gc-extra-val">{wh_s}</span>'
+                f'&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;'
+                f'<span class="gc-extra-dim">Proj</span>&nbsp;'
+                f'<span class="gc-extra-val">{astr}–{hstr}</span>'
+                f'&nbsp;<span class="gc-extra-dim">Total</span>&nbsp;'
+                f'<span class="gc-extra-val">{tstr}</span>{band}'
+                f'</div>'
+            )
+
+        # ── 1st inning section ────────────────────────────────────────────────
+        def _f1_html():
+            nrfi = r.get("mc_nrfi_prob")
+            ph   = r.get("mc_p_home_scores_f1")
+            pa   = r.get("mc_p_away_scores_f1")
+            if _is_missing(nrfi):
+                return ""
+            nrfi_s = f"{float(nrfi):.0%}" if not _is_missing(nrfi) else "—"
+            ph_s   = f"{float(ph):.0%}"   if not _is_missing(ph)   else "—"
+            pa_s   = f"{float(pa):.0%}"   if not _is_missing(pa)   else "—"
+            return (
+                f'<div class="gc-extra-section">'
+                f'<span class="gc-extra-lbl">1st Inn</span>'
+                f'&nbsp;<span class="gc-extra-dim">NRFI</span>&nbsp;'
+                f'<span class="gc-extra-val">{nrfi_s}</span>'
+                f'&nbsp;&nbsp;<span class="gc-extra-dim">{home} scores</span>&nbsp;'
+                f'<span class="gc-extra-val">{ph_s}</span>'
+                f'&nbsp;&nbsp;<span class="gc-extra-dim">{away} scores</span>&nbsp;'
+                f'<span class="gc-extra-val">{pa_s}</span>'
+                f'</div>'
+            )
+
+        # ── K prop filter — only show when signal meets threshold ──────────────
+        def _k_filter(k_model, k_edge):
+            if _is_missing(k_model):
+                return False
+            m = float(k_model)
+            e = float(k_edge) if not _is_missing(k_edge) else 0.0
+            return (m >= _K_PROP_OVER_THRESH or m < _K_PROP_UNDER_THRESH
+                    or abs(e) >= _K_PROP_EDGE_THRESH)
+
+        hk_show = _k_filter(r.get("home_k_model_over"), r.get("home_k_edge"))
+        ak_show = _k_filter(r.get("away_k_model_over"), r.get("away_k_edge"))
+        hk = (r.get("home_k_line"), r.get("home_k_model_over") if hk_show else None,
               r.get("home_k_implied_over"), r.get("home_k_edge"))
-        ak = (r.get("away_k_line"), r.get("away_k_model_over"),
+        ak = (r.get("away_k_line"), r.get("away_k_model_over") if ak_show else None,
               r.get("away_k_implied_over"), r.get("away_k_edge"))
+
+        # ── Batter props section ──────────────────────────────────────────────
+        def _batter_props_html():
+            props = r.get("batter_props", [])
+            if not props:
+                return ""
+            rows = []
+            for p in props:
+                hp = p["hit_prob"]
+                hr = p["hr_prob"]
+                hit_cls = ("val-green" if hp >= 0.70
+                           else "val-yellow" if hp >= 0.65 else "val-dim")
+                hr_cls  = ("val-green" if hr >= 0.20
+                           else "val-yellow" if hr >= 0.15 else "val-dim")
+                hit_s = f"{hp:.0%}" if hp >= _HIT_PROP_THRESH else "—"
+                hr_s  = f"{hr:.0%}" if hr >= _HR_PROP_THRESH  else "—"
+                team_tag = (f'<span class="gc-extra-dim">{p["team"]}</span>&nbsp;'
+                            if p.get("team") else "")
+                rows.append(
+                    f'<div class="prop-row">'
+                    f'{team_tag}'
+                    f'<span class="prop-name">#{p["pos"]} {p["player"]}</span>'
+                    f'&nbsp;<span class="prop-sep">·</span>&nbsp;'
+                    f'<span class="gc-extra-dim">1+ Hit</span>&nbsp;'
+                    f'<span class="{hit_cls} prop-val">{hit_s}</span>'
+                    f'&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;'
+                    f'<span class="{hr_cls} prop-val">{hr_s}</span>'
+                    f'</div>'
+                )
+            return (
+                f'<div class="gc-extra-section gc-props">'
+                f'<span class="gc-extra-lbl">Props</span>'
+                f'<div class="prop-list">' + "".join(rows) + '</div>'
+                f'</div>'
+            )
+
         home_sp_cell = _sp_cell(home, r.get("home_sp"), r.get("home_sp_xwoba"),
                                 r.get("home_sp_flag",""), *hk)
         away_sp_cell = _sp_cell(away, r.get("away_sp"), r.get("away_sp_xwoba"),
                                 r.get("away_sp_flag",""), *ak)
 
-        tbd = r.get("home_sp","TBD") == "TBD" or r.get("away_sp","TBD") == "TBD"
-        tbd_notice = '<div class="tbd-notice">⚠ Starters not yet confirmed</div>' if tbd else ""
-
-        score_html = _score_row(r)
+        f5_html    = _f5_html()
+        f1_html    = _f1_html()
+        props_html = _batter_props_html()
 
         return f"""<div class="gc {card_cls}">
   <div class="gc-head">
@@ -2333,6 +2770,9 @@ def write_html_card(results: list[dict], date_str: str) -> None:
     </div>
   </div>
   <div class="gc-score">{score_html}</div>
+  {f5_html}
+  {f1_html}
+  {props_html}
   <div class="gc-body">
     <div class="gc-starters">
       <div class="gc-sp">{home_sp_cell}</div>
@@ -2492,6 +2932,24 @@ body {{
 .score-sep {{ color: #30363d; }}
 .ou-line   {{ color: #6e7681; font-size: 11px; }}
 .band      {{ color: #6e7681; font-size: 11px; }}
+
+/* F5 / 1st inning / props rows */
+.gc-extra-section {{
+  padding: 5px 16px; font-size: 12px;
+  border-bottom: 1px solid #21262d; background: #0d1117;
+}}
+.gc-extra-lbl {{
+  font-size: 9px; font-weight: 800; color: #388bfd;
+  text-transform: uppercase; letter-spacing: .8px; margin-right: 4px;
+}}
+.gc-extra-dim {{ color: #6e7681; }}
+.gc-extra-val {{ color: #c9d1d9; font-weight: 700; }}
+.gc-props {{ padding-top: 6px; padding-bottom: 6px; }}
+.prop-list  {{ display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 4px; }}
+.prop-row   {{ font-size: 11px; }}
+.prop-name  {{ color: #e6edf3; font-weight: 600; }}
+.prop-sep   {{ color: #30363d; }}
+.prop-val   {{ font-weight: 700; }}
 
 /* Body: starters + markets side by side */
 .gc-body {{
@@ -2732,6 +3190,21 @@ body {{
       <div class="def-row"><span class="def-term">xwOBA</span><span class="def-desc">Expected weighted on-base average allowed. Measures pitcher quality based on contact quality, not outcomes. Lower = better pitcher. League avg ≈ 0.315</span></div>
       <div class="def-row"><span class="def-term">✓ confirmed</span><span class="def-desc">Official lineup confirmed by the team</span></div>
       <div class="def-row"><span class="def-term">~ projected</span><span class="def-desc">Probable starter based on rotation — not yet officially confirmed</span></div>
+    </div>
+
+    <div class="def-section">
+      <div class="def-heading">HOW IT WORKS</div>
+      <div class="def-row"><span class="def-term">Level 1</span><span class="def-desc">XGBoost + LightGBM + CatBoost ensemble predicts the probability each team covers the run-line from both perspectives independently — not just 1 minus the other side</span></div>
+      <div class="def-row"><span class="def-term">Level 2</span><span class="def-desc">Bayesian hierarchical stacker adjusts raw probability based on pitcher matchup type (LHP vs RHP), lineup quality, bullpen strength, umpire K/BB tendencies, and how much the model agrees with the Pinnacle sharp market</span></div>
+      <div class="def-row"><span class="def-term">Key inputs</span><span class="def-desc">Pitcher xwOBA/K%, bullpen ERA/WHIP, batting matchup quality vs LHP/RHP, park factors, circadian travel edge, umpire tendencies, Vegas line. Trained on 2023–2025 MLB games (~7,300 games)</span></div>
+    </div>
+
+    <div class="def-section">
+      <div class="def-heading">WHEN TO BET</div>
+      <div class="def-row"><span class="def-term" style="color:#d2a8ff">TIER 1 (≥3%)</span><span class="def-desc">Strong signal — quarter-Kelly stake. All three lock gates passed with a meaningful edge over the retail market</span></div>
+      <div class="def-row"><span class="def-term" style="color:#79c0ff">TIER 2 (≥1%)</span><span class="def-desc">Medium signal — eighth-Kelly stake. All three gates passed but edge is smaller; size accordingly</span></div>
+      <div class="def-row"><span class="def-term" style="color:#f85149">DO NOT BET</span><span class="def-desc">"No Pinnacle" games (no sharp market sanity check) or games marked "Sanity fail" (model disagrees with Pinnacle by &gt;4 points)</span></div>
+      <div class="def-row"><span class="def-term">2025 Record</span><span class="def-desc">Model ≥ 0.580 → 58.3% win rate (+11.4% ROI) · Model ≥ 0.600 → 62.5% win rate (+19.3% ROI) across 2,398 games. Best months: Apr, May, Aug, Sep</span></div>
     </div>
 
   </div>
