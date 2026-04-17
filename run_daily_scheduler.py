@@ -12,10 +12,11 @@ Usage:
     python run_daily_scheduler.py --dry-run    # print schedule and exit
 
 Schedule (all times ET):
-    11:00  RUN_ALL     — full pipeline (lineups, pitcher profiles, team stats,
-                         lineup quality, odds, predictions, upload, health)
-    14:00  RUN_REFRESH — lineups, lineup quality, odds, predictions, upload, health
-    17:00  RUN_REFRESH — lineups, lineup quality, odds, predictions, upload, health
+    11:00  RUN_ALL     — lineups, umpire pull, umpire stats, pitcher profiles,
+                         team stats, lineup quality, odds, picks, upload,
+                         CLV audit, health
+    14:00  RUN_REFRESH — lineups, lineup quality, odds, picks, upload, health
+    17:00  RUN_REFRESH — lineups, lineup quality, odds, picks, upload, health
 
 The 2 PM and 5 PM refreshes skip pitcher profiles and team stats (no intraday
 change) but re-run lineup quality after the fresh lineup pull so wRC+ scores
@@ -156,27 +157,34 @@ def run_all() -> None:
         run_step("lineup_pull.py --recent", "lineups_today")
         run_step(f"lineup_pull.py --date {tomorrow}", "lineups_tmrw")
 
-        # ── Step 2: Pitcher profiles + team stats refresh ─────────────────
+        # ── Step 2: Umpire assignments + tendencies ───────────────────────
+        run_step("ump_pull.py", "ump_pull")
+        run_step("build_ump_stats.py", "ump_stats")
+
+        # ── Step 3: Pitcher profiles + team stats refresh ─────────────────
         run_step("build_pitcher_profile.py", "pitcher_profiles")
         run_step("build_team_stats_2026.py", "team_stats")
 
-        # ── Step 2c: Lineup quality scores (wRC+ per team) ────────────────
+        # ── Step 4: Lineup quality scores (wRC+ per team) ─────────────────
         run_step("build_lineup_quality.py", "lineup_quality")
 
-        # ── Step 3: Fresh dual-region odds pull ───────────────────────────
+        # ── Step 5: Fresh dual-region odds pull ───────────────────────────
         rc, _ = run_step("odds_current_pull.py", "odds_pull")
         if rc != 0:
             log.error("Odds pull failed — predictions will degrade to retail-only fallback.")
 
-        # ── Step 4: Generate today's card ─────────────────────────────────
+        # ── Step 6: Generate today's card ─────────────────────────────────
         rc, _ = run_step("run_today.py --csv --email", "picks")
         if rc != 0:
             log.warning("run_today.py exited non-zero — check model_scores.csv for errors.")
 
-        # ── Step 5: Upload results to Supabase ────────────────────────────
+        # ── Step 7: Upload results to Supabase ────────────────────────────
         run_step("supabase_upload.py", "upload")
 
-        # ── Step 6: Pipeline health snapshot ─────────────────────────────
+        # ── Step 8: CLV audit — close out yesterday's picks ───────────────
+        run_step("clv_audit.py", "clv_audit")
+
+        # ── Step 9: Pipeline health snapshot ──────────────────────────────
         run_step("pipeline_health.py --upload", "health")
 
     except Exception:
