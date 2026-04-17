@@ -2246,13 +2246,18 @@ def _build_email_body_old(results: list[dict], date_str: str) -> str:
 def send_card_email(results: list[dict], date_str: str) -> None:
     """
     Send the daily card as a multipart email via Gmail.
-    - HTML body: full daily_card.html (renders in Gmail / Outlook / Apple Mail)
-    - Plain-text fallback: Tier 1 / Tier 2 lock summary
+    - Plain-text body: lock summary + full game list (never clipped)
+    - HTML attachment: full daily_card.html (open in browser for visual card)
+
+    The HTML is sent as an attachment rather than inline body because Gmail
+    clips inline HTML bodies over ~102KB, which would truncate the card.
     """
     import os
     import smtplib
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
+    from email.mime.base import MIMEBase
+    from email import encoders
 
     gmail_from = os.getenv("GMAIL_FROM", "garcia.dan24@gmail.com")
     gmail_pass = os.getenv("GMAIL_APP_PASSWORD", "")
@@ -2267,8 +2272,6 @@ def send_card_email(results: list[dict], date_str: str) -> None:
                  if any(r.get(k) is not None
                         for k in ("lock_tier", "ml_lock_tier", "ou_lock_tier"))]
     n_locks = len(all_locks)
-    t1_rl = sum(1 for r in results if r.get("lock_tier") == 1)
-    t2_rl = sum(1 for r in results if r.get("lock_tier") == 2)
 
     if n_locks == 0:
         subject = f"Wizard MLB {date_str} — 0 locks today"
@@ -2277,26 +2280,34 @@ def send_card_email(results: list[dict], date_str: str) -> None:
     else:
         subject = f"Wizard MLB {date_str} — {n_locks} locks"
 
-    # ── Plain-text fallback ──────────────────────────────────────────────────
+    # ── Plain-text body ──────────────────────────────────────────────────────
     plain_body = _build_email_body(results, date_str)
 
-    # ── HTML body: read the generated daily_card.html ────────────────────────
+    # ── Ensure HTML card is written and current ──────────────────────────────
     html_path = Path("daily_card.html")
-    if html_path.exists():
-        html_body = html_path.read_text(encoding="utf-8")
-    else:
-        # Fallback: generate inline if file missing
+    if not html_path.exists():
         write_html_card(results, date_str)
-        html_body = html_path.read_text(encoding="utf-8") if html_path.exists() else f"<pre>{plain_body}</pre>"
 
-    # ── Build multipart/alternative message ─────────────────────────────────
-    msg = MIMEMultipart("alternative")
+    # ── Build message: plain body + HTML attachment ──────────────────────────
+    msg = MIMEMultipart("mixed")
     msg["From"]    = gmail_from
     msg["To"]      = ", ".join(recipients)
     msg["Subject"] = subject
-    # Plain text first (fallback), HTML second (preferred)
+
     msg.attach(MIMEText(plain_body, "plain", "utf-8"))
-    msg.attach(MIMEText(html_body,  "html",  "utf-8"))
+
+    if html_path.exists():
+        html_bytes = html_path.read_bytes()
+        att = MIMEBase("text", "html")
+        att.set_payload(html_bytes)
+        encoders.encode_base64(att)
+        att.add_header(
+            "Content-Disposition",
+            "attachment",
+            filename=f"wizard_report_{date_str}.html",
+        )
+        msg.attach(att)
+        print(f"  HTML card attached ({len(html_bytes) // 1024}KB)")
 
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
