@@ -1,23 +1,25 @@
 """
 run_daily_scheduler.py
 ======================
-Continuously running scheduler that orchestrates the daily MLB pipeline.
+Three-shot daily scheduler for The Wizard Report MLB pipeline.
+
+Fires three times per day at 11:00 AM, 2:00 PM, and 5:00 PM ET so that
+late-starting games receive updated lineups and closing odds before first pitch.
 
 Usage:
-    python run_daily_scheduler.py                       # start scheduler (runs forever)
-    python run_daily_scheduler.py --run-now morning     # run morning_run immediately and exit
-    python run_daily_scheduler.py --run-now picks       # run picks_run immediately and exit
-    python run_daily_scheduler.py --run-now night       # run night_run immediately and exit
-    python run_daily_scheduler.py --run-now k_props     # run k_props_retry immediately and exit
-    python run_daily_scheduler.py --dry-run             # print schedule and exit
+    python run_daily_scheduler.py              # start scheduler (runs forever)
+    python run_daily_scheduler.py --run-now    # fire run_all immediately and exit
+    python run_daily_scheduler.py --dry-run    # print schedule and exit
 
 Schedule (all times ET):
-    06:00  MORNING_RUN    — lineup_pull.py + odds_current_pull.py + pipeline_health.py
-    08:30  PICKS_RUN      — build_pitcher_profile.py + build_team_stats_2026.py +
-                            run_today.py --csv + supabase_upload.py + pipeline_health.py
-    Every 30 min 10:00-18:30  K_PROPS_RETRY — odds_current_pull.py (if stale/missing)
-    23:00  NIGHT_RUN      — backtest_2026.py + backtest_mc_2026.py --rebuild +
-                            supabase_upload.py + pipeline_health.py
+    11:00  RUN_ALL     — full pipeline (lineups, pitcher profiles, team stats,
+                         odds, predictions, upload, health)
+    14:00  RUN_REFRESH — lightweight refresh (lineups, odds, predictions, upload)
+    17:00  RUN_REFRESH — lightweight refresh (lineups, odds, predictions, upload)
+
+The 2 PM and 5 PM refreshes skip the slow data builds (pitcher profiles,
+team stats) which don't change intraday.  They re-pull lineups to capture
+late starters and re-pull odds to get closer-to-closing lines.
 """
 
 import argparse
@@ -65,12 +67,6 @@ log = logging.getLogger("wizard.scheduler")
 # Constants
 # ---------------------------------------------------------------------------
 ET = ZoneInfo("America/New_York")
-
-# Window during which K props retries are allowed (ET)
-K_PROPS_START_ET = (10, 0)   # 10:00 ET
-K_PROPS_END_ET   = (18, 30)  # 18:30 ET
-
-K_PROPS_MAX_AGE_HOURS = 6
 
 
 # ---------------------------------------------------------------------------
@@ -130,11 +126,6 @@ def run_step(script: str, label: str = "") -> tuple[int, float]:
         return 1, elapsed
 
 
-def _now_et() -> datetime:
-    """Return the current moment as an ET-aware datetime."""
-    return datetime.now(tz=ET)
-
-
 def schedule_et(time_str: str, job_fn, label: str) -> None:
     """
     Register a daily job that fires at a fixed ET clock time.
@@ -143,7 +134,6 @@ def schedule_et(time_str: str, job_fn, label: str) -> None:
     to the ``schedule`` library so the job fires correctly regardless of
     the machine's timezone.
     """
-    # Build a reference ET datetime (date is arbitrary; only H:M matters)
     et_naive = datetime.strptime(time_str, "%H:%M").replace(
         year=2026, month=1, day=1, tzinfo=ET
     )
@@ -153,187 +143,89 @@ def schedule_et(time_str: str, job_fn, label: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Pipeline jobs
+# Pipeline job
 # ---------------------------------------------------------------------------
 
-def morning_run() -> None:
-    """06:00 ET — pull lineups + odds for today AND tomorrow, health-check."""
+def run_all() -> None:
+    """11:00 AM ET — full pipeline run."""
     try:
-        log_header("MORNING RUN — lineups + odds (today + tomorrow)")
+        log_header("DAILY RUN — 11:00 AM ET — full pipeline")
         tomorrow = (date.today() + __import__("datetime").timedelta(days=1)).isoformat()
 
-        # Last 72h + today — uses boxscore for completed games, schedule for future
-        run_step("lineup_pull.py --recent", "lineups_recent")
-        run_step("odds_current_pull.py", "odds_today")
-
-        # Tomorrow — probable pitchers + next-day odds (best-effort)
+        # ── Step 1: Lineups + probable starters ───────────────────────────
+        run_step("lineup_pull.py --recent", "lineups_today")
         run_step(f"lineup_pull.py --date {tomorrow}", "lineups_tmrw")
-        run_step(f"odds_current_pull.py --date {tomorrow}", "odds_tmrw")
 
-        run_step("pipeline_health.py --upload", "health")
-    except Exception:
-        log.exception("Unhandled exception in morning_run — scheduler will continue.")
-
-
-def picks_run() -> None:
-    """08:30 ET — build profiles, generate picks for today + tomorrow, upload."""
-    try:
-        log_header("PICKS RUN — profiles + picks (today + tomorrow) + upload")
-        tomorrow = (date.today() + __import__("datetime").timedelta(days=1)).isoformat()
-
-        run_step("build_pitcher_profile.py", "profiles")
+        # ── Step 2: Pitcher profiles + team stats refresh ─────────────────
+        run_step("build_pitcher_profile.py", "pitcher_profiles")
         run_step("build_team_stats_2026.py", "team_stats")
 
-        # Generate today's card
-        run_step("run_today.py --csv", "picks_today")
+        # ── Step 3: Fresh dual-region odds pull ───────────────────────────
+        rc, _ = run_step("odds_current_pull.py", "odds_pull")
+        if rc != 0:
+            log.error("Odds pull failed — predictions will degrade to retail-only fallback.")
 
-        # Generate tomorrow's card (uses tomorrow's lineup + odds files)
-        run_step(f"run_today.py --date {tomorrow} --csv", "picks_tmrw")
+        # ── Step 4: Generate today's card ─────────────────────────────────
+        rc, _ = run_step("run_today.py --csv --email", "picks")
+        if rc != 0:
+            log.warning("run_today.py exited non-zero — check model_scores.csv for errors.")
 
+        # ── Step 5: Upload results to Supabase ────────────────────────────
         run_step("supabase_upload.py", "upload")
+
+        # ── Step 6: Pipeline health snapshot ─────────────────────────────
         run_step("pipeline_health.py --upload", "health")
+
     except Exception:
-        log.exception("Unhandled exception in picks_run — scheduler will continue.")
+        log.exception("Unhandled exception in run_all — scheduler will continue.")
 
 
-def k_props_retry() -> None:
+def run_refresh(label: str) -> None:
     """
-    Every 30 min, 10:00–18:30 ET — fetch K props if stale/missing, refresh
-    lineups + lineup quality if batting orders not yet confirmed, then
-    re-run picks and upload if anything changed.
+    2:00 PM and 5:00 PM ET — lightweight intraday refresh.
 
-    Conditions to run:
-    1. Current ET time is within the 10:00–18:30 window.
-    2. K props parquet is missing/stale OR lineups are not yet confirmed.
+    Skips pitcher profiles and team stats (no intraday updates).
+    Re-pulls lineups (late starters confirm after 11 AM) and odds
+    (lines tighten toward close), then regenerates the card and uploads.
     """
     try:
-        now_et = _now_et()
-        h, m = now_et.hour, now_et.minute
-        start_h, start_m = K_PROPS_START_ET
-        end_h, end_m = K_PROPS_END_ET
-        in_window = (h * 60 + m) >= (start_h * 60 + start_m) and \
-                    (h * 60 + m) <= (end_h * 60 + end_m)
+        log_header(f"REFRESH RUN — {label} ET — lineups + odds + picks")
 
-        if not in_window:
-            log.debug("K props retry: outside 10:00-18:30 ET window -- skipping")
-            return
+        # ── Step 1: Lineups — capture any starters confirmed since 11 AM ──
+        run_step("lineup_pull.py --recent", "lineups_today")
 
-        import datetime as _dt
-        today     = date.today().isoformat()
-        tomorrow  = (_dt.date.today() + _dt.timedelta(days=1)).isoformat()
-        kprops_path   = Path("data/statcast") / f"k_props_{today}.parquet"
-        lq_path       = Path("data/statcast") / "lineup_quality_today.parquet"
-        lineups_path  = Path("data/statcast") / "lineups_today.parquet"
-        tmrw_lineups  = Path("data/statcast") / f"lineups_{tomorrow}.parquet"
+        # ── Step 2: Updated odds (closing lines sharper than morning) ──────
+        rc, _ = run_step("odds_current_pull.py", "odds_pull")
+        if rc != 0:
+            log.error("Odds pull failed — predictions will degrade to retail-only fallback.")
 
-        # ── Check if lineups are confirmed ────────────────────────────────
-        lineups_confirmed = False
-        if lineups_path.exists():
-            try:
-                import pandas as _pd
-                _ldf = _pd.read_parquet(lineups_path)
-                lineups_confirmed = bool(
-                    _ldf["home_lineup_confirmed"].any() or
-                    _ldf["away_lineup_confirmed"].any()
-                )
-            except Exception:
-                pass
+        # ── Step 3: Regenerate card with refreshed data ───────────────────
+        rc, _ = run_step("run_today.py --csv --email", "picks")
+        if rc != 0:
+            log.warning("run_today.py exited non-zero — check model_scores.csv for errors.")
 
-        # ── Check if K props need refreshing ──────────────────────────────
-        kprops_stale = True
-        if kprops_path.exists():
-            age_h = (time.time() - kprops_path.stat().st_mtime) / 3600
-            if age_h < K_PROPS_MAX_AGE_HOURS:
-                kprops_stale = False
-                log.info("K props fresh (%.1fh old)", age_h)
-            else:
-                log.info("K props stale (%.1fh old) — re-fetching", age_h)
-        else:
-            log.info("K props missing for %s — fetching", today)
-
-        # ── Check if lineup quality needs refreshing ───────────────────────
-        lq_missing = not lq_path.exists() or (
-            lq_path.exists() and _pd.read_parquet(lq_path).empty
-            if lq_path.exists() else True
-        )
-
-        if not kprops_stale and lineups_confirmed and not lq_missing:
-            log.info("K props fresh, lineups confirmed, lineup quality built — nothing to do")
-            return
-
-        log_header("K PROPS / LINEUP RETRY")
-        did_something = False
-
-        # Refresh lineups + lineup quality if not yet confirmed
-        if not lineups_confirmed or lq_missing:
-            log.info("Lineups not yet confirmed — refreshing lineups + lineup quality")
-            run_step("lineup_pull.py", "lineups")
-            run_step("build_lineup_quality.py", "lineup_quality")
-            did_something = True
-
-        # Also refresh tomorrow's lineups if file is missing/stale
-        if not tmrw_lineups.exists():
-            log.info("Tomorrow's lineups missing — fetching")
-            run_step(f"lineup_pull.py --date {tomorrow}", "lineups_tmrw")
-            run_step(f"build_lineup_quality.py --date {tomorrow}", "lineup_quality_tmrw")
-            did_something = True
-
-        # Refresh K props / odds if stale
-        if kprops_stale:
-            rc, _ = run_step("odds_current_pull.py", "k_props")
-            if rc == 0:
-                did_something = True
-            else:
-                log.warning("K props fetch failed (rc=%d) — will retry at next interval", rc)
-
-        # Re-run picks and upload if we updated any inputs
-        if did_something:
-            log.info("Inputs updated — regenerating picks (today + tomorrow) and uploading")
-            run_step("run_today.py --csv", "picks_today")
-            run_step(f"run_today.py --date {tomorrow} --csv", "picks_tmrw")
-            run_step("supabase_upload.py", "upload")
-            run_step("pipeline_health.py --upload", "health")
-
-    except Exception:
-        log.exception("Unhandled exception in k_props_retry — scheduler will continue.")
-
-
-def night_run() -> None:
-    """23:00 ET — run backtests, update model history, upload."""
-    try:
-        log_header("NIGHT RUN — backtest + model history + upload")
-        run_step("backtest_2026.py", "backtest")
-        run_step("backtest_mc_2026.py --rebuild", "mc_backtest")
+        # ── Step 4: Upload updated picks to Supabase ──────────────────────
         run_step("supabase_upload.py", "upload")
-        run_step("pipeline_health.py --upload", "health")
+
     except Exception:
-        log.exception("Unhandled exception in night_run — scheduler will continue.")
+        log.exception("Unhandled exception in run_refresh — scheduler will continue.")
 
 
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
-RUN_NOW_MAP = {
-    "morning": morning_run,
-    "picks":   picks_run,
-    "night":   night_run,
-    "k_props": k_props_retry,
-}
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Wizard MLB daily pipeline scheduler",
+        description="Wizard MLB daily pipeline scheduler — 11 AM / 2 PM / 5 PM ET",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "--run-now",
-        metavar="JOB",
-        choices=list(RUN_NOW_MAP),
-        help="Run a specific job immediately and exit (choices: %(choices)s)",
+        action="store_true",
+        help="Fire run_all immediately and exit",
     )
     group.add_argument(
         "--dry-run",
@@ -352,26 +244,22 @@ def main() -> None:
 
     # --- Immediate single-job mode ---
     if args.run_now:
-        log.info("--run-now %s: executing immediately", args.run_now)
-        RUN_NOW_MAP[args.run_now]()
-        log.info("--run-now %s: done", args.run_now)
+        log.info("--run-now: firing run_all immediately")
+        run_all()
+        log.info("--run-now: done")
         return
 
-    # --- Register all scheduled jobs ---
+    # --- Register scheduled job ---
     log.info("=" * 60)
     log.info("  Wizard MLB Scheduler starting")
     log.info("  All times ET. Local offset applied automatically.")
     log.info("=" * 60)
 
-    schedule_et("06:00", morning_run, "morning_run")
-    schedule_et("08:30", picks_run,   "picks_run")
-    schedule_et("23:00", night_run,   "night_run")
+    schedule_et("11:00", run_all,                          "run_all")
+    schedule_et("14:00", lambda: run_refresh("2:00 PM"),   "run_refresh_2pm")
+    schedule_et("17:00", lambda: run_refresh("5:00 PM"),   "run_refresh_5pm")
 
-    # K props: every 30 minutes; the job itself enforces the 10:00–18:30 ET window
-    schedule.every(30).minutes.do(k_props_retry).tag("k_props")
-    log.info("Scheduled %-14s every 30 min (window guard: 10:00-18:30 ET)", "k_props")
-
-    # --- Dry-run mode: just print and exit ---
+    # --- Dry-run mode ---
     if args.dry_run:
         log.info("")
         log.info("Dry-run mode — registered jobs:")
@@ -392,7 +280,6 @@ def main() -> None:
             try:
                 schedule.run_pending()
             except Exception:
-                # Catch any scheduler-level errors so the loop never dies
                 log.exception("Unexpected error in schedule.run_pending() — continuing")
             time.sleep(30)
     except KeyboardInterrupt:
