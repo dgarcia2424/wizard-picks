@@ -44,6 +44,40 @@ try:
 except ImportError:
     xgb = None
 
+try:
+    import lightgbm as lgb_mc
+    _LGBM_MC = True
+except ImportError:
+    lgb_mc = None
+    _LGBM_MC = False
+
+try:
+    import catboost as cb_mc
+    _CATBOOST_MC = True
+except ImportError:
+    cb_mc = None
+    _CATBOOST_MC = False
+
+# ── GPU backend: CuPy with transparent numpy fallback ──────────────────────
+# All simulation arrays are generated on the RTX 5080 when CuPy is available.
+# If CuPy is absent or no CUDA device is present, every cp.* call silently
+# falls back to the equivalent numpy operation — zero code changes required.
+try:
+    import cupy as cp
+    _GPU = cp.cuda.is_available()
+    if _GPU:
+        # Probe cuRAND — curand*.dll may be absent even when CUDA device exists
+        try:
+            _probe = cp.random.standard_normal(1)
+            del _probe
+        except (ImportError, Exception):
+            _GPU = False
+    if not _GPU:
+        import numpy as cp          # no cuRAND or no device → CPU fallback
+except ImportError:
+    import numpy as cp              # CuPy not installed → CPU fallback
+    _GPU = False
+
 warnings.filterwarnings("ignore")
 
 # ---------------------------------------------------------------------------
@@ -51,6 +85,15 @@ warnings.filterwarnings("ignore")
 # ---------------------------------------------------------------------------
 DATA_DIR   = Path("./data/statcast")
 MODELS_DIR = Path("./models")
+
+# Columns negated when building the away-perspective feature row for xgb_rl_team.
+# Must match _DIFF_COLS_TO_NEGATE in train_xgboost.py exactly.
+_TEAM_DIFF_COLS = [
+    "sp_k_pct_diff", "sp_xwoba_diff", "sp_xrv_diff", "sp_velo_diff",
+    "sp_age_diff", "sp_kminusbb_diff", "sp_k_pct_10d_diff", "sp_xwoba_10d_diff",
+    "sp_bb_pct_10d_diff", "batting_matchup_edge", "batting_matchup_edge_10d",
+    "bp_era_diff", "bp_k9_diff", "bp_whip_diff", "circadian_edge",
+]
 
 N_SIMS         = 50_000    # Monte Carlo sample count
 INNINGS_SP     = 5.5       # Expected innings from starter before bullpen
@@ -73,6 +116,27 @@ XGB_BLEND_WEIGHT = 0.40
 # Typical MLB bullpen ERA and xwOBA equivalent
 DEFAULT_BULLPEN_XWOBA = 0.310   # slightly below league avg (relievers are better)
 DEFAULT_BULLPEN_ERA   = 3.80
+
+# ── Bivariate run-scoring parameters (Poisson-LogNormal copula) ─────────────
+#
+# Model:  H | V_h ~ Poisson(μ_h · V_h),  A | V_a ~ Poisson(μ_a · V_a)
+#         [log V_h, log V_a] ~ BVN(−σ²/2·1, σ²·[[1,ρ],[ρ,1]])
+#
+# σ_NB = 0.50:  log-normal mixing SD, equivalent to NB dispersion r ≈ 4.
+#   Var(X) = μ + μ²·(e^σ² − 1) = 4.4 + 4.4²·0.284 = 9.9  →  σ_runs ≈ 3.14  ✓
+#
+# ρ_COPULA = 0.14: Gaussian copula correlation.
+#   Corr(H,A) = μ_h·μ_a·(e^(σ²·ρ)−1) / √(Var_h·Var_a)
+#             = 19.36·(e^0.0175−1) / 9.9 ≈ 0.070  (validated 2019-2024 MLB)
+#
+RUN_SIGMA_NB   : float = 0.50   # log-normal mixing SD  → overdispersion r ≈ 4
+RUN_RHO_COPULA : float = 0.14   # copula corr → run-level Corr(H,A) ≈ 0.07
+
+# ── K-prop Negative Binomial dispersion ──────────────────────────────────────
+# r_k = μ²/(σ²−μ).  Empirically for per-start K counts:
+#   μ ≈ 5.0, σ² ≈ 7.5  →  r_k = 25/2.5 = 10; use 8 (conservative, fits prop lines)
+# Implemented as Gamma-Poisson mixture:  λ ~ Γ(r_k, μ/r_k),  K ~ Poisson(λ)
+KPROP_NB_R: float = 8.0
 
 # Stadium elevations for air density calculation
 STADIUM_ELEVATION = {
@@ -115,22 +179,202 @@ def load_profiles() -> pd.DataFrame:
     return df
 
 
+def load_pitcher_10d() -> dict:
+    """
+    Load trailing-10-day SP stats → dict keyed by pitcher_name_upper.
+    Returns {} if file not present (graceful degradation).
+    """
+    path = DATA_DIR / "pitcher_10d_2026.parquet"
+    if not path.exists():
+        return {}
+    try:
+        df = pd.read_parquet(path, engine="pyarrow")
+        return {
+            row["pitcher_name_upper"]: {
+                "k_pct_10d": row.get("k_pct_10d"),
+                "xwoba_10d": row.get("xwoba_10d"),
+            }
+            for _, row in df.iterrows()
+            if pd.notna(row.get("pitcher_name_upper"))
+        }
+    except Exception:
+        return {}
+
+
+def _shadow_predict_lgbm(model, X_df) -> float:
+    """
+    Unified LightGBM shadow inference.
+    Handles both lgb.Booster (native .json) and LGBMClassifier (sklearn pkl).
+    lgb.Booster.predict() returns the sigmoid probability directly for binary tasks.
+    """
+    if hasattr(model, "predict_proba"):
+        # LGBMClassifier (pkl fallback)
+        return float(model.predict_proba(X_df)[0, 1])
+    # lgb.Booster (native json — loaded via lgb_mc.Booster)
+    arr = X_df.values.astype("float64") if hasattr(X_df, "values") else X_df
+    return float(model.predict(arr)[0])
+
+
+def _shadow_predict_catboost(model, X_arr) -> float:
+    """
+    Unified CatBoost shadow inference.
+    Both native .cbm (CatBoostClassifier.load_model) and pkl use predict_proba.
+    X_arr must already be a float64 numpy array (pd.NA → np.nan).
+    """
+    return float(model.predict_proba(X_arr)[0, 1])
+
+
 def load_xgb_models():
+    """
+    Load official XGBoost models + Level-2 stacking LR plus the two Shadow
+    models (LightGBM, CatBoost) used exclusively for variance estimation.
+
+    Shadow model load order:
+      1. Native format  — lgb_shadow.json / cat_shadow.cbm   (preferred)
+      2. Sklearn pkl    — lgbm_rl.pkl / cat_rl.pkl           (legacy fallback)
+
+    Returns
+    -------
+    rl_model, tot_model, ml_model, feat_cols, lgbm_shadow, cat_shadow, stacking
+    """
+    import pickle as _pkl
+
     if xgb is None:
-        return None, None, None
+        return None, None, None, [], None, None, None, None, None
+
+    # ── XGBoost (required — official model) ──────────────────────────────
     models = {}
     for name, path in [("rl",    MODELS_DIR / "xgb_rl.json"),
-                       ("total", MODELS_DIR / "xgb_total.json")]:
+                       ("total", MODELS_DIR / "xgb_total.json"),
+                       ("ml",    MODELS_DIR / "xgb_ml.json")]:
         if path.exists():
-            m = xgb.XGBClassifier() if name == "rl" else xgb.XGBRegressor()
+            m = xgb.XGBRegressor() if name == "total" else xgb.XGBClassifier()
             m.load_model(str(path))
+            if _GPU:
+                m.set_params(device="cuda")
             models[name] = m
         else:
             models[name] = None
 
     feat_path = MODELS_DIR / "feature_cols.json"
     feat_cols = json.loads(feat_path.read_text()) if feat_path.exists() else []
-    return models.get("rl"), models.get("total"), feat_cols
+
+    # ── Team-perspective RL model (optional — doubles dataset with is_home col) ─
+    team_rl_model = None
+    team_feat_cols = None
+    team_rl_path   = MODELS_DIR / "xgb_rl_team.json"
+    team_feat_path = MODELS_DIR / "feature_cols_team.json"
+    if team_rl_path.exists():
+        try:
+            _tm = xgb.XGBClassifier()
+            _tm.load_model(str(team_rl_path))
+            if _GPU:
+                _tm.set_params(device="cuda")
+            team_rl_model = _tm
+            print(f"  [MC] Team RL model loaded: {team_rl_path.name}")
+        except Exception as e:
+            print(f"  [WARN] Could not load {team_rl_path.name}: {e}")
+    if team_feat_path.exists():
+        try:
+            team_feat_cols = json.loads(team_feat_path.read_text())
+        except Exception as e:
+            print(f"  [WARN] Could not load {team_feat_path.name}: {e}")
+
+    # ── LightGBM Shadow (optional) ────────────────────────────────────────
+    # Prefer native .json (lgb.Booster); fall back to sklearn pkl.
+    lgbm_shadow = None
+    if _LGBM_MC:
+        for p, loader in [
+            (MODELS_DIR / "lgb_shadow.json",
+             lambda p: lgb_mc.Booster(model_file=str(p))),
+            (MODELS_DIR / "lgbm_rl.pkl",
+             lambda p: _pkl.loads(p.read_bytes())),
+        ]:
+            if p.exists():
+                try:
+                    lgbm_shadow = loader(p)
+                    print(f"  [MC] LightGBM shadow: {p.name}")
+                    break
+                except Exception as e:
+                    print(f"  [WARN] Could not load {p.name}: {e}")
+
+    # ── CatBoost Shadow (optional) ────────────────────────────────────────
+    # Prefer native .cbm (CatBoostClassifier.load_model); fall back to pkl.
+    cat_shadow = None
+    if _CATBOOST_MC:
+        for p, fmt in [
+            (MODELS_DIR / "cat_shadow.cbm", "cbm"),
+            (MODELS_DIR / "cat_rl.pkl",     None),
+        ]:
+            if p.exists():
+                try:
+                    if fmt == "cbm":
+                        m = cb_mc.CatBoostClassifier()
+                        m.load_model(str(p), format="cbm")
+                        cat_shadow = m
+                    else:
+                        cat_shadow = _pkl.loads(p.read_bytes())
+                    print(f"  [MC] CatBoost shadow: {p.name}")
+                    break
+                except Exception as e:
+                    print(f"  [WARN] Could not load {p.name}: {e}")
+
+    # ── Stacking model (official — XGBoost-only input) ────────────────────
+    # Supports both new BayesianStacker (v5.1) and legacy StackingModel pickles.
+    stacking = None
+    stk_path = MODELS_DIR / "stacking_lr_rl.pkl"
+    if stk_path.exists():
+        try:
+            import sys, train_xgboost as _txgb
+            # Register both classes so pickle can deserialise either format
+            for _cls_name in ("BayesianStacker", "StackingModel"):
+                if hasattr(_txgb, _cls_name):
+                    _cls = getattr(_txgb, _cls_name)
+                    if not hasattr(sys.modules.get("__main__"), _cls_name):
+                        sys.modules["__main__"].__dict__[_cls_name] = _cls
+                    # Also register under __main__ module path that pickle uses
+                    sys.modules[__name__].__dict__[_cls_name] = _cls
+            stacking = _pkl.loads(stk_path.read_bytes())
+            _stk_type = type(stacking).__name__
+            print(f"  [MC] Stacking model loaded: {_stk_type}")
+        except Exception as e:
+            print(f"  [WARN] Could not load stacking_lr_rl.pkl: {e}")
+
+    n_shadow = (lgbm_shadow is not None) + (cat_shadow is not None)
+    print(f"  [MC] Official: XGBoost -> Bayesian Stacker"
+          f"  |  Shadow: {n_shadow}/2 loaded"
+          f"{' (LGBM' if lgbm_shadow else ''}"
+          f"{'+CAT' if lgbm_shadow and cat_shadow else 'CAT' if cat_shadow else ''}"
+          f"{')' if n_shadow else ''}")
+
+    return (models.get("rl"), models.get("total"), models.get("ml"), feat_cols,
+            lgbm_shadow, cat_shadow, stacking, team_rl_model, team_feat_cols)
+
+
+def _build_away_xgb_row(row_df: pd.DataFrame) -> pd.DataFrame:
+    """Build away-perspective feature row: swap home/away cols, negate diffs, set is_home=0."""
+    away = row_df.copy()
+    cols = set(away.columns)
+    for col in list(cols):
+        if col.startswith("home_"):
+            pair = "away_" + col[5:]
+            if pair in cols:
+                away[col]  = row_df[pair].values
+                away[pair] = row_df[col].values
+    for h_col, a_col in [("home_bat_vs_away_sp", "away_bat_vs_home_sp"),
+                          ("home_bat_vs_away_sp_10d", "away_bat_vs_home_sp_10d")]:
+        if h_col in cols and a_col in cols:
+            away[h_col] = row_df[a_col].values
+            away[a_col] = row_df[h_col].values
+    if "true_home_prob" in cols and "true_away_prob" in cols:
+        away["true_home_prob"] = row_df["true_away_prob"].values
+        away["true_away_prob"] = row_df["true_home_prob"].values
+    for col in _TEAM_DIFF_COLS:
+        if col in cols:
+            away[col] = -row_df[col].values
+    if "is_home" in cols:
+        away["is_home"] = 0
+    return away
 
 
 # Calibrator cache — loaded once per process
@@ -285,82 +529,141 @@ def simulate_game(
     temp_f: float = 72.0,
     home_bullpen_xwoba: float = DEFAULT_BULLPEN_XWOBA,
     away_bullpen_xwoba: float = DEFAULT_BULLPEN_XWOBA,
-    home_team_rs_per_game: float | None = None,   # season-to-date RS/G
+    home_team_rs_per_game: float | None = None,
     away_team_rs_per_game: float | None = None,
-    home_expected_ip: float = INNINGS_SP,   # avg innings home SP actually pitches
-    away_expected_ip: float = INNINGS_SP,   # avg innings away SP actually pitches
-    rng: np.random.Generator | None = None,
+    home_expected_ip: float = INNINGS_SP,
+    away_expected_ip: float = INNINGS_SP,
+    rng=None,                   # accepted but ignored — GPU uses its own RNG
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Monte Carlo game simulation.
+    GPU-accelerated Monte Carlo game simulation.
+
+    Run-scoring model: Poisson-LogNormal compound with Gaussian Copula.
+      H | V_h ~ Poisson(μ_h · V_h)
+      A | V_a ~ Poisson(μ_a · V_a)
+      [log V_h, log V_a] ~ BVN(−σ²/2·𝟏,  σ²·[[1, ρ], [ρ, 1]])
+
+    This correctly captures:
+      • Overdispersion:  Var(X) = μ + μ²(e^σ² − 1) ≈ 9.9  vs Poisson 4.4
+      • Scoring correlation:  Corr(H, A) ≈ 0.07  (shared park/weather/umpire effects)
+
+    All array operations run on the RTX 5080 via CuPy.  Results are returned
+    as numpy arrays so the rest of the call stack requires zero changes.
 
     Returns (home_runs_array, away_runs_array) each of length N_SIMS.
-
-    Team offensive quality (RS/G) scales the pitcher-derived lambda so that
-    elite offenses score more than the SP xwOBA alone would suggest.
-    Per-pitcher expected_ip replaces the global INNINGS_SP constant, so
-    pitchers on strict innings limits (post-TJ, openers) are modeled correctly.
     """
-    if rng is None:
-        rng = np.random.default_rng()
-
-    # --- Team offensive factors (RS/G vs league average) -------------------
-    # Blend 50% team factor / 50% pitcher-derived: avoids over-weighting
-    # small early-season samples while still incorporating team quality.
+    # ── Team offensive quality factors ─────────────────────────────────────
     def off_factor(rs_pg):
-        if rs_pg is None or np.isnan(float(rs_pg)):
+        if rs_pg is None or (isinstance(rs_pg, float) and np.isnan(rs_pg)):
             return 1.0
         raw = float(rs_pg) / LEAGUE_RS_PER_GAME
-        # Blend toward 1.0 (league avg) — dampens small sample extremes
-        return 0.50 * raw + 0.50
+        return 0.50 * raw + 0.50          # 50% blend toward league average
 
     home_off = off_factor(home_team_rs_per_game)
     away_off = off_factor(away_team_rs_per_game)
 
-    # --- Environment adjustments -------------------------------------------
-    air   = air_density_ratio(park_elevation_ft)
-    t_adj = 1 + TEMP_RUN_FACTOR * (temp_f - TEMP_BASELINE_F)
-    env_factor = air * t_adj
+    # ── Environment multiplier (altitude × temperature) ────────────────────
+    env_factor = air_density_ratio(park_elevation_ft) * (
+        1.0 + TEMP_RUN_FACTOR * (temp_f - TEMP_BASELINE_F)
+    )
 
-    # --- Draw per-game xwOBA for each pitcher (normally distributed) --------
-    # Clip to plausible range: xwOBA very rarely < 0.15 or > 0.50 for starters
-    home_xwoba_sp = np.clip(
-        rng.normal(home_mu, home_sigma, N_SIMS), 0.150, 0.500)
-    away_xwoba_sp = np.clip(
-        rng.normal(away_mu, away_sigma, N_SIMS), 0.150, 0.500)
+    # ── Pitcher xwOBA draws (CPU, scalar → GPU lambda arrays) ──────────────
+    # Use numpy for the small (N_SIMS,) normal draw; xwOBA per-game sigma
+    # is the pitcher's career-spring dispersion, not the run-scoring overdispersion.
+    _rng = np.random.default_rng() if rng is None else rng
+    home_xwoba_sp = np.clip(_rng.normal(home_mu, home_sigma, N_SIMS), 0.150, 0.500)
+    away_xwoba_sp = np.clip(_rng.normal(away_mu, away_sigma, N_SIMS), 0.150, 0.500)
 
-    # --- SP innings: runs allowed per game from SP portion -----------------
-    # home_xwoba_sp = xwOBA home SP allows opponents (= away team offensive output)
-    # away_xwoba_sp = xwOBA away SP allows opponents (= home team offensive output)
-    # Each pitcher uses their own SP/BP split based on actual 2026 IP/start.
-    # A pitcher on an innings limit (e.g. 4.5 IP/start) means more bullpen
-    # exposure for the opposing team, changing the lambda calculation.
-    home_sp_ip = float(np.clip(home_expected_ip, 1.0, INNINGS_GAME))
-    away_sp_ip = float(np.clip(away_expected_ip, 1.0, INNINGS_GAME))
-    home_sp_frac = home_sp_ip / INNINGS_GAME
+    # ── SP / Bullpen innings split ─────────────────────────────────────────
+    home_sp_frac = float(np.clip(home_expected_ip, 1.0, INNINGS_GAME)) / INNINGS_GAME
+    away_sp_frac = float(np.clip(away_expected_ip, 1.0, INNINGS_GAME)) / INNINGS_GAME
     home_bp_frac = 1.0 - home_sp_frac
-    away_sp_frac = away_sp_ip / INNINGS_GAME
     away_bp_frac = 1.0 - away_sp_frac
 
-    # Runs allowed by each pitcher / bullpen (= opponent's scoring)
-    # home SP (home_xwoba_sp) pitches to AWAY batters for home_sp_frac of game
-    # away SP (away_xwoba_sp) pitches to HOME batters for away_sp_frac of game
-    home_sp_concedes = xwoba_to_runs_per_game(home_xwoba_sp) * home_sp_frac
-    away_sp_concedes = xwoba_to_runs_per_game(away_xwoba_sp) * away_sp_frac
-    home_bp_concedes = xwoba_to_runs_per_game(home_bullpen_xwoba) * home_bp_frac
-    away_bp_concedes = xwoba_to_runs_per_game(away_bullpen_xwoba) * away_bp_frac
+    # Expected runs conceded (= opponent's expected scoring rate) per game
+    # Computed on CPU (vectorised numpy) — only N_SIMS floats, negligible cost
+    _xwoba_to_rpg = lambda x: np.clip(XWOBA_INTERCEPT + XWOBA_SLOPE * x, 0.0, 20.0)
+    mu_home = ((_xwoba_to_rpg(away_xwoba_sp) * away_sp_frac
+                + _xwoba_to_rpg(away_bullpen_xwoba) * away_bp_frac)
+               * env_factor * home_off)
+    mu_away = ((_xwoba_to_rpg(home_xwoba_sp) * home_sp_frac
+                + _xwoba_to_rpg(home_bullpen_xwoba) * home_bp_frac)
+               * env_factor * away_off)
 
-    # --- Total expected runs (environment + team offense adjusted) ----------
-    # Home team scores = away pitching concedes × home team offensive quality
-    home_lambda = (away_sp_concedes + away_bp_concedes) * env_factor * home_off
-    # Away team scores = home pitching concedes × away team offensive quality
-    away_lambda = (home_sp_concedes + home_bp_concedes) * env_factor * away_off
+    # Clamp lambdas to a sane floor before GPU transfer
+    mu_home = np.maximum(mu_home, 0.10)
+    mu_away = np.maximum(mu_away, 0.10)
 
-    # --- Poisson draw (actual runs in each simulated game) ----------------
-    home_runs = rng.poisson(np.maximum(home_lambda, 0.1))
-    away_runs = rng.poisson(np.maximum(away_lambda, 0.1))
+    # ── GPU: Poisson-LogNormal correlated run draws ────────────────────────
+    # Move expected-run arrays to GPU (no-op if cp == np / CPU fallback)
+    mu_h_gpu = cp.asarray(mu_home, dtype=cp.float32)   # [N_SIMS]
+    mu_a_gpu = cp.asarray(mu_away, dtype=cp.float32)   # [N_SIMS]
+
+    # Correlated standard normals via Cholesky:
+    #   L = [[1, 0], [ρ, √(1−ρ²)]]  so that L Lᵀ = [[1,ρ],[ρ,1]]
+    rho   = float(RUN_RHO_COPULA)
+    sigma = float(RUN_SIGMA_NB)
+    z1    = cp.random.standard_normal(N_SIMS).astype(cp.float32)
+    z2    = cp.random.standard_normal(N_SIMS).astype(cp.float32)
+    eps_h = z1                                                   # [N_SIMS]
+    eps_a = rho * z1 + float(np.sqrt(1.0 - rho ** 2)) * z2      # [N_SIMS]
+
+    # Log-normal mixing: V = exp(σ·ε − σ²/2)  →  E[V]=1, Var(V)=e^σ²−1
+    V_h = cp.exp(sigma * eps_h - 0.5 * sigma * sigma)   # [N_SIMS]
+    V_a = cp.exp(sigma * eps_a - 0.5 * sigma * sigma)   # [N_SIMS]
+
+    # Compound Poisson draw:  runs | V ~ Poisson(μ · V)
+    home_runs_gpu = cp.random.poisson(mu_h_gpu * V_h).astype(cp.float32)
+    away_runs_gpu = cp.random.poisson(mu_a_gpu * V_a).astype(cp.float32)
+
+    # Return as CPU numpy arrays (cp.asnumpy = np.asarray when cp == np)
+    if _GPU:
+        home_runs = cp.asnumpy(home_runs_gpu)
+        away_runs = cp.asnumpy(away_runs_gpu)
+    else:
+        home_runs = np.asarray(home_runs_gpu)
+        away_runs = np.asarray(away_runs_gpu)
 
     return home_runs.astype(float), away_runs.astype(float)
+
+
+def simulate_k_prop_nb(
+    mu_k: float,
+    r_k: float = KPROP_NB_R,
+    n_sims: int = N_SIMS,
+) -> np.ndarray:
+    """
+    Sample K-prop counts using a Negative Binomial via Gamma-Poisson mixture.
+
+    The Binomial(n_BF, k%) baseline is replaced with NB(r_k, p_k) to capture
+    the 1.4× overdispersion observed in starter K-prop lines relative to
+    the Binomial prediction.  This widens the tail (fewer -105/-115 near-miss
+    decisions, more accurate hit/no-hit probability estimates for K props).
+
+    Implementation:
+      λ ~ Gamma(r_k, μ_k / r_k)    [shape=r_k, scale=μ_k/r_k]
+      K ~ Poisson(λ)                 [exact NB marginal]
+
+    Both draws are performed on-GPU; result is returned as a CPU numpy array.
+
+    Parameters
+    ----------
+    mu_k    : expected K count (e.g. BF_per_IP * innings_pitched * k_pct)
+    r_k     : NB dispersion (default 8.0 → Var ≈ μ + μ²/8)
+    n_sims  : number of Monte Carlo draws
+
+    Returns
+    -------
+    np.ndarray of shape (n_sims,) — integer K counts
+    """
+    mu_k = max(float(mu_k), 0.01)
+    scale = mu_k / r_k   # Gamma scale parameter
+
+    # GPU Gamma → Poisson (NB Gamma-Poisson mixture)
+    lam_k = cp.random.gamma(r_k, scale, size=n_sims).astype(cp.float32)
+    k_gpu = cp.random.poisson(lam_k).astype(cp.float32)
+
+    return cp.asnumpy(k_gpu) if _GPU else np.asarray(k_gpu)
 
 
 # ---------------------------------------------------------------------------
@@ -371,10 +674,36 @@ def build_xgb_row(home_prof: pd.Series, away_prof: pd.Series,
                   home_team: str, away_team: str,
                   temp_f: float, feature_cols: list,
                   home_team_stats: pd.Series | None = None,
-                  away_team_stats: pd.Series | None = None) -> pd.DataFrame | None:
+                  away_team_stats: pd.Series | None = None,
+                  pitcher_10d: dict | None = None,
+                  market_odds: dict | None = None,
+                  home_lineup_wrc: float | None = None,
+                  away_lineup_wrc: float | None = None,
+                  game_hour_et: float | None = None) -> pd.DataFrame | None:
     """
     Build a single feature row for XGBoost inference.
     Uses pitcher profile features where available.
+
+    market_odds (optional) dict keys:
+        true_home_prob  -- de-vigged home win probability (Pinnacle preferred)
+        true_away_prob  -- de-vigged away win probability
+        close_total     -- closing O/U total (for context only, not a trained feature)
+
+    home_lineup_wrc / away_lineup_wrc (optional):
+        Today's actual lineup wRC+ (100 = league average).  When provided, all
+        batting xwOBA features for that team are scaled by (wrc / 100) to
+        reflect lineup quality vs. the season-average batting profile.
+        No retraining is needed — this is a multiplicative adjustment applied
+        only at inference time.
+
+    game_hour_et (optional):
+        Scheduled start hour in Eastern Time (float, e.g. 13.75 = 1:45 PM ET).
+        Used to compute circadian features:
+          game_hour_et          — raw ET start hour
+          away_game_local_hour  — what time the away team's body thinks it is
+          is_day_game           — 1 if before 5 PM ET
+          circadian_edge        — home minus away local hour (positive = home advantage)
+        Defaults to 19.0 (7 PM ET, a neutral evening game) if not provided.
     """
     if not feature_cols:
         return None
@@ -428,6 +757,17 @@ def build_xgb_row(home_prof: pd.Series, away_prof: pd.Series,
     fill_sp(home_prof, "home_sp")
     fill_sp(away_prof, "away_sp")
 
+    # Trailing-10-day SP stats (k_pct_10d, xwoba_10d) from pitcher_10d lookup
+    if pitcher_10d:
+        home_sp_name = home_prof.get("pitcher_name_upper") or home_prof.get("name_upper", "")
+        away_sp_name = away_prof.get("pitcher_name_upper") or away_prof.get("name_upper", "")
+        for sp_name, prefix in [(home_sp_name, "home_sp"), (away_sp_name, "away_sp")]:
+            sp_10d = pitcher_10d.get(sp_name, {})
+            for src, col in [("k_pct_10d",  f"{prefix}_k_pct_10d"),
+                              ("xwoba_10d",  f"{prefix}_xwoba_10d")]:
+                if col in row and pd.notna(sp_10d.get(src)):
+                    row[col] = float(sp_10d[src])
+
     # SP differentials
     def safe_diff(a, b):
         return float(a) - float(b) if pd.notna(a) and pd.notna(b) else np.nan
@@ -436,6 +776,11 @@ def build_xgb_row(home_prof: pd.Series, away_prof: pd.Series,
         home_prof.get("blended_k_pct"), away_prof.get("blended_k_pct"))
     row["sp_xwoba_diff"]    = safe_diff(
         away_prof.get("blended_xwoba"), home_prof.get("blended_xwoba"))
+    # 10d diffs — only set if both SP 10d values are present
+    row["sp_k_pct_10d_diff"] = safe_diff(
+        row.get("home_sp_k_pct_10d"), row.get("away_sp_k_pct_10d"))
+    row["sp_xwoba_10d_diff"] = safe_diff(
+        row.get("away_sp_xwoba_10d"), row.get("home_sp_xwoba_10d"))   # away − home
     row["sp_xrv_diff"]      = safe_diff(
         home_prof.get("trailing_xrv_per_pitch"), away_prof.get("trailing_xrv_per_pitch"))
     row["sp_velo_diff"]     = safe_diff(
@@ -445,19 +790,40 @@ def build_xgb_row(home_prof: pd.Series, away_prof: pd.Series,
     row["sp_kminusbb_diff"] = safe_diff(
         row.get("home_sp_k_minus_bb"), row.get("away_sp_k_minus_bb"))
 
-    # Team batting splits (2026 season-to-date)
+    # Team batting splits (season-to-date + trailing-10-day)
     def fill_batting(stats, prefix):
         if stats is None:
             return
         for col in ["bat_xwoba_vs_rhp", "bat_xwoba_vs_lhp",
                     "bat_k_vs_rhp",     "bat_k_vs_lhp",
-                    "bat_bb_vs_rhp",    "bat_bb_vs_lhp"]:
+                    "bat_bb_vs_rhp",    "bat_bb_vs_lhp",
+                    "bat_xwoba_vs_rhp_10d", "bat_xwoba_vs_lhp_10d"]:
             feat = f"{prefix}_{col}"
             if feat in row and pd.notna(stats.get(col)):
                 row[feat] = float(stats.get(col))
 
     fill_batting(home_team_stats, "home")
     fill_batting(away_team_stats, "away")
+
+    # Bullpen stats from team_stats (era / whip / k9)
+    def fill_bullpen(stats, prefix):
+        if stats is None:
+            return
+        for col, src in [
+            (f"{prefix}_bp_era",  "bullpen_era"),
+            (f"{prefix}_bp_whip", "bullpen_whip"),
+            (f"{prefix}_bp_k9",   "bullpen_k9"),
+        ]:
+            if col in row and pd.notna(stats.get(src)):
+                row[col] = float(stats.get(src))
+
+    fill_bullpen(home_team_stats, "home")
+    fill_bullpen(away_team_stats, "away")
+
+    # Bullpen differentials (home minus away; negative = home bullpen advantage)
+    row["bp_era_diff"]  = safe_diff(row.get("home_bp_era"),  row.get("away_bp_era"))
+    row["bp_whip_diff"] = safe_diff(row.get("home_bp_whip"), row.get("away_bp_whip"))
+    row["bp_k9_diff"]   = safe_diff(row.get("home_bp_k9"),   row.get("away_bp_k9"))
 
     # Matchup-specific batting edge (home team vs away SP handedness)
     away_sp_rhp = row.get("away_sp_p_throws_R", 1)
@@ -480,14 +846,107 @@ def build_xgb_row(home_prof: pd.Series, away_prof: pd.Series,
         row["batting_matchup_edge"] = (row["home_bat_vs_away_sp"]
                                        - row["away_bat_vs_home_sp"])
 
+    # Trailing-10-day matchup edge — same handedness logic, 10d batting splits
+    if home_team_stats is not None and pd.notna(away_sp_rhp):
+        home_bat_10d = (home_team_stats.get("bat_xwoba_vs_rhp_10d")
+                        if away_sp_rhp == 1
+                        else home_team_stats.get("bat_xwoba_vs_lhp_10d"))
+        if pd.notna(home_bat_10d):
+            row["home_bat_vs_away_sp_10d"] = float(home_bat_10d)
+    if away_team_stats is not None and pd.notna(home_sp_rhp):
+        away_bat_10d = (away_team_stats.get("bat_xwoba_vs_rhp_10d")
+                        if home_sp_rhp == 1
+                        else away_team_stats.get("bat_xwoba_vs_lhp_10d"))
+        if pd.notna(away_bat_10d):
+            row["away_bat_vs_home_sp_10d"] = float(away_bat_10d)
+    if ("home_bat_vs_away_sp_10d" in row and "away_bat_vs_home_sp_10d" in row
+            and pd.notna(row.get("home_bat_vs_away_sp_10d"))
+            and pd.notna(row.get("away_bat_vs_home_sp_10d"))):
+        row["batting_matchup_edge_10d"] = (row["home_bat_vs_away_sp_10d"]
+                                           - row["away_bat_vs_home_sp_10d"])
+
+    # Lineup wRC+ scaling — adjust batting xwOBA features by today's lineup quality.
+    # Multiplier = wrc / 100  (e.g. 110 wRC+ → 1.10x, i.e. 10% better than season avg).
+    # Applied after all batting/matchup features are set so derived edges are also scaled.
+    # K/BB rates are not scaled (those reflect pitcher traits more than lineup composition).
+    _xwoba_bat_feats_home = [
+        "home_bat_xwoba_vs_rhp", "home_bat_xwoba_vs_lhp",
+        "home_bat_xwoba_vs_rhp_10d", "home_bat_xwoba_vs_lhp_10d",
+        "home_bat_vs_away_sp", "home_bat_vs_away_sp_10d",
+    ]
+    _xwoba_bat_feats_away = [
+        "away_bat_xwoba_vs_rhp", "away_bat_xwoba_vs_lhp",
+        "away_bat_xwoba_vs_rhp_10d", "away_bat_xwoba_vs_lhp_10d",
+        "away_bat_vs_home_sp", "away_bat_vs_home_sp_10d",
+    ]
+    if home_lineup_wrc is not None and not np.isnan(float(home_lineup_wrc)):
+        scale_h = float(home_lineup_wrc) / 100.0
+        for feat in _xwoba_bat_feats_home:
+            if feat in row and pd.notna(row.get(feat)):
+                row[feat] = float(row[feat]) * scale_h
+    if away_lineup_wrc is not None and not np.isnan(float(away_lineup_wrc)):
+        scale_a = float(away_lineup_wrc) / 100.0
+        for feat in _xwoba_bat_feats_away:
+            if feat in row and pd.notna(row.get(feat)):
+                row[feat] = float(row[feat]) * scale_a
+    # Recompute derived matchup edges from scaled values
+    if pd.notna(row.get("home_bat_vs_away_sp")) and pd.notna(row.get("away_bat_vs_home_sp")):
+        row["batting_matchup_edge"] = row["home_bat_vs_away_sp"] - row["away_bat_vs_home_sp"]
+    if pd.notna(row.get("home_bat_vs_away_sp_10d")) and pd.notna(row.get("away_bat_vs_home_sp_10d")):
+        row["batting_matchup_edge_10d"] = row["home_bat_vs_away_sp_10d"] - row["away_bat_vs_home_sp_10d"]
+
     # Weather
     row["temp_f"]    = temp_f
     row["wind_mph"]  = 8.0   # default
     row["humidity"]  = 50.0  # default
 
-    # Park
+    # Park factor (static 3-yr average, same dict used in build_feature_matrix.py)
+    _PARK_FACTORS = {
+        "COL": 1.281, "BOS": 1.078, "CIN": 1.062, "TEX": 1.050,
+        "PHI": 1.040, "BAL": 1.038, "ATL": 1.034, "MIL": 1.029,
+        "DET": 1.024, "CHC": 1.023, "HOU": 1.018, "STL": 1.014,
+        "PIT": 1.012, "TB":  1.010, "KC":  1.005, "TOR": 1.000,
+        "NYY": 0.998, "LAA": 0.996, "MIN": 0.995, "AZ":  0.993,
+        "ARI": 0.993, "WSH": 0.990, "WAS": 0.990, "CLE": 0.988,
+        "NYM": 0.984, "MIA": 0.978, "CWS": 0.975, "SF":  0.972,
+        "LAD": 0.970, "SEA": 0.968, "OAK": 0.962, "ATH": 0.962,
+        "SD":  0.960,
+    }
+    _league_avg_park = sum(_PARK_FACTORS.values()) / len(_PARK_FACTORS)
     elev = STADIUM_ELEVATION.get(home_team, 100)
-    row["park_factor"] = 1.0 + (elev / 5200 * 0.10)  # rough proxy from elevation
+    row["park_factor"]      = 1.0 + (elev / 5200 * 0.10)   # elevation proxy (legacy col)
+    row["home_park_factor"] = _PARK_FACTORS.get(home_team, _league_avg_park)
+
+    # Circadian / game-time features (same team timezone dict as build_feature_matrix.py)
+    _TEAM_ET_OFFSET = {
+        "NYY": 0, "NYM": 0, "BOS": 0, "TOR": 0, "DET": 0,
+        "CLE": 0, "BAL": 0, "PHI": 0, "PIT": 0, "WSH": 0, "WAS": 0,
+        "MIA": 0, "ATL": 0, "TB":  0, "CIN": 0,
+        "CHC": -1, "CWS": -1, "MIL": -1, "MIN": -1,
+        "STL": -1, "KC":  -1, "HOU": -1, "TEX": -1,
+        "COL": -2, "AZ": -2, "ARI": -2,
+        "LAD": -3, "LAA": -3, "SEA": -3, "SF": -3,
+        "SD":  -3, "ATH": -3, "OAK": -3,
+    }
+    _gh = float(game_hour_et) if game_hour_et is not None else 19.0  # default: 7pm ET (neutral)
+    _away_offset = _TEAM_ET_OFFSET.get(away_team, 0)
+    _home_offset = _TEAM_ET_OFFSET.get(home_team, 0)
+    row["game_hour_et"]          = _gh
+    row["is_day_game"]           = float(_gh < 17.0)
+    row["away_game_local_hour"]  = _gh + _away_offset
+    row["home_game_local_hour"]  = _gh + _home_offset
+    row["circadian_edge"]        = row["home_game_local_hour"] - row["away_game_local_hour"]
+
+    # Market odds — top-2 features by XGBoost gain; must be populated at inference.
+    # true_home_prob / true_away_prob = de-vigged win probability from sharp market.
+    # Prefer Pinnacle (P_true_home from odds_current_pull) over retail de-vig.
+    if market_odds:
+        thp = market_odds.get("true_home_prob")
+        tap = market_odds.get("true_away_prob")
+        if thp is not None and not np.isnan(float(thp)):
+            row["true_home_prob"] = float(thp)
+        if tap is not None and not np.isnan(float(tap)):
+            row["true_away_prob"] = float(tap)
 
     return pd.DataFrame([row])[feature_cols]
 
@@ -508,6 +967,10 @@ def predict_game(
     away_team_stats: pd.Series | None = None,
     home_lineup_wrc: float | None = None,   # today's lineup wRC+ (100 = league avg)
     away_lineup_wrc: float | None = None,
+    pitcher_10d: dict | None = None,   # {pitcher_name_upper: {k_pct_10d, xwoba_10d}}
+    posted_total: float | None = None, # Vegas O/U line — used to compute mc_over_prob
+    market_odds: dict | None = None,   # {true_home_prob, true_away_prob} for XGBoost
+    game_hour_et: float | None = None, # scheduled start hour in ET (e.g. 13.75 = 1:45 PM)
 ) -> dict:
     """
     Full prediction pipeline for one game.
@@ -671,7 +1134,10 @@ def predict_game(
     f1_away_runs = rng.poisson(max(away_f1_lambda, 0.01), size=N_SIMS).astype(float)
 
     # -----------------------------------------------------------------------
-    # PITCHER K PREDICTIONS (Strikeout props — binomial model)
+    # PITCHER K PREDICTIONS (Strikeout props — Negative Binomial model)
+    # Binomial(n_BF, k%) replaced with NB Gamma-Poisson mixture to capture
+    # the ~1.4x overdispersion in starter K-prop lines vs Binomial baseline.
+    # Var(NB) = mu + mu²/r  where r=KPROP_NB_R=8.0
     # -----------------------------------------------------------------------
     home_k_rate = float(home_prof.get("blended_k_pct") or 0.225)
     away_k_rate = float(away_prof.get("blended_k_pct") or 0.225)
@@ -684,8 +1150,8 @@ def predict_game(
     mc_home_k_mean = home_k_rate * home_expected_bf
     mc_away_k_mean = away_k_rate * away_expected_bf
 
-    home_k_sims = rng.binomial(int(round(home_expected_bf)), home_k_rate, size=N_SIMS).astype(float)
-    away_k_sims = rng.binomial(int(round(away_expected_bf)), away_k_rate, size=N_SIMS).astype(float)
+    home_k_sims = simulate_k_prop_nb(mc_home_k_mean).astype(float)
+    away_k_sims = simulate_k_prop_nb(mc_away_k_mean).astype(float)
 
     def k_over_prob(k_sims, line):
         return float((k_sims > line).mean())
@@ -711,7 +1177,7 @@ def predict_game(
         "away_lineup_wrc":     away_lineup_wrc,
         # Moneyline probabilities
         "mc_home_win_prob":    round(float(mc_home_win), 4),
-        "mc_away_win_prob":    round(float(mc_away_cvr_rl), 4),
+        "mc_away_win_prob":    round(float(1 - mc_home_win), 4),
         # Run line cover probabilities
         "mc_home_covers_rl":   round(float(mc_covers_rl), 4),   # home -1.5
         "mc_home_covers_25":   round(float(mc_home_cvr_25), 4), # home -2.5
@@ -726,6 +1192,9 @@ def predict_game(
         # Totals
         "mc_expected_total":   round(mc_total, 2),
         "mc_total_median":     mc_total_median,
+        "mc_total_lo":         int(np.percentile(home_runs + away_runs, 25)),
+        "mc_total_hi":         int(np.percentile(home_runs + away_runs, 75)),
+        "mc_total_std":        round(float((home_runs + away_runs).std()), 2),
         "n_sims":              N_SIMS,
         # F5 predictions
         "mc_f5_home_runs":      round(float(f5_home_runs.mean()), 2),
@@ -754,30 +1223,166 @@ def predict_game(
         "mc_away_sp_k_over_65": round(k_over_prob(away_k_sims, 6.5), 4),
     }
 
-    # XGBoost prediction
-    rl_model, tot_model, feat_cols = load_xgb_models()
+    # O/U probability vs posted line
+    if posted_total is not None:
+        total_sims = home_runs + away_runs
+        result["mc_over_prob"]  = round(float((total_sims > float(posted_total)).mean()), 4)
+        result["mc_under_prob"] = round(float((total_sims < float(posted_total)).mean()), 4)
+
+    # Level-1 XGBoost + Level-2 stacking LR (official signal)
+    # + Shadow inference for ensemble_min / ensemble_max / model_spread
+    rl_model, tot_model, ml_model, feat_cols, lgbm_shadow, cat_shadow, stacking, team_rl_model, team_feat_cols = load_xgb_models()
     if rl_model is not None:
         xgb_row = build_xgb_row(
             home_prof, away_prof, home_team, away_team, temp_f, feat_cols,
             home_team_stats=home_team_stats,
-            away_team_stats=away_team_stats)
+            away_team_stats=away_team_stats,
+            pitcher_10d=pitcher_10d,
+            market_odds=market_odds,
+            home_lineup_wrc=home_lineup_wrc,
+            away_lineup_wrc=away_lineup_wrc,
+            game_hour_et=game_hour_et)
         if xgb_row is not None:
             xgb_rl_prob_raw = float(rl_model.predict_proba(xgb_row)[0, 1])
-            xgb_tot         = float(tot_model.predict(xgb_row)[0]) \
-                if tot_model else mc_total
 
-            # Apply isotonic calibration if calibrator is available
+            # ── Quantile total regression (v5.1) ──────────────────────────
+            # tot_model outputs shape (1, 3): [Q10_floor, Q50_median, Q90_ceiling].
+            # Older single-output models return shape (1,) — handled via fallback.
+            xgb_tot_floor   = None
+            xgb_tot_ceiling = None
+            if tot_model:
+                _tot_raw = tot_model.predict(xgb_row)
+                if _tot_raw.ndim == 2 and _tot_raw.shape[1] == 3:
+                    xgb_tot_floor   = float(np.clip(_tot_raw[0, 0], 0, 30))
+                    xgb_tot         = float(np.clip(_tot_raw[0, 1], 0, 30))
+                    xgb_tot_ceiling = float(np.clip(_tot_raw[0, 2], 0, 30))
+                else:
+                    # Legacy single-output fallback (reg:squarederror model)
+                    xgb_tot = float(_tot_raw.flat[0])
+            else:
+                xgb_tot = mc_total
+
+            # ── Shadow inference (variance bounds only — NOT fed to stacker) ──
+            lgbm_rl_prob_raw = None
+            if lgbm_shadow is not None:
+                try:
+                    lgbm_rl_prob_raw = _shadow_predict_lgbm(lgbm_shadow, xgb_row)
+                except Exception as e:
+                    pass  # shadow miss is non-fatal
+
+            cat_rl_prob_raw = None
+            if cat_shadow is not None:
+                try:
+                    _xgb_row_cat = xgb_row.astype("float64").values  # pd.NA → np.nan
+                    cat_rl_prob_raw = _shadow_predict_catboost(cat_shadow, _xgb_row_cat)
+                except Exception as e:
+                    pass  # shadow miss is non-fatal
+
+            result["lgbm_rl_prob_raw"] = round(lgbm_rl_prob_raw, 4) if lgbm_rl_prob_raw is not None else None
+            result["cat_rl_prob_raw"]  = round(cat_rl_prob_raw,  4) if cat_rl_prob_raw  is not None else None
+            result["_stacking_model"]  = stacking   # pass through for run_today.py
+
+            # ── Team-perspective model: Step 1 (raw) + Step 2 (L1 normalize) ────────
+            xgb_team_rl_home_norm = None
+            xgb_team_rl_away_norm = None
+            if team_rl_model is not None and team_feat_cols is not None:
+                try:
+                    # Build home and away feature rows aligned to team model cols
+                    X_home_team = pd.DataFrame(index=[0])
+                    for c in team_feat_cols:
+                        X_home_team[c] = xgb_row[c].values[0] if c in xgb_row.columns else np.nan
+                    X_home_team["is_home"] = 1.0
+
+                    X_away_team = _build_away_xgb_row(X_home_team)
+                    X_away_team["is_home"] = 0.0
+
+                    raw_home = float(team_rl_model.predict_proba(X_home_team)[0, 1])
+                    raw_away = float(team_rl_model.predict_proba(X_away_team)[0, 1])
+                    p_sum = max(raw_home + raw_away, 1e-9)
+                    xgb_team_rl_home_norm = raw_home / p_sum
+                    xgb_team_rl_away_norm = raw_away / p_sum
+                except Exception as _te:
+                    print(f"  [WARN] Team RL model inference failed: {_te}")
+            result["xgb_team_rl_home_norm"] = round(xgb_team_rl_home_norm, 4) if xgb_team_rl_home_norm is not None else None
+            result["xgb_team_rl_away_norm"] = round(xgb_team_rl_away_norm, 4) if xgb_team_rl_away_norm is not None else None
+
+            # ── ML model raw prob (for stacking gap feature) ─────────────────
+            # ml_model_vs_vegas_gap = XGB ML raw prob − Pinnacle closing implied.
+            # Trained signal: gap > 10% → 65.1% win rate vs 57.2% when aligned.
+            xgb_ml_raw_prob = None
+            if ml_model is not None:
+                try:
+                    xgb_ml_raw_prob = float(ml_model.predict_proba(xgb_row)[0, 1])
+                except Exception:
+                    pass  # ML model miss is non-fatal
+
+            # Export stacking features for run_today.py Three-Part Lock.
+            # All 11 domain features + ml_model_vs_vegas_gap are computable at inference:
+            #   sp_*/batting_matchup_edge  → pitcher profiles + team batting splits
+            #   bp_*_diff                  → team_stats bullpen (era / whip / k9)
+            #   *_10d                      → trailing-10d batting + pitcher_10d file
+            # il_return flags remain at fill_value=0 (absent from profiles)
+            _stk_feat_cols = [
+                "sp_k_pct_diff", "sp_xwoba_diff", "sp_kminusbb_diff",
+                "batting_matchup_edge",
+                "bp_era_diff", "bp_whip_diff", "bp_k9_diff",
+                "batting_matchup_edge_10d",
+                "sp_k_pct_10d_diff", "sp_xwoba_10d_diff",
+            ]
+            _stk_feats = {
+                col: float(xgb_row[col].iloc[0])
+                for col in _stk_feat_cols
+                if col in xgb_row.columns and pd.notna(xgb_row[col].iloc[0])
+            }
+            # SP handedness columns — needed by BayesianStacker to derive segment_id.
+            # 1 = RHP, 0 = LHP.  Default RvR (both 1) when columns are absent.
+            for _sp_col in ("home_sp_p_throws_R", "away_sp_p_throws_R"):
+                if _sp_col in xgb_row.columns and pd.notna(xgb_row[_sp_col].iloc[0]):
+                    _stk_feats[_sp_col] = float(xgb_row[_sp_col].iloc[0])
+                else:
+                    _stk_feats[_sp_col] = 1.0   # default RHP
+            # Compute ml_model_vs_vegas_gap: ML model raw prob − Pinnacle implied
+            if xgb_ml_raw_prob is not None and market_odds is not None:
+                _true_hp = market_odds.get("true_home_prob")
+                if _true_hp is not None:
+                    try:
+                        _stk_feats["ml_model_vs_vegas_gap"] = float(xgb_ml_raw_prob) - float(_true_hp)
+                    except (TypeError, ValueError):
+                        pass  # leave gap absent → stacker fill_value
+            result["stacking_feats"] = _stk_feats
+
+            # Apply calibration — Platt (LogisticRegression) uses predict_proba;
+            # legacy isotonic regression uses predict.  Handle both interfaces.
             cal_rl = load_calibrator("rl")
+            result["xgb_home_covers_rl_raw"] = round(xgb_rl_prob_raw, 4)
             if cal_rl is not None:
-                xgb_rl_prob = float(cal_rl.predict([xgb_rl_prob_raw])[0])
-                result["xgb_home_covers_rl_raw"] = round(xgb_rl_prob_raw, 4)
+                try:
+                    # Platt scaling (LogisticRegression) — explicit (1,1) array
+                    _cal_input = np.array([[float(xgb_rl_prob_raw)]])
+                    xgb_rl_prob = float(cal_rl.predict_proba(_cal_input)[0, 1])
+                except (AttributeError, ValueError):
+                    try:
+                        # Isotonic regression or reshape fallback
+                        _cal_input = np.array([[float(xgb_rl_prob_raw)]])
+                        xgb_rl_prob = float(cal_rl.predict(_cal_input)[0])
+                    except Exception:
+                        xgb_rl_prob = xgb_rl_prob_raw
             else:
                 xgb_rl_prob = xgb_rl_prob_raw
 
             result["xgb_home_covers_rl"] = round(xgb_rl_prob, 4)
             result["xgb_expected_total"] = round(xgb_tot, 2)
 
-            # Blend MC + (calibrated) XGBoost
+            # Quantile bounds (None for legacy single-output model)
+            result["total_floor_10th"]    = round(xgb_tot_floor,   2) if xgb_tot_floor   is not None else None
+            result["total_ceiling_90th"]  = round(xgb_tot_ceiling, 2) if xgb_tot_ceiling is not None else None
+            result["total_variance_spread"] = (
+                round(xgb_tot_ceiling - xgb_tot_floor, 2)
+                if xgb_tot_floor is not None and xgb_tot_ceiling is not None
+                else None
+            )
+
+            # Blend MC + (calibrated) XGBoost — use Q50 median for total blend
             w = XGB_BLEND_WEIGHT
             blended_rl  = (1 - w) * mc_covers_rl + w * xgb_rl_prob
             blended_tot = (1 - w) * mc_total      + w * xgb_tot

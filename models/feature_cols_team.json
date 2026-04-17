@@ -104,5 +104,6 @@
   "away_game_local_hour",
   "home_game_local_hour",
   "circadian_edge",
-  "mc_expected_runs"
+  "mc_expected_runs",
+  "is_home"
 ]
