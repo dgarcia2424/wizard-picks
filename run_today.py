@@ -44,11 +44,16 @@ _load_dotenv()
 DATA_DIR   = Path("./data/statcast")
 MODELS_DIR = Path("./models")
 
-# Bet signal thresholds (legacy — kept for backtest compatibility)
-BET_THRESHOLD_HIGH      = 0.58
-BET_THRESHOLD_HIGH_LEAN = 0.54
-BET_THRESHOLD_LOW       = 0.34
-BET_THRESHOLD_LOW_LEAN  = 0.40
+# Bet signal thresholds — blended_rl = P(home covers -1.5).
+# 2026 model range: 0.21–0.55. Historical home cover rate ~38%.
+# HOME -1.5 thresholds (0.54/0.58) are intentionally above the model's practical
+# ceiling (~0.55) — backtesting shows HOME -1.5 bets are not +EV at any model
+# output level (juice required ~-130 needs 57% breakeven; model tops out at 54%).
+# AWAY +1.5 is the actionable signal: +120 odds need only 45% breakeven.
+BET_THRESHOLD_HIGH      = 0.58   # HOME -1.5 ** (effectively disabled — see above)
+BET_THRESHOLD_HIGH_LEAN = 0.54   # HOME -1.5 *  (effectively disabled)
+BET_THRESHOLD_LOW       = 0.34   # AWAY +1.5 **
+BET_THRESHOLD_LOW_LEAN  = 0.40   # AWAY +1.5 *
 
 # ---------------------------------------------------------------------------
 # Three-Part Lock execution gate constants

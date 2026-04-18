@@ -190,6 +190,9 @@ def run_all() -> None:
         # ── Step 8: CLV audit — close out yesterday's picks ───────────────
         run_step("clv_audit.py", "clv_audit")
 
+        # ── Step 8b: K prop tracker — log yesterday's K predictions vs actuals
+        run_step("kprop_tracker.py", "kprop_tracker")
+
         # ── Step 9: Pipeline health snapshot ──────────────────────────────
         run_step("pipeline_health.py --upload", "health")
 
