@@ -173,6 +173,9 @@ def run_all() -> None:
         if rc != 0:
             log.error("Odds pull failed — predictions will degrade to retail-only fallback.")
 
+        # ── Step 5b: PrizePicks player prop lines ─────────────────────────
+        run_step("prizepicks_pull.py", "prizepicks")
+
         # ── Step 6: Generate today's card ─────────────────────────────────
         rc, _ = run_step("run_today.py --csv --email", "picks")
         if rc != 0:
@@ -212,6 +215,9 @@ def run_refresh(label: str) -> None:
         rc, _ = run_step("odds_current_pull.py", "odds_pull")
         if rc != 0:
             log.error("Odds pull failed — predictions will degrade to retail-only fallback.")
+
+        # ── Step 2b: Refresh PrizePicks lines (lines shift intraday) ─────
+        run_step("prizepicks_pull.py", "prizepicks")
 
         # ── Step 3: Regenerate card with refreshed data ───────────────────
         rc, _ = run_step("run_today.py --csv --email", "picks")

@@ -154,8 +154,11 @@ def upload_all_daily_cards() -> int:
     """
     import datetime, re
     total = 0
-    # Find all daily_card_YYYY-MM-DD.csv files
-    dated_files = sorted(BASE_DIR.glob("daily_card_????-??-??.csv"))
+    # Find all daily_card_YYYY-MM-DD.csv files (root dir + daily_cards/ subfolder)
+    _cards_subdir = BASE_DIR / "daily_cards"
+    dated_files = sorted(
+        p for d in [BASE_DIR, _cards_subdir] for p in d.glob("daily_card_????-??-??.csv") if d.exists()
+    )
     # Also include legacy daily_card.csv (mapped to today)
     legacy = BASE_DIR / "daily_card.csv"
 

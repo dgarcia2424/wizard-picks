@@ -359,10 +359,12 @@ def _compute_batter_props(
     lineup_long: pd.DataFrame,
     fg_bat: pd.DataFrame, bat_xs: pd.DataFrame, bat_ev: pd.DataFrame,
     profiles: pd.DataFrame,
+    pp_df: pd.DataFrame | None = None,
 ) -> list[dict]:
     """
     Compute hit and HR props for all confirmed batters in a game.
     Only includes players appearing in the lineup parquet (playing check).
+    If pp_df is provided, annotates each prop with PrizePicks line + edge.
     Returns list of dicts sorted by hit_prob desc.
     """
     import math as _math
@@ -461,20 +463,80 @@ def _compute_batter_props(
         if hit_prob < _HIT_PROP_THRESH and hr_prob < _HR_PROP_THRESH:
             continue
 
+        # ── PrizePicks line lookup ────────────────────────────────────────────
+        pp_hit_line = pp_hr_line = None
+        pp_hit_edge = pp_hr_edge = None
+        if pp_df is not None and not pp_df.empty:
+            pm = pp_df[pp_df["_name"] == pnorm]
+            # Hit: standard 0.5 line
+            ph = pm[(pm["stat_type"] == "Hits") & (pm["odds_type"] == "standard")]
+            if not ph.empty:
+                pp_hit_line = float(ph.iloc[0]["line"])
+                pp_hit_edge = round(hit_prob - 0.50, 4)
+            # HR: demon 0.5 line
+            phr = pm[(pm["stat_type"] == "Home Runs") & (pm["odds_type"] == "demon")]
+            if not phr.empty:
+                pp_hr_line = float(phr.iloc[0]["line"])
+                pp_hr_edge = round(hr_prob - 0.50, 4)
+
         props.append({
-            "player":    player_name,
-            "side":      side,
-            "team":      home_team if side == "home" else away_team,
-            "pos":       pos,
-            "hit_prob":  round(hit_prob, 3),
-            "hr_prob":   round(hr_prob, 3),
-            "pa_season": int(pa_season),
-            "avg":       round(avg, 3),
-            "hr_season": int(hr_season) if not _is_missing(hr_season) else 0,
+            "player":      player_name,
+            "side":        side,
+            "team":        home_team if side == "home" else away_team,
+            "pos":         pos,
+            "hit_prob":    round(hit_prob, 3),
+            "hr_prob":     round(hr_prob, 3),
+            "pa_season":   int(pa_season),
+            "avg":         round(avg, 3),
+            "hr_season":   int(hr_season) if not _is_missing(hr_season) else 0,
+            # PrizePicks
+            "pp_hit_line": pp_hit_line,
+            "pp_hit_edge": pp_hit_edge,
+            "pp_hr_line":  pp_hr_line,
+            "pp_hr_edge":  pp_hr_edge,
         })
 
     props.sort(key=lambda x: (-x["hit_prob"], -x["hr_prob"]))
     return props
+
+
+def _load_prizepicks(date_str: str) -> pd.DataFrame:
+    """
+    Load today's PrizePicks MLB lines from the parquet saved by prizepicks_pull.py.
+    Returns empty DataFrame if the file doesn't exist (graceful degradation).
+    """
+    pp_path = DATA_DIR / f"prizepicks_mlb_{date_str}.parquet"
+    if not pp_path.exists():
+        return pd.DataFrame()
+    try:
+        df = pd.read_parquet(pp_path)
+        # player_name_norm already set by the puller; expose as _name for matching
+        if "player_name_norm" in df.columns:
+            df["_name"] = df["player_name_norm"]
+        else:
+            df["_name"] = df["player_name"].apply(_norm_name)
+        return df
+    except Exception as e:
+        print(f"  [WARN] PrizePicks load failed: {e}")
+        return pd.DataFrame()
+
+
+def _pp_k_line(pp_df: pd.DataFrame, sp_name_upper: str):
+    """
+    Look up the PrizePicks standard K-prop line for a given starter name.
+    Returns float line value or None if not found.
+    sp_name_upper is e.g. 'TARIK SKUBAL'.
+    """
+    if pp_df.empty:
+        return None
+    pnorm = _norm_name(sp_name_upper)
+    mask = (
+        (pp_df["_name"] == pnorm)
+        & (pp_df["stat_type"] == "Pitcher Strikeouts")
+        & (pp_df["odds_type"] == "standard")
+    )
+    m = pp_df[mask]
+    return float(m.iloc[0]["line"]) if not m.empty else None
 
 
 # ---------------------------------------------------------------------------
@@ -1225,6 +1287,11 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
     _prof_path = DATA_DIR / "pitcher_profiles_2026.parquet"
     pitcher_profiles_df = pd.read_parquet(_prof_path) if _prof_path.exists() else pd.DataFrame()
 
+    # PrizePicks lines (graceful — just empty DF if not pulled yet)
+    pp_df = _load_prizepicks(date_str)
+    if not pp_df.empty:
+        print(f"  [PrizePicks] {len(pp_df)} lines loaded for {date_str}")
+
     if len(lineups) == 0:
         print("  No games found for today.")
         return []
@@ -1541,6 +1608,39 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
         hk_line, hk_model, hk_impl, hk_edge, hk_over_odds, hk_under_odds = _k_prop(home_sp_norm, "home")
         ak_line, ak_model, ak_impl, ak_edge, ak_over_odds, ak_under_odds = _k_prop(away_sp_norm, "away")
 
+        # ── PrizePicks K prop lines ───────────────────────────────────────────
+        def _pp_k(sp_norm, side):
+            """
+            Return (pp_line, pp_model_p, pp_edge) for a PrizePicks standard K line,
+            or (None, None, None) if no PP line exists for this starter.
+            pp_edge = model P(over PP line) - 0.50 (no-juice break-even).
+
+            PP lines can be integers (3.0, 4.0 …) or half-integers (3.5, 4.5 …).
+            MC only pre-computes buckets at half-integers (3.5, 4.5, 5.5, 6.5, 7.5).
+            For integer PP lines: P(over 6.0 Ks) = P(Ks≥7) = P(over 6.5) bucket.
+            Mapping: integer line → (line + 0.5) bucket.
+            Half-integer line → exact bucket.
+            """
+            pp_line = _pp_k_line(pp_df, sp_norm)
+            if pp_line is None:
+                return None, None, None
+            # Resolve to a MC bucket
+            # PP "over N" (integer N) → P(Ks > N) = P(Ks ≥ N+1) = P(Ks > N+0.5) bucket
+            # PP "over N.5" (half-int) → exact bucket
+            _rem = pp_line % 1
+            if _rem == 0:                          # integer line: e.g. 6.0 → use 6.5 bucket
+                bucket_line = pp_line + 0.5
+            else:                                  # half-integer: e.g. 7.5 → use exactly
+                bucket_line = pp_line
+            bucket = f"mc_{side}_sp_k_over_{int(bucket_line * 10)}"
+            mp = res.get(bucket)
+            if mp is None:
+                return pp_line, None, None
+            return pp_line, round(float(mp), 4), round(float(mp) - 0.50, 4)
+
+        pp_hk_line, pp_hk_model, pp_hk_edge = _pp_k(home_sp_norm, "home")
+        pp_ak_line, pp_ak_model, pp_ak_edge = _pp_k(away_sp_norm, "away")
+
         # Gather alternate line odds (only present if odds file has them)
         vegas_ml_away    = game.get("close_ml_away")
         alt_home_25_odds = game.get("alt_rl_home_25_odds")
@@ -1689,7 +1789,7 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
             "total_floor_10th":      total_floor_10th,
             "total_ceiling_90th":    total_ceiling_90th,
             "total_variance_spread": total_variance_spread,
-            # K prop fields
+            # K prop fields (FanDuel/DraftKings lines)
             "home_k_line":       hk_line,
             "home_k_model_over": hk_model,
             "home_k_implied_over": hk_impl,
@@ -1702,6 +1802,13 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
             "away_k_edge":       ak_edge,
             "away_k_over_odds":  ak_over_odds,
             "away_k_under_odds": ak_under_odds,
+            # PrizePicks K prop fields
+            "pp_home_k_line":    pp_hk_line,
+            "pp_home_k_model":   pp_hk_model,
+            "pp_home_k_edge":    pp_hk_edge,
+            "pp_away_k_line":    pp_ak_line,
+            "pp_away_k_model":   pp_ak_model,
+            "pp_away_k_edge":    pp_ak_edge,
             # Legacy fields (used by backtest)
             "rl_signal":      rl_signal_legacy,
             "total_signal":   total_signal,
@@ -1747,7 +1854,8 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
         if game_pk is not None and not lineup_long.empty:
             results[-1]["batter_props"] = _compute_batter_props(
                 game_pk, home, away, home_sp, away_sp,
-                lineup_long, fg_bat, bat_xs, bat_ev, pitcher_profiles_df
+                lineup_long, fg_bat, bat_xs, bat_ev, pitcher_profiles_df,
+                pp_df=pp_df if not pp_df.empty else None,
             )
         else:
             results[-1]["batter_props"] = []
@@ -2245,19 +2353,18 @@ def _build_email_body_old(results: list[dict], date_str: str) -> str:
 
 def send_card_email(results: list[dict], date_str: str) -> None:
     """
-    Send the daily card as a multipart email via Gmail.
-    - Plain-text body: lock summary + full game list (never clipped)
-    - HTML attachment: full daily_card.html (open in browser for visual card)
+    Send the daily card as a multipart/alternative email via Gmail.
+    - Plain-text part: lock summary (fallback for plain-text clients)
+    - HTML part:       full daily_card.html rendered inline in the email
 
-    The HTML is sent as an attachment rather than inline body because Gmail
-    clips inline HTML bodies over ~102KB, which would truncate the card.
+    Gmail clips inline HTML over ~102KB.  The card is currently ~91KB so it
+    fits comfortably.  If it ever exceeds 100KB a warning is printed but the
+    email is still sent (Gmail will clip rather than fail).
     """
     import os
     import smtplib
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
-    from email.mime.base import MIMEBase
-    from email import encoders
 
     gmail_from = os.getenv("GMAIL_FROM", "garcia.dan24@gmail.com")
     gmail_pass = os.getenv("GMAIL_APP_PASSWORD", "")
@@ -2280,7 +2387,7 @@ def send_card_email(results: list[dict], date_str: str) -> None:
     else:
         subject = f"Wizard MLB {date_str} — {n_locks} locks"
 
-    # ── Plain-text body ──────────────────────────────────────────────────────
+    # ── Plain-text body (fallback) ───────────────────────────────────────────
     plain_body = _build_email_body(results, date_str)
 
     # ── Ensure HTML card is written and current ──────────────────────────────
@@ -2288,26 +2395,22 @@ def send_card_email(results: list[dict], date_str: str) -> None:
     if not html_path.exists():
         write_html_card(results, date_str)
 
-    # ── Build message: plain body + HTML attachment ──────────────────────────
-    msg = MIMEMultipart("mixed")
+    html_body = html_path.read_text(encoding="utf-8") if html_path.exists() else ""
+    html_kb   = len(html_body.encode("utf-8")) // 1024
+    if html_kb >= 100:
+        print(f"  [WARN] HTML card is {html_kb}KB — Gmail may clip at 102KB")
+    else:
+        print(f"  HTML card inline ({html_kb}KB)")
+
+    # ── Build message: plain + HTML alternative (HTML shown by default) ──────
+    msg = MIMEMultipart("alternative")
     msg["From"]    = gmail_from
     msg["To"]      = ", ".join(recipients)
     msg["Subject"] = subject
 
     msg.attach(MIMEText(plain_body, "plain", "utf-8"))
-
-    if html_path.exists():
-        html_bytes = html_path.read_bytes()
-        att = MIMEBase("text", "html")
-        att.set_payload(html_bytes)
-        encoders.encode_base64(att)
-        att.add_header(
-            "Content-Disposition",
-            "attachment",
-            filename=f"wizard_report_{date_str}.html",
-        )
-        msg.attach(att)
-        print(f"  HTML card attached ({len(html_bytes) // 1024}KB)")
+    if html_body:
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
@@ -2477,16 +2580,42 @@ def write_html_card(results: list[dict], date_str: str) -> None:
                 f'&nbsp;<span class="k-pover">P(O)&nbsp;{mp_str}</span>'
                 f'&nbsp;<span class="{e_cls} k-edge">{e_str}</span>')
 
-    def _sp_cell(team, name, xwoba, flag, k_line, k_model, k_impl, k_edge):
+    def _pp_k_badge(pp_line, pp_model, pp_edge):
+        """PrizePicks K line badge (no juice; break-even ~57.7% for 2-pick PP)."""
+        if _is_missing(pp_line) or _is_missing(pp_model):
+            return ""
+        line_str = f"{float(pp_line):.1f}"
+        mp_str   = f"{float(pp_model):.0%}"
+        # Colour by edge vs 50% break-even; flag ≥8% as Power Play worthy
+        e = float(pp_edge) if not _is_missing(pp_edge) else 0.0
+        e_str    = f"{e:+.0%}"
+        e_cls    = ("pp-edge-go" if e >= 0.077 else "pp-edge-lean" if e >= 0.03
+                    else "pp-edge-no" if e <= -0.05 else "k-edge")
+        return (f'<span class="pp-k-source">PP</span>&nbsp;'
+                f'<span class="k-line">K {line_str}</span>'
+                f'&nbsp;<span class="k-pover">P(O)&nbsp;{mp_str}</span>'
+                f'&nbsp;<span class="{e_cls} k-edge">{e_str}</span>')
+
+    def _sp_cell(team, name, xwoba, flag, k_line, k_model, k_impl, k_edge, pp_k=None):
         name_str  = str(name or "TBD").title()
         flag_html = (f' <span class="sp-flag">{flag}</span>'
                      if flag and str(flag) not in ("NORMAL","UNKNOWN","") else "")
         xwoba_str = f"{float(xwoba):.3f}" if not _is_missing(xwoba) else "—"
         k_html    = _k_badge(k_model, k_impl, k_edge, k_line)
+        # PrizePicks K badge (shown on separate line if available)
+        pp_k_html = ""
+        if pp_k:
+            pp_k_html = _pp_k_badge(*pp_k)
+        k_section = ""
+        if k_html or pp_k_html:
+            k_section = f'<br><span class="k-props">{k_html}</span>'
+            if pp_k_html:
+                sep = "&nbsp;&nbsp;" if k_html else ""
+                k_section += f'{sep}<span class="k-props pp-k-row">{pp_k_html}</span>'
         return (f'<span class="sp-team">{team}</span> '
                 f'<span class="sp-name">{name_str}</span>{flag_html} '
                 f'<span class="xwoba">{xwoba_str}</span>'
-                + (f'<br><span class="k-props">{k_html}</span>' if k_html else ""))
+                + k_section)
 
     def _score_row(r):
         home  = r["home_team"]
@@ -2717,6 +2846,13 @@ def write_html_card(results: list[dict], date_str: str) -> None:
             return (m >= _K_PROP_OVER_THRESH or m < _K_PROP_UNDER_THRESH
                     or abs(e) >= _K_PROP_EDGE_THRESH)
 
+        def _pp_k_filter(pp_model):
+            """Show PP K badge if model P(over) is meaningfully different from 50%."""
+            if _is_missing(pp_model):
+                return False
+            m = float(pp_model)
+            return m >= _K_PROP_OVER_THRESH or m < _K_PROP_UNDER_THRESH or abs(m - 0.50) >= _K_PROP_EDGE_THRESH
+
         hk_show = _k_filter(r.get("home_k_model_over"), r.get("home_k_edge"))
         ak_show = _k_filter(r.get("away_k_model_over"), r.get("away_k_edge"))
         hk = (r.get("home_k_line"), r.get("home_k_model_over") if hk_show else None,
@@ -2724,7 +2860,18 @@ def write_html_card(results: list[dict], date_str: str) -> None:
         ak = (r.get("away_k_line"), r.get("away_k_model_over") if ak_show else None,
               r.get("away_k_implied_over"), r.get("away_k_edge"))
 
+        # PrizePicks K lines — pass through to _sp_cell
+        pp_hk = (r.get("pp_home_k_line"),
+                 r.get("pp_home_k_model") if _pp_k_filter(r.get("pp_home_k_model")) else None,
+                 r.get("pp_home_k_edge"))
+        pp_ak = (r.get("pp_away_k_line"),
+                 r.get("pp_away_k_model") if _pp_k_filter(r.get("pp_away_k_model")) else None,
+                 r.get("pp_away_k_edge"))
+
         # ── Batter props section ──────────────────────────────────────────────
+        _PP_BE = 0.577   # 2-pick Power Play break-even
+        _PP_BE_3 = 0.585  # 3-pick break-even
+
         def _batter_props_html():
             props = r.get("batter_props", [])
             if not props:
@@ -2741,6 +2888,31 @@ def write_html_card(results: list[dict], date_str: str) -> None:
                 hr_s  = f"{hr:.0%}" if hr >= _HR_PROP_THRESH  else "—"
                 team_tag = (f'<span class="gc-extra-dim">{p["team"]}</span>&nbsp;'
                             if p.get("team") else "")
+
+                # PrizePicks hit badge
+                pp_hit_html = ""
+                if p.get("pp_hit_line") is not None and hp >= _HIT_PROP_THRESH:
+                    edge = p["pp_hit_edge"]
+                    e_cls = ("pp-edge-go" if edge >= (_PP_BE - 0.50)
+                             else "pp-edge-lean" if edge >= 0.05
+                             else "pp-edge-no")
+                    pp_hit_html = (
+                        f'&nbsp;<span class="pp-badge">PP&nbsp;{p["pp_hit_line"]:.1f}'
+                        f'&nbsp;<span class="{e_cls}">{edge:+.0%}</span></span>'
+                    )
+
+                # PrizePicks HR badge
+                pp_hr_html = ""
+                if p.get("pp_hr_line") is not None and hr >= _HR_PROP_THRESH:
+                    edge = p["pp_hr_edge"]
+                    e_cls = ("pp-edge-go" if edge >= (_PP_BE - 0.50)
+                             else "pp-edge-lean" if edge >= 0.03
+                             else "pp-edge-no")
+                    pp_hr_html = (
+                        f'&nbsp;<span class="pp-badge">PP&nbsp;{p["pp_hr_line"]:.1f}'
+                        f'&nbsp;<span class="{e_cls}">{edge:+.0%}</span></span>'
+                    )
+
                 rows.append(
                     f'<div class="prop-row">'
                     f'{team_tag}'
@@ -2748,8 +2920,10 @@ def write_html_card(results: list[dict], date_str: str) -> None:
                     f'&nbsp;<span class="prop-sep">·</span>&nbsp;'
                     f'<span class="gc-extra-dim">1+ Hit</span>&nbsp;'
                     f'<span class="{hit_cls} prop-val">{hit_s}</span>'
-                    f'&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;'
+                    f'{pp_hit_html}'
+                    f'&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;'
                     f'<span class="{hr_cls} prop-val">{hr_s}</span>'
+                    f'{pp_hr_html}'
                     f'</div>'
                 )
             return (
@@ -2760,9 +2934,9 @@ def write_html_card(results: list[dict], date_str: str) -> None:
             )
 
         home_sp_cell = _sp_cell(home, r.get("home_sp"), r.get("home_sp_xwoba"),
-                                r.get("home_sp_flag",""), *hk)
+                                r.get("home_sp_flag",""), *hk, pp_k=pp_hk)
         away_sp_cell = _sp_cell(away, r.get("away_sp"), r.get("away_sp_xwoba"),
-                                r.get("away_sp_flag",""), *ak)
+                                r.get("away_sp_flag",""), *ak, pp_k=pp_ak)
 
         f5_html    = _f5_html()
         f1_html    = _f1_html()
@@ -2961,6 +3135,15 @@ body {{
 .prop-name  {{ color: #e6edf3; font-weight: 600; }}
 .prop-sep   {{ color: #30363d; }}
 .prop-val   {{ font-weight: 700; }}
+/* PrizePicks badges */
+.pp-badge   {{ display: inline-block; background: #1a2b1a; border: 1px solid #2ea043;
+               border-radius: 3px; padding: 0 4px; font-size: 10px; font-weight: 700; color: #7ee787; }}
+.pp-k-source {{ font-size: 9px; font-weight: 800; color: #7ee787;
+                text-transform: uppercase; letter-spacing: .5px; }}
+.pp-k-row   {{ margin-left: 4px; }}
+.pp-edge-go   {{ color: #3fb950; font-weight: 800; }}   /* ≥7.7% edge — PP-worthy */
+.pp-edge-lean {{ color: #d29922; font-weight: 700; }}   /* positive but below PP threshold */
+.pp-edge-no   {{ color: #f85149; font-weight: 700; }}   /* negative edge — fade */
 
 /* Body: starters + markets side by side */
 .gc-body {{

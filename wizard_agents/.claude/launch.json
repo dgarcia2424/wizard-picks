@@ -2,6 +2,12 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "daily-card",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "7771"],
+      "port": 7771
+    },
+    {
       "name": "Wizard Bet Tracker",
       "runtimeExecutable": "python",
       "runtimeArgs": ["tracker_server.py"],

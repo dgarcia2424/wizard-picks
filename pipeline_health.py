@@ -58,8 +58,9 @@ ARTIFACT_DEFS = [
     ("lineups_long",     "data/statcast/lineups_today_long.parquet",       4,   False, "Batting order for lineup quality"),
     ("odds_current",     "data/statcast/odds_current_{date_us}.parquet",   4,   True,  "Today's ML/RL/total odds"),
     ("k_props",          "data/statcast/k_props_{date}.parquet",           6,   False, "Pitcher K prop lines"),
-    ("pitcher_profiles", "data/statcast/pitcher_profiles_2026.parquet",    26,  True,  "Pitcher xwOBA/K%/IP profiles"),
-    ("team_stats",       "data/statcast/team_stats_2026.parquet",          26,  True,  "Team batting/bullpen stats"),
+    ("pitcher_profiles", "data/statcast/pitcher_profiles_2026.parquet",    36,  True,  "Pitcher xwOBA/K%/IP profiles"),
+    ("pitcher_10d",      "data/statcast/pitcher_10d_2026.parquet",         36,  False, "Pitcher trailing-10d K%/xwOBA"),
+    ("team_stats",       "data/statcast/team_stats_2026.parquet",          36,  True,  "Team batting/bullpen stats (incl 10d)"),
     ("lineup_quality",   "data/statcast/lineup_quality_today.parquet",     4,   False, "Lineup wRC+ scores"),
     ("daily_card",       "daily_card.csv",                                 14,  True,  "Today's model predictions"),
     ("backtest",         "backtest_2026_results.csv",                      26,  False, "Season backtest tracker"),
@@ -67,11 +68,9 @@ ARTIFACT_DEFS = [
     ("fangraphs",        "data/raw/fangraphs_batters.csv",                 168, False, "FanGraphs batter wRC+ data"),
 ]
 
-# Next-scheduled-run times (ET, 24-hour)
+# Next-scheduled-run times (ET, 24-hour) — consolidated 11am architecture
 _SCHEDULE = {
-    "lineups_odds": (6, 0),
-    "picks":        (8, 30),
-    "backtest":     (23, 0),
+    "run_all":  (11, 0),   # full pipeline: lineups → odds → picks → upload
 }
 
 ET = ZoneInfo("America/New_York")
@@ -215,10 +214,8 @@ def check_health(date_str: str = None, verbose: bool = True) -> dict:
 
     # Next scheduled runs
     next_scheduled_runs = {
-        "lineups_odds":  _next_occurrence_et(*_SCHEDULE["lineups_odds"], now_et),
-        "picks":         _next_occurrence_et(*_SCHEDULE["picks"],        now_et),
-        "k_props_retry": _next_30min_slot(now_et),
-        "backtest":      _next_occurrence_et(*_SCHEDULE["backtest"],     now_et),
+        label: _next_occurrence_et(*t, now_et)
+        for label, t in _SCHEDULE.items()
     }
 
     status = {
@@ -394,8 +391,10 @@ def main():
             print("Uploading to Supabase...")
         upload_status(status)
 
-    # Exit code reflects overall health
-    exit_codes = {"ok": 0, "warning": 1, "critical": 2}
+    # Exit code: 0 = ok or warning (picks still ready), 2 = critical (missing files)
+    # "warning" exits 0 so the scheduler doesn't log a spurious FAILED entry for
+    # stale-but-non-critical artifacts like statcast or fangraphs refreshes.
+    exit_codes = {"ok": 0, "warning": 0, "critical": 2}
     sys.exit(exit_codes.get(status["overall"], 2))
 
 
