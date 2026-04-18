@@ -1,26 +1,33 @@
 """
 run_daily_scheduler.py
 ======================
-Three-shot daily scheduler for The Wizard Report MLB pipeline.
+Seven-shot daily scheduler for The Wizard Report MLB pipeline.
 
-Fires three times per day at 11:00 AM, 2:00 PM, and 5:00 PM ET so that
-late-starting games receive updated lineups and closing odds before first pitch.
+Fires every 2 hours from 4 AM to 4 PM ET so that all data feeds stay current
+throughout the day.  One full build at 10 AM re-runs heavy daily steps
+(umpire, pitcher profiles, team stats, CLV audit, K prop tracker).
+All other shots are lightweight refreshes.
 
 Usage:
     python run_daily_scheduler.py              # start scheduler (runs forever)
     python run_daily_scheduler.py --run-now    # fire run_all immediately and exit
+    python run_daily_scheduler.py --run-refresh  # fire run_refresh immediately and exit
     python run_daily_scheduler.py --dry-run    # print schedule and exit
 
 Schedule (all times ET):
-    11:00  RUN_ALL     — lineups, umpire pull, umpire stats, pitcher profiles,
-                         team stats, lineup quality, odds, picks, upload,
-                         CLV audit, health
-    14:00  RUN_REFRESH — lineups, lineup quality, odds, picks, upload, health
-    17:00  RUN_REFRESH — lineups, lineup quality, odds, picks, upload, health
+    04:00  RUN_REFRESH — lineups, weather, lineup quality, odds, PrizePicks, card, upload, health
+    06:00  RUN_REFRESH — same
+    08:00  RUN_REFRESH — same
+    10:00  RUN_ALL     — full build: umpire, pitcher profiles, team stats, lineup quality,
+                         weather, odds, PrizePicks, card + EMAIL, upload, CLV audit,
+                         K prop tracker, health
+    12:00  RUN_REFRESH — lineups, weather, lineup quality, odds, PrizePicks, card, upload, health
+    14:00  RUN_REFRESH — same + EMAIL (closing-line update)
+    16:00  RUN_REFRESH — same
 
-The 2 PM and 5 PM refreshes skip pitcher profiles and team stats (no intraday
-change) but re-run lineup quality after the fresh lineup pull so wRC+ scores
-reflect any late starters.  Odds are re-pulled to capture closing-line movement.
+Light refreshes skip pitcher profiles, team stats, and umpire stats (no intraday
+updates).  Lineup quality is always re-run after a fresh lineup pull so wRC+
+reflects any late starters.  Email sends at 10 AM (morning card) and 2 PM only.
 """
 
 import argparse
@@ -148,9 +155,9 @@ def schedule_et(time_str: str, job_fn, label: str) -> None:
 # ---------------------------------------------------------------------------
 
 def run_all() -> None:
-    """11:00 AM ET — full pipeline run."""
+    """10:00 AM ET — full pipeline run."""
     try:
-        log_header("DAILY RUN — 11:00 AM ET — full pipeline")
+        log_header("DAILY RUN — 10:00 AM ET — full pipeline")
         tomorrow = (date.today() + __import__("datetime").timedelta(days=1)).isoformat()
 
         # ── Step 1: Lineups + probable starters ───────────────────────────
@@ -200,40 +207,45 @@ def run_all() -> None:
         log.exception("Unhandled exception in run_all — scheduler will continue.")
 
 
-def run_refresh(label: str) -> None:
+def run_refresh(label: str, send_email: bool = False) -> None:
     """
-    2:00 PM and 5:00 PM ET — lightweight intraday refresh.
+    Lightweight intraday refresh — every 2 hours except at 10 AM.
 
-    Skips pitcher profiles and team stats (no intraday updates).
-    Re-pulls lineups (late starters confirm after 11 AM) and odds
+    Skips pitcher profiles, team stats, and umpire pulls (no intraday updates).
+    Re-pulls lineups (starters confirm through afternoon) and odds
     (lines tighten toward close), then regenerates the card and uploads.
+    Email is sent only when send_email=True (14:00 run).
     """
     try:
-        log_header(f"REFRESH RUN — {label} ET — lineups + odds + picks")
+        log_header(f"REFRESH RUN — {label} ET — lineups + weather + odds + picks")
 
-        # ── Step 1: Lineups — capture any starters confirmed since 11 AM ──
+        # ── Step 1: Lineups — capture any starters confirmed since last run ─
         run_step("lineup_pull.py --recent", "lineups_today")
 
         # ── Step 1b: Lineup quality — refresh wRC+ scores with new lineups ─
         run_step("build_lineup_quality.py", "lineup_quality")
 
-        # ── Step 2: Updated odds (closing lines sharper than morning) ──────
+        # ── Step 1c: Weather — forecast improves closer to game time ────────
+        run_step(f"weather_pull.py --date {date.today().isoformat()}", "weather")
+
+        # ── Step 2: Updated odds (closing lines sharper than morning) ────────
         rc, _ = run_step("odds_current_pull.py", "odds_pull")
         if rc != 0:
             log.error("Odds pull failed — predictions will degrade to retail-only fallback.")
 
-        # ── Step 2b: Refresh PrizePicks lines (lines shift intraday) ─────
+        # ── Step 2b: Refresh PrizePicks lines (lines shift intraday) ─────────
         run_step("prizepicks_pull.py", "prizepicks")
 
-        # ── Step 3: Regenerate card with refreshed data ───────────────────
-        rc, _ = run_step("run_today.py --csv --email", "picks")
+        # ── Step 3: Regenerate card with refreshed data ───────────────────────
+        card_cmd = "run_today.py --csv --email" if send_email else "run_today.py --csv"
+        rc, _ = run_step(card_cmd, "picks")
         if rc != 0:
             log.warning("run_today.py exited non-zero — check model_scores.csv for errors.")
 
-        # ── Step 4: Upload updated picks to Supabase ──────────────────────
+        # ── Step 4: Upload updated picks to Supabase ──────────────────────────
         run_step("supabase_upload.py", "upload")
 
-        # ── Step 5: Health snapshot ───────────────────────────────────────
+        # ── Step 5: Health snapshot ────────────────────────────────────────────
         run_step("pipeline_health.py --upload", "health")
 
     except Exception:
@@ -246,7 +258,7 @@ def run_refresh(label: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Wizard MLB daily pipeline scheduler — 11 AM / 2 PM / 5 PM ET",
+        description="Wizard MLB daily pipeline scheduler — every 2 hours, 4 AM–4 PM ET",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -284,9 +296,11 @@ def main() -> None:
         return
 
     if args.run_refresh:
-        now_et = datetime.now(ET).strftime("%I:%M %p")
-        log.info("--run-refresh: firing run_refresh immediately (%s ET)", now_et)
-        run_refresh(now_et)
+        now_et_dt = datetime.now(ET)
+        now_et = now_et_dt.strftime("%I:%M %p")
+        send_email = (now_et_dt.hour == 14)   # email only on the 2 PM run
+        log.info("--run-refresh: firing run_refresh at %s ET (email=%s)", now_et, send_email)
+        run_refresh(now_et, send_email=send_email)
         log.info("--run-refresh: done")
         return
 
@@ -296,9 +310,13 @@ def main() -> None:
     log.info("  All times ET. Local offset applied automatically.")
     log.info("=" * 60)
 
-    schedule_et("11:00", run_all,                          "run_all")
-    schedule_et("14:00", lambda: run_refresh("2:00 PM"),   "run_refresh_2pm")
-    schedule_et("17:00", lambda: run_refresh("5:00 PM"),   "run_refresh_5pm")
+    schedule_et("04:00", lambda: run_refresh("4:00 AM"),                        "run_refresh_4am")
+    schedule_et("06:00", lambda: run_refresh("6:00 AM"),                        "run_refresh_6am")
+    schedule_et("08:00", lambda: run_refresh("8:00 AM"),                        "run_refresh_8am")
+    schedule_et("10:00", run_all,                                                "run_all_10am")
+    schedule_et("12:00", lambda: run_refresh("12:00 PM"),                       "run_refresh_12pm")
+    schedule_et("14:00", lambda: run_refresh("2:00 PM",  send_email=True),      "run_refresh_2pm")
+    schedule_et("16:00", lambda: run_refresh("4:00 PM"),                        "run_refresh_4pm")
 
     # --- Dry-run mode ---
     if args.dry_run:

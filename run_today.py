@@ -1374,6 +1374,9 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
     if "temp_f" not in lineups.columns:
         lineups["temp_f"] = 72.0
     lineups["temp_f"] = lineups["temp_f"].fillna(72.0)
+    if "wind_mph" not in lineups.columns:
+        lineups["wind_mph"] = 8.0
+    lineups["wind_mph"] = lineups["wind_mph"].fillna(8.0)
 
     results = []
     today_month = int(date_str.split("-")[1])
@@ -1386,6 +1389,7 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
         home_sp = str(game.get("home_starter_name", ""))
         away_sp = str(game.get("away_starter_name", ""))
         temp    = float(game.get("temp_f", 72.0))
+        wind    = float(game.get("wind_mph", 8.0))
 
         if not home_sp or home_sp == "nan" or not away_sp or away_sp == "nan":
             print(f"  {away} @ {home}: missing starter(s) — adding as TBD row (Vegas-only pick)")
@@ -1479,7 +1483,7 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
             res = predict_game(
                 home_team=home, away_team=away,
                 home_sp_name=home_sp_norm, away_sp_name=away_sp_norm,
-                temp_f=temp, month=today_month,
+                temp_f=temp, wind_mph=wind, month=today_month,
                 verbose=False,
                 home_team_stats=home_ts,
                 away_team_stats=away_ts,

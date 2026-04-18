@@ -901,7 +901,7 @@ def build_xgb_row(home_prof: pd.Series, away_prof: pd.Series,
 
     # Weather
     row["temp_f"]    = temp_f
-    row["wind_mph"]  = 8.0   # default
+    row["wind_mph"]  = wind_mph
     row["humidity"]  = 50.0  # default
 
     # Park factor (static 3-yr average, same dict used in build_feature_matrix.py)
@@ -965,6 +965,7 @@ def predict_game(
     home_sp_name: str,
     away_sp_name: str,
     temp_f: float = 72.0,
+    wind_mph: float = 8.0,
     month: int | None = None,
     verbose: bool = True,
     home_team_stats: pd.Series | None = None,   # row from team_stats_2026
