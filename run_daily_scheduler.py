@@ -168,6 +168,9 @@ def run_all() -> None:
         # ── Step 4: Lineup quality scores (wRC+ per team) ─────────────────
         run_step("build_lineup_quality.py", "lineup_quality")
 
+        # ── Step 4b: Weather (game-time temp/wind for K props + totals) ───
+        run_step(f"weather_pull.py --date {date.today().isoformat()}", "weather")
+
         # ── Step 5: Fresh dual-region odds pull ───────────────────────────
         rc, _ = run_step("odds_current_pull.py", "odds_pull")
         if rc != 0:

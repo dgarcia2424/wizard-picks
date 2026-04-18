@@ -368,6 +368,12 @@ def process_game_list(df: pd.DataFrame, year: int) -> None:
 
     out_path = OUTPUT_DIR / f"weather_{year}.parquet"
     try:
+        if out_path.exists():
+            existing = pd.read_parquet(out_path, engine="pyarrow")
+            out_df = (pd.concat([existing, out_df], ignore_index=True)
+                        .drop_duplicates(subset=["game_date", "home_team"], keep="last")
+                        .sort_values(["game_date", "home_team"])
+                        .reset_index(drop=True))
         out_df.to_parquet(out_path, engine="pyarrow", index=False)
         print(f"\nSaved {out_path}  shape={out_df.shape}")
     except Exception as exc:
