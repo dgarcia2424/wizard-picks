@@ -164,7 +164,10 @@ def run_all() -> None:
         run_step("lineup_pull.py --recent", "lineups_today")
         run_step(f"lineup_pull.py --date {tomorrow}", "lineups_tmrw")
 
-        # ── Step 2: Umpire assignments + tendencies ───────────────────────
+        # ── Step 2: Statcast append — yesterday's pitch data + actuals ──────
+        run_step("statcast_pull_2026.py", "statcast_pull")
+
+        # ── Step 2b: Umpire assignments + tendencies ──────────────────────
         run_step("ump_pull.py", "ump_pull")
         run_step("build_ump_stats.py", "ump_stats")
 
@@ -221,6 +224,9 @@ def run_refresh(label: str, send_email: bool = False) -> None:
     """
     try:
         log_header(f"REFRESH RUN — {label} ET — lineups + weather + odds + picks")
+
+        # ── Step 0: Statcast append (idempotent — no-op if already current) ──
+        run_step("statcast_pull_2026.py", "statcast_pull")
 
         # ── Step 1: Lineups — capture any starters confirmed since last run ─
         run_step("lineup_pull.py --recent", "lineups_today")

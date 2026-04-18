@@ -118,6 +118,22 @@ def _patch_pybaseball_session() -> None:
 
 
 def main() -> None:
+    import argparse as _argparse
+    parser = _argparse.ArgumentParser(description="Supplemental MLB data pull")
+    parser.add_argument(
+        "--force-year", type=int, metavar="YEAR",
+        help="Delete and re-pull all output files for this year (e.g. 2026 for weekly refresh)",
+    )
+    args, _ = parser.parse_known_args()
+
+    if args.force_year:
+        yr = args.force_year
+        deleted = 0
+        for p in OUTPUT_DIR.glob(f"*_{yr}.parquet"):
+            p.unlink()
+            deleted += 1
+        print(f"  --force-year {yr}: deleted {deleted} existing parquet files for {yr}")
+
     OUTPUT_DIR.mkdir(exist_ok=True)
 
     # Enable pybaseball cache — critical for large pulls
