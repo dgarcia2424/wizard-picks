@@ -133,10 +133,16 @@ RUN_SIGMA_NB   : float = 0.50   # log-normal mixing SD  → overdispersion r ≈
 RUN_RHO_COPULA : float = 0.14   # copula corr → run-level Corr(H,A) ≈ 0.07
 
 # ── K-prop Negative Binomial dispersion ──────────────────────────────────────
-# r_k = μ²/(σ²−μ).  Empirically for per-start K counts:
-#   μ ≈ 5.0, σ² ≈ 7.5  →  r_k = 25/2.5 = 10; use 8 (conservative, fits prop lines)
-# Implemented as Gamma-Poisson mixture:  λ ~ Γ(r_k, μ/r_k),  K ~ Poisson(λ)
-KPROP_NB_R: float = 8.0
+# MLE on 470 pitcher-starts (2026): actual K distribution is near-Poisson
+# (r_mle → ∞; var=5.67 vs mean=4.75).  r=20 adds minimal overdispersion for
+# early-exit tail; Gamma-Poisson mixture: λ ~ Γ(r_k, μ/r_k), K ~ Poisson(λ)
+KPROP_NB_R: float = 20.0
+
+# ── K-prop mean calibration ──────────────────────────────────────────────────
+# blended_k_pct overestimates by ~1.8pp and expected_ip by ~0.25 inn.
+# MLE on 470 starts: pred μ=5.29, actual μ=4.75 → multiplier=4.75/5.29=0.898
+# Apply before simulation to remove systematic overestimation bias.
+KPROP_MEAN_CALIB: float = 0.899
 
 # Stadium elevations for air density calculation
 STADIUM_ELEVATION = {
@@ -635,21 +641,19 @@ def simulate_k_prop_nb(
     """
     Sample K-prop counts using a Negative Binomial via Gamma-Poisson mixture.
 
-    The Binomial(n_BF, k%) baseline is replaced with NB(r_k, p_k) to capture
-    the 1.4× overdispersion observed in starter K-prop lines relative to
-    the Binomial prediction.  This widens the tail (fewer -105/-115 near-miss
-    decisions, more accurate hit/no-hit probability estimates for K props).
+    MLE on 470 2026 pitcher-starts shows the actual K distribution is near-
+    Poisson (r_mle → ∞).  r=20 retains a small overdispersion allowance for
+    early-exit games without distorting tail probabilities.  mu_k must already
+    include the KPROP_MEAN_CALIB multiplier applied at the call site.
 
     Implementation:
       λ ~ Gamma(r_k, μ_k / r_k)    [shape=r_k, scale=μ_k/r_k]
       K ~ Poisson(λ)                 [exact NB marginal]
 
-    Both draws are performed on-GPU; result is returned as a CPU numpy array.
-
     Parameters
     ----------
-    mu_k    : expected K count (e.g. BF_per_IP * innings_pitched * k_pct)
-    r_k     : NB dispersion (default 8.0 → Var ≈ μ + μ²/8)
+    mu_k    : expected K count (already calibrated via KPROP_MEAN_CALIB)
+    r_k     : NB dispersion (default 20.0 → near-Poisson)
     n_sims  : number of Monte Carlo draws
 
     Returns
@@ -1135,9 +1139,8 @@ def predict_game(
 
     # -----------------------------------------------------------------------
     # PITCHER K PREDICTIONS (Strikeout props — Negative Binomial model)
-    # Binomial(n_BF, k%) replaced with NB Gamma-Poisson mixture to capture
-    # the ~1.4x overdispersion in starter K-prop lines vs Binomial baseline.
-    # Var(NB) = mu + mu²/r  where r=KPROP_NB_R=8.0
+    # NB(r=20) Gamma-Poisson mixture; mu scaled by KPROP_MEAN_CALIB=0.899
+    # to correct +0.54K mean bias (IP overestimate + k_pct overestimate).
     # -----------------------------------------------------------------------
     home_k_rate = float(home_prof.get("blended_k_pct") or 0.225)
     away_k_rate = float(away_prof.get("blended_k_pct") or 0.225)
@@ -1147,8 +1150,8 @@ def predict_game(
     home_expected_bf = home_ip * BF_PER_INNING
     away_expected_bf = away_ip * BF_PER_INNING
 
-    mc_home_k_mean = home_k_rate * home_expected_bf
-    mc_away_k_mean = away_k_rate * away_expected_bf
+    mc_home_k_mean = home_k_rate * home_expected_bf * KPROP_MEAN_CALIB
+    mc_away_k_mean = away_k_rate * away_expected_bf * KPROP_MEAN_CALIB
 
     home_k_sims = simulate_k_prop_nb(mc_home_k_mean).astype(float)
     away_k_sims = simulate_k_prop_nb(mc_away_k_mean).astype(float)
