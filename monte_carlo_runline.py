@@ -975,6 +975,7 @@ def predict_game(
     posted_total: float | None = None, # Vegas O/U line — used to compute mc_over_prob
     market_odds: dict | None = None,   # {true_home_prob, true_away_prob} for XGBoost
     game_hour_et: float | None = None, # scheduled start hour in ET (e.g. 13.75 = 1:45 PM)
+    ump_k_above_avg: float = 0.0,      # HP ump trailing K% vs league avg (from ump_features)
 ) -> dict:
     """
     Full prediction pipeline for one game.
@@ -1141,6 +1142,8 @@ def predict_game(
     # PITCHER K PREDICTIONS (Strikeout props — Negative Binomial model)
     # NB(r=20) Gamma-Poisson mixture; mu scaled by KPROP_MEAN_CALIB=0.899
     # to correct +0.54K mean bias (IP overestimate + k_pct overestimate).
+    # Umpire adjustment: ump_k_above_avg (K% vs league avg) × expected BF.
+    # 10th–90th percentile ump range = ±1.2 Ks per SP (2025 data).
     # -----------------------------------------------------------------------
     home_k_rate = float(home_prof.get("blended_k_pct") or 0.225)
     away_k_rate = float(away_prof.get("blended_k_pct") or 0.225)
@@ -1150,8 +1153,9 @@ def predict_game(
     home_expected_bf = home_ip * BF_PER_INNING
     away_expected_bf = away_ip * BF_PER_INNING
 
-    mc_home_k_mean = home_k_rate * home_expected_bf * KPROP_MEAN_CALIB
-    mc_away_k_mean = away_k_rate * away_expected_bf * KPROP_MEAN_CALIB
+    ump_adj = float(ump_k_above_avg) if not pd.isna(ump_k_above_avg) else 0.0
+    mc_home_k_mean = home_k_rate * home_expected_bf * KPROP_MEAN_CALIB + ump_adj * home_expected_bf
+    mc_away_k_mean = away_k_rate * away_expected_bf * KPROP_MEAN_CALIB + ump_adj * away_expected_bf
 
     home_k_sims = simulate_k_prop_nb(mc_home_k_mean).astype(float)
     away_k_sims = simulate_k_prop_nb(mc_away_k_mean).astype(float)
@@ -1230,6 +1234,7 @@ def predict_game(
         "mc_away_sp_k_over_45": round(k_over_prob(away_k_sims, 4.5), 4),
         "mc_away_sp_k_over_55": round(k_over_prob(away_k_sims, 5.5), 4),
         "mc_away_sp_k_over_65": round(k_over_prob(away_k_sims, 6.5), 4),
+        "ump_k_above_avg":      round(ump_adj, 4),
     }
 
     # O/U probability vs posted line

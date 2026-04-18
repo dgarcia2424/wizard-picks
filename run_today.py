@@ -1261,6 +1261,45 @@ def _load_lineup_quality(date_str: str) -> dict:
         return {}
 
 
+def _load_ump_k(date_str: str) -> dict:
+    """
+    Returns {game_pk: ump_k_above_avg} for today's games.
+    Uses umpire_assignments_{year}.parquet + ump_features_2025.parquet.
+    Falls back to 0.0 (league average) for any missing ump.
+    """
+    try:
+        year = int(date_str[:4])
+        asgn_path = DATA_DIR / f"umpire_assignments_{year}.parquet"
+        if not asgn_path.exists():
+            return {}
+        asgn = pd.read_parquet(asgn_path)
+        asgn = asgn[asgn["game_date"].astype(str) == date_str][["game_pk", "ump_hp_id"]]
+        if asgn.empty:
+            return {}
+
+        # Use 2025 features as the best historical baseline for ump tendencies
+        feat_path = DATA_DIR / "ump_features_2025.parquet"
+        if not feat_path.exists():
+            return {}
+        feats = (pd.read_parquet(feat_path)
+                   .dropna(subset=["ump_k_above_avg"])
+                   .groupby("ump_hp_id")["ump_k_above_avg"]
+                   .mean()
+                   .reset_index())
+
+        merged = asgn.merge(feats, on="ump_hp_id", how="left")
+        result = {}
+        for _, row in merged.iterrows():
+            val = row["ump_k_above_avg"]
+            result[int(row["game_pk"])] = float(val) if pd.notna(val) else 0.0
+        if result:
+            print(f"  [Ump] {len(result)} ump K-tendency values loaded for {date_str}")
+        return result
+    except Exception as e:
+        print(f"  [WARN] Could not load ump K data: {e}")
+        return {}
+
+
 def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
     from monte_carlo_runline import predict_game, load_profiles, load_pitcher_10d
 
@@ -1279,6 +1318,7 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
         team_stats = None
 
     lineup_quality = _load_lineup_quality(date_str)
+    ump_k_map = _load_ump_k(date_str)
 
     # Batter prop data (hit + HR props)
     lineup_long  = _load_lineup_long(date_str)
@@ -1428,6 +1468,8 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
         _game_hour_raw = game.get("game_hour_et")
         game_hour_et_val = float(_game_hour_raw) if not _is_missing(_game_hour_raw) else None
 
+        ump_k = ump_k_map.get(game_pk) or ump_k_map.get(int(game_pk)) if game_pk else None
+
         try:
             res = predict_game(
                 home_team=home, away_team=away,
@@ -1442,6 +1484,7 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
                 posted_total=(float(vegas_tot) if not _is_missing(vegas_tot) else None),
                 market_odds=market_odds_xgb,
                 game_hour_et=game_hour_et_val,
+                ump_k_above_avg=float(ump_k) if ump_k is not None else 0.0,
             )
         except Exception as e:
             print(f"  {away} @ {home}: ERROR — {e}")
@@ -1840,6 +1883,7 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
             "mc_away_sp_k_over_45": res.get("mc_away_sp_k_over_45"),
             "mc_away_sp_k_over_55": res.get("mc_away_sp_k_over_55"),
             "mc_away_sp_k_over_65": res.get("mc_away_sp_k_over_65"),
+            "ump_k_above_avg":      res.get("ump_k_above_avg"),
             # F5 percentile bands
             "mc_f5_home_runs_lo": res.get("mc_f5_home_runs_lo"),
             "mc_f5_home_runs_hi": res.get("mc_f5_home_runs_hi"),
