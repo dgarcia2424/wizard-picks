@@ -168,7 +168,10 @@ def run_all() -> None:
         run_step("ump_pull.py", "ump_pull")
         run_step("build_ump_stats.py", "ump_stats")
 
-        # ── Step 3: Pitcher profiles + team stats refresh ─────────────────
+        # ── Step 3: Refresh raw data (Savant + MLB Stats API) ────────────
+        run_step("refresh_raw_data.py", "raw_data")
+
+        # ── Step 3b: Pitcher profiles + team stats refresh ────────────────
         run_step("build_pitcher_profile.py", "pitcher_profiles")
         run_step("build_team_stats_2026.py", "team_stats")
 
