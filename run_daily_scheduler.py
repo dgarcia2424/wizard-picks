@@ -245,6 +245,11 @@ def parse_args() -> argparse.Namespace:
         help="Fire run_all immediately and exit",
     )
     group.add_argument(
+        "--run-refresh",
+        action="store_true",
+        help="Fire run_refresh immediately and exit (used by 2 PM / 5 PM Windows tasks)",
+    )
+    group.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the schedule and exit without running anything",
@@ -264,6 +269,13 @@ def main() -> None:
         log.info("--run-now: firing run_all immediately")
         run_all()
         log.info("--run-now: done")
+        return
+
+    if args.run_refresh:
+        now_et = datetime.now(ET).strftime("%I:%M %p")
+        log.info("--run-refresh: firing run_refresh immediately (%s ET)", now_et)
+        run_refresh(now_et)
+        log.info("--run-refresh: done")
         return
 
     # --- Register scheduled job ---
