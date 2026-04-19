@@ -2201,6 +2201,73 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
     lines.append(day_label)
     lines.append("=" * 48)
 
+    # ── F5 Rankings table ──────────────────────────────
+    lines.append("\nF5 +0.5 RANKINGS")
+    lines.append("-" * 80)
+    lines.append(f"{'#':<3} {'Team':<5} {'Side':<5} {'SP':<22} {'xwOBA':<7} {'Opp SP':<22} {'xwOBA':<7} {'Temp':<6} {'F5 Win%':<8} {'Pin RL':<7} {'Range'}")
+    lines.append("-" * 80)
+    f5_rows = []
+    for r in results:
+        home, away = r["home_team"], r["away_team"]
+        hw = r.get("mc_f5_home_win_prob")
+        if _is_missing(hw): continue
+        for team, side, sp_key, xw_key, osp_key, oxw_key, pin_key, rlo_key, rhi_key in [
+            (home,"HOME","home_sp","home_sp_xwoba","away_sp","away_sp_xwoba","lock_p_true","mc_f5_home_runs_lo","mc_f5_home_runs_hi"),
+            (away,"AWAY","away_sp","away_sp_xwoba","home_sp","home_sp_xwoba","away_lock_p_true","mc_f5_away_runs_lo","mc_f5_away_runs_hi"),
+        ]:
+            win_prob = float(hw) if side == "HOME" else 1 - float(hw)
+            pin = r.get(pin_key)
+            pin_str = f"{float(pin):.3f}" if not _is_missing(pin) else "—"
+            rlo = r.get(rlo_key); rhi = r.get(rhi_key)
+            rng = (f"{float(rlo):.1f}–{float(rhi):.1f}" if not _is_missing(rlo) and not _is_missing(rhi) else "—")
+            sp  = str(r.get(sp_key,"TBD")).title()
+            xw  = r.get(xw_key); oxw = r.get(oxw_key)
+            osp = str(r.get(osp_key,"TBD")).title()
+            temp = r.get("temp_f")
+            f5_rows.append((win_prob, team, side, sp,
+                            f"{float(xw):.3f}" if not _is_missing(xw) else "—",
+                            osp,
+                            f"{float(oxw):.3f}" if not _is_missing(oxw) else "—",
+                            f"{float(temp):.0f}°" if not _is_missing(temp) else "—",
+                            f"{win_prob:.0%}", pin_str, rng))
+    f5_rows.sort(key=lambda x: -x[0])
+    for i, row in enumerate(f5_rows, 1):
+        lines.append(f"{i:<3} {row[1]:<5} {row[2]:<5} {row[3]:<22} {row[4]:<7} {row[5]:<22} {row[6]:<7} {row[7]:<6} {row[8]:<8} {row[9]:<7} {row[10]}")
+
+    # ── Runs Rankings table ────────────────────────────
+    lines.append("\nTOTAL RUNS RANKINGS")
+    lines.append("-" * 90)
+    lines.append(f"{'#':<3} {'Game':<22} {'Home SP':<20} {'xwOBA':<7} {'Away SP':<20} {'xwOBA':<7} {'Model':<7} {'Vegas':<7} {'Diff':<6} {'Pin P(O)':<9} {'Range'}")
+    lines.append("-" * 90)
+    run_rows = []
+    for r in results:
+        home, away = r["home_team"], r["away_team"]
+        mt = r.get("mc_total") or r.get("blended_total")
+        vt = r.get("vegas_total")
+        if _is_missing(mt): continue
+        tlo = r.get("mc_total_lo"); thi = r.get("mc_total_hi")
+        pin = r.get("p_true_over")
+        hxw = r.get("home_sp_xwoba"); axw = r.get("away_sp_xwoba")
+        diff = float(mt) - float(vt) if not _is_missing(vt) else 0
+        run_rows.append((
+            float(mt),
+            f"{away} @ {home}",
+            str(r.get("home_sp","TBD")).title(),
+            f"{float(hxw):.3f}" if not _is_missing(hxw) else "—",
+            str(r.get("away_sp","TBD")).title(),
+            f"{float(axw):.3f}" if not _is_missing(axw) else "—",
+            f"{float(mt):.1f}",
+            f"{float(vt):.1f}" if not _is_missing(vt) else "—",
+            f"{diff:+.1f}" if not _is_missing(vt) else "—",
+            f"{float(pin):.3f}" if not _is_missing(pin) else "—",
+            (f"{float(tlo):.1f}–{float(thi):.1f}" if not _is_missing(tlo) and not _is_missing(thi) else "—"),
+        ))
+    run_rows.sort(key=lambda x: -x[0])
+    for i, row in enumerate(run_rows, 1):
+        lines.append(f"{i:<3} {row[1]:<22} {row[2]:<20} {row[3]:<7} {row[4]:<20} {row[5]:<7} {row[6]:<7} {row[7]:<7} {row[8]:<6} {row[9]:<9} {row[10]}")
+
+    lines.append("\n" + "=" * 48)
+
     # Collect all locks across all three markets
     all_locks = []
     for r in results:
@@ -3064,6 +3131,148 @@ def write_html_card(results: list[dict], date_str: str) -> None:
   </div>
 </div>"""
 
+    # ── F5 & Runs ranking tables ──────────────────────────────────────────────
+    def _f5_rank_table() -> str:
+        rows = []
+        for r in results:
+            home, away = r["home_team"], r["away_team"]
+            for team, side, sp_key, xw_key, osp_key, oxw_key, win_key, flo_key, fhi_key, pin_key in [
+                (home, "HOME", "home_sp", "home_sp_xwoba", "away_sp", "away_sp_xwoba",
+                 "mc_f5_home_win_prob", "mc_f5_home_runs_lo", "mc_f5_home_runs_hi", "lock_p_true"),
+                (away, "AWAY", "away_sp", "away_sp_xwoba", "home_sp", "home_sp_xwoba",
+                 "mc_f5_home_win_prob", "mc_f5_away_runs_lo", "mc_f5_away_runs_hi", "away_lock_p_true"),
+            ]:
+                hw = r.get("mc_f5_home_win_prob")
+                if _is_missing(hw): continue
+                win_prob = float(hw) if side == "HOME" else 1 - float(hw)
+                pin_prob = r.get(pin_key)
+                pin_str  = f"{float(pin_prob):.3f}" if not _is_missing(pin_prob) else "—"
+                rlo = r.get(flo_key); rhi = r.get(fhi_key)
+                rng_str = (f"{float(rlo):.1f}–{float(rhi):.1f}"
+                           if not _is_missing(rlo) and not _is_missing(rhi) else "—")
+                sp   = str(r.get(sp_key, "TBD")).title()
+                xw   = r.get(xw_key)
+                osp  = str(r.get(osp_key, "TBD")).title()
+                oxw  = r.get(oxw_key)
+                temp = r.get("temp_f")
+                rows.append({
+                    "team": team, "side": side, "sp": sp,
+                    "xw": float(xw) if not _is_missing(xw) else None,
+                    "osp": osp,
+                    "oxw": float(oxw) if not _is_missing(oxw) else None,
+                    "temp": float(temp) if not _is_missing(temp) else None,
+                    "win_prob": win_prob, "pin_str": pin_str, "rng_str": rng_str,
+                })
+        rows.sort(key=lambda x: -x["win_prob"])
+
+        def xw_cls(v):
+            if v is None: return ""
+            return "xw-good" if v < 0.300 else "xw-bad" if v > 0.340 else ""
+
+        trs = ""
+        for i, x in enumerate(rows, 1):
+            wp_cls = "wp-hot" if x["win_prob"] >= 0.70 else "wp-warm" if x["win_prob"] >= 0.60 else ""
+            xw_str  = f"{x['xw']:.3f}"  if x["xw"]  else "—"
+            oxw_str = f"{x['oxw']:.3f}" if x["oxw"] else "—"
+            tmp_str = f"{x['temp']:.0f}°" if x["temp"] else "—"
+            trs += (
+                f'<tr>'
+                f'<td class="rt-n">{i}</td>'
+                f'<td class="rt-team">{x["team"]}</td>'
+                f'<td class="rt-side rt-{x["side"].lower()}">{x["side"]}</td>'
+                f'<td class="rt-sp">{x["sp"]}</td>'
+                f'<td class="rt-xw {xw_cls(x["xw"])}">{xw_str}</td>'
+                f'<td class="rt-sp">{x["osp"]}</td>'
+                f'<td class="rt-xw {xw_cls(x["oxw"])}">{oxw_str}</td>'
+                f'<td class="rt-temp">{tmp_str}</td>'
+                f'<td class="rt-prob {wp_cls}">{x["win_prob"]:.0%}</td>'
+                f'<td class="rt-pin">{x["pin_str"]}</td>'
+                f'<td class="rt-rng">{x["rng_str"]}</td>'
+                f'</tr>'
+            )
+        return f"""<div class="rank-section">
+<div class="rank-title">F5 +0.5 Rankings — All Teams</div>
+<div class="rank-note">Model F5 win prob · Pinnacle RL implied · MC run range (10th–90th pct)</div>
+<table class="rank-tbl">
+<thead><tr>
+  <th>#</th><th>Team</th><th>Side</th>
+  <th>Their SP</th><th>xwOBA</th>
+  <th>Opp SP</th><th>xwOBA</th>
+  <th>Temp</th><th>F5 Win%</th><th>Pinnacle</th><th>Range</th>
+</tr></thead>
+<tbody>{trs}</tbody>
+</table></div>"""
+
+    def _runs_rank_table() -> str:
+        rows = []
+        for r in results:
+            home, away = r["home_team"], r["away_team"]
+            mt   = r.get("mc_total") or r.get("blended_total")
+            vt   = r.get("vegas_total")
+            tlo  = r.get("mc_total_lo"); thi = r.get("mc_total_hi")
+            pin  = r.get("p_true_over")
+            hxw  = r.get("home_sp_xwoba"); axw = r.get("away_sp_xwoba")
+            hsp  = str(r.get("home_sp","TBD")).title()
+            asp  = str(r.get("away_sp","TBD")).title()
+            if _is_missing(mt): continue
+            diff = float(mt) - float(vt) if not _is_missing(vt) else 0
+            rows.append({
+                "game": f"{away} @ {home}", "hsp": hsp, "hxw": hxw,
+                "asp": asp, "axw": axw,
+                "mt": float(mt),
+                "vt": float(vt) if not _is_missing(vt) else None,
+                "diff": diff,
+                "pin": float(pin) if not _is_missing(pin) else None,
+                "rng": (f"{float(tlo):.1f}–{float(thi):.1f}"
+                        if not _is_missing(tlo) and not _is_missing(thi) else "—"),
+            })
+        rows.sort(key=lambda x: -x["mt"])
+
+        def diff_cls(d):
+            return "val-green" if d >= 0.5 else "val-red" if d <= -0.5 else "val-dim"
+
+        def xw_cls(v):
+            if _is_missing(v): return ""
+            return "xw-good" if float(v) < 0.300 else "xw-bad" if float(v) > 0.340 else ""
+
+        trs = ""
+        for i, x in enumerate(rows, 1):
+            diff_str = f"{x['diff']:+.1f}" if x["vt"] else "—"
+            vt_str   = f"{x['vt']:.1f}" if x["vt"] else "—"
+            hxw_str  = f"{float(x['hxw']):.3f}" if not _is_missing(x["hxw"]) else "—"
+            axw_str  = f"{float(x['axw']):.3f}" if not _is_missing(x["axw"]) else "—"
+            pin_str  = f"{x['pin']:.3f}" if x["pin"] else "—"
+            trs += (
+                f'<tr>'
+                f'<td class="rt-n">{i}</td>'
+                f'<td class="rt-game">{x["game"]}</td>'
+                f'<td class="rt-sp">{x["hsp"]}</td>'
+                f'<td class="rt-xw {xw_cls(x["hxw"])}">{hxw_str}</td>'
+                f'<td class="rt-sp">{x["asp"]}</td>'
+                f'<td class="rt-xw {xw_cls(x["axw"])}">{axw_str}</td>'
+                f'<td class="rt-prob">{x["mt"]:.1f}</td>'
+                f'<td class="rt-vt">{vt_str}</td>'
+                f'<td class="rt-diff {diff_cls(x["diff"])}">{diff_str}</td>'
+                f'<td class="rt-pin">{pin_str}</td>'
+                f'<td class="rt-rng">{x["rng"]}</td>'
+                f'</tr>'
+            )
+        return f"""<div class="rank-section">
+<div class="rank-title">Total Runs Rankings — All Games</div>
+<div class="rank-note">Model total · vs Vegas line · Pinnacle over prob · MC range (10th–90th pct)</div>
+<table class="rank-tbl">
+<thead><tr>
+  <th>#</th><th>Game</th>
+  <th>Home SP</th><th>xwOBA</th>
+  <th>Away SP</th><th>xwOBA</th>
+  <th>Model</th><th>Vegas</th><th>Diff</th><th>Pin P(O)</th><th>Range</th>
+</tr></thead>
+<tbody>{trs}</tbody>
+</table></div>"""
+
+    f5_rank_html   = _f5_rank_table()
+    runs_rank_html = _runs_rank_table()
+
     # ── assemble HTML ─────────────────────────────────────────────────────────
     gen_time = _dt.datetime.now().strftime("%H:%M")
 
@@ -3359,6 +3568,42 @@ body {{
   .mkt {{ min-width: 130px; }}
 }}
 
+/* ── Ranking tables ─────────────────────────────────── */
+.rank-section {{
+  background: #161b22; border: 1px solid #21262d;
+  border-left: 4px solid #388bfd;
+  border-radius: 8px; padding: 14px 18px; margin-bottom: 16px;
+}}
+.rank-title {{ font-size: 14px; font-weight: 800; color: #ffffff; margin-bottom: 4px; }}
+.rank-note  {{ font-size: 11px; color: #6e7681; margin-bottom: 10px; }}
+.rank-tbl   {{ width: 100%; border-collapse: collapse; font-size: 12px; }}
+.rank-tbl th {{
+  text-align: left; color: #8b949e; font-weight: 600;
+  padding: 4px 8px; border-bottom: 1px solid #30363d;
+  white-space: nowrap;
+}}
+.rank-tbl td {{ padding: 4px 8px; border-bottom: 1px solid #21262d; white-space: nowrap; }}
+.rank-tbl tr:last-child td {{ border-bottom: none; }}
+.rank-tbl tr:hover td {{ background: #1c2128; }}
+.rt-n    {{ color: #6e7681; width: 24px; }}
+.rt-team {{ font-weight: 800; color: #ffffff; }}
+.rt-game {{ color: #c9d1d9; }}
+.rt-side {{ font-size: 10px; font-weight: 700; padding: 2px 5px; border-radius: 3px; }}
+.rt-home {{ background: #1f4d3d; color: #3fb950; }}
+.rt-away {{ background: #2d2a1f; color: #d29922; }}
+.rt-sp   {{ color: #c9d1d9; }}
+.rt-xw   {{ font-family: monospace; }}
+.rt-temp {{ color: #8b949e; }}
+.rt-prob {{ font-weight: 700; color: #ffffff; }}
+.rt-vt   {{ color: #8b949e; }}
+.rt-diff {{ font-weight: 600; font-family: monospace; }}
+.rt-pin  {{ color: #8b949e; font-family: monospace; }}
+.rt-rng  {{ color: #6e7681; font-family: monospace; font-size: 11px; }}
+.wp-hot  {{ color: #3fb950; }}
+.wp-warm {{ color: #d29922; }}
+.xw-good {{ color: #3fb950; }}
+.xw-bad  {{ color: #f85149; }}
+
 /* ── Parlay suggestions ────────────────────────────── */
 .pl-section {{
   background: #161b22; border: 1px solid #21262d;
@@ -3433,6 +3678,10 @@ body {{
     Three-Part Lock: |P_model − P_Pinnacle| ≤ 4% &nbsp;·&nbsp; odds ≥ −225 &nbsp;·&nbsp; edge ≥ 1.0% vs retail
   </div>
 </div>
+
+{f5_rank_html}
+
+{runs_rank_html}
 
 {cards_html}
 

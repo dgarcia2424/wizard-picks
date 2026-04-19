@@ -1,24 +1,24 @@
 {
-  "generated_at": "2026-04-19T09:33:16",
+  "generated_at": "2026-04-19T10:06:27",
   "date": "2026-04-19",
-  "overall": "critical",
+  "overall": "warning",
   "picks_ready": true,
   "artifacts": {
     "lineups": {
       "status": "ok",
       "path": "data/statcast/lineups_today.parquet",
-      "age_hours": 0.09,
+      "age_hours": 0.08,
       "critical": true,
       "description": "Today's starting lineups",
-      "last_modified": "2026-04-19T09:28:02"
+      "last_modified": "2026-04-19T10:01:31"
     },
     "lineups_long": {
       "status": "ok",
       "path": "data/statcast/lineups_today_long.parquet",
-      "age_hours": 0.09,
+      "age_hours": 0.08,
       "critical": false,
       "description": "Batting order for lineup quality",
-      "last_modified": "2026-04-19T09:28:02"
+      "last_modified": "2026-04-19T10:01:31"
     },
     "odds_current": {
       "status": "ok",
@@ -26,44 +26,44 @@
       "age_hours": 0.09,
       "critical": true,
       "description": "Today's ML/RL/total odds",
-      "last_modified": "2026-04-19T09:27:43"
+      "last_modified": "2026-04-19T10:01:12"
     },
     "k_props": {
       "status": "ok",
       "path": "data/statcast/k_props_2026-04-19.parquet",
-      "age_hours": 0.09,
+      "age_hours": 0.08,
       "critical": false,
       "description": "Pitcher K prop lines",
-      "last_modified": "2026-04-19T09:27:54"
+      "last_modified": "2026-04-19T10:01:25"
     },
     "pitcher_profiles": {
-      "status": "missing",
+      "status": "ok",
       "path": "data/statcast/pitcher_profiles_2026.parquet",
-      "age_hours": null,
+      "age_hours": 0.09,
       "critical": true,
       "description": "Pitcher xwOBA/K%/IP profiles",
-      "last_modified": null
+      "last_modified": "2026-04-19T10:01:06"
     },
     "pitcher_10d": {
-      "status": "missing",
+      "status": "ok",
       "path": "data/statcast/pitcher_10d_2026.parquet",
-      "age_hours": null,
+      "age_hours": 0.09,
       "critical": false,
       "description": "Pitcher trailing-10d K%/xwOBA",
-      "last_modified": null
+      "last_modified": "2026-04-19T10:01:07"
     },
     "team_stats": {
-      "status": "missing",
+      "status": "ok",
       "path": "data/statcast/team_stats_2026.parquet",
-      "age_hours": null,
+      "age_hours": 0.09,
       "critical": true,
       "description": "Team batting/bullpen stats (incl 10d)",
-      "last_modified": null
+      "last_modified": "2026-04-19T10:01:07"
     },
     "lineup_quality": {
       "status": "stale",
       "path": "data/statcast/lineup_quality_today.parquet",
-      "age_hours": 10.09,
+      "age_hours": 10.64,
       "critical": false,
       "description": "Lineup wRC+ scores",
       "last_modified": "2026-04-18T23:27:52"
@@ -71,53 +71,44 @@
     "daily_card": {
       "status": "ok",
       "path": "daily_card.csv",
-      "age_hours": 0.09,
+      "age_hours": 0.08,
       "critical": true,
       "description": "Today's model predictions",
-      "last_modified": "2026-04-19T09:28:06"
+      "last_modified": "2026-04-19T10:01:35"
     },
     "backtest": {
       "status": "ok",
       "path": "backtest_2026_results.csv",
-      "age_hours": 16.65,
+      "age_hours": 17.2,
       "critical": false,
       "description": "Season backtest tracker",
       "last_modified": "2026-04-18T16:54:26"
     },
     "statcast_2026": {
-      "status": "missing",
+      "status": "ok",
       "path": "data/statcast/statcast_2026.parquet",
-      "age_hours": null,
+      "age_hours": 0.32,
       "critical": false,
       "description": "2026 Statcast pitch data",
-      "last_modified": null
+      "last_modified": "2026-04-19T09:47:08"
     },
     "fangraphs": {
       "status": "ok",
       "path": "data/raw/fangraphs_batters.csv",
-      "age_hours": 0.1,
+      "age_hours": 0.09,
       "critical": false,
       "description": "FanGraphs batter wRC+ data",
-      "last_modified": "2026-04-19T09:27:22"
+      "last_modified": "2026-04-19T10:00:53"
     }
   },
   "next_scheduled_runs": {
     "run_all": "11:00 ET"
   },
-  "missing_critical": [
-    "pitcher_profiles",
-    "team_stats"
-  ],
+  "missing_critical": [],
   "missing_optional": [
-    "pitcher_10d",
-    "lineup_quality",
-    "statcast_2026"
+    "lineup_quality"
   ],
   "warnings": [
-    "pitcher_profiles: file missing (data/statcast/pitcher_profiles_2026.parquet)",
-    "pitcher_10d: file missing (data/statcast/pitcher_10d_2026.parquet)",
-    "team_stats: file missing (data/statcast/team_stats_2026.parquet)",
-    "lineup_quality: stale (10.1h old, max 4h)",
-    "statcast_2026: file missing (data/statcast/statcast_2026.parquet)"
+    "lineup_quality: stale (10.6h old, max 4h)"
   ]
 }

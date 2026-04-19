@@ -182,36 +182,30 @@ def upload_daily_card(csv_path: Path = None, game_date: str = None) -> int:
 
 
 def upload_all_daily_cards() -> int:
-    """Scan for all daily_card_{date}.csv files and upload each one.
+    """Upload today's (and tomorrow's, if available) daily card only.
 
-    Uploads cards for today and tomorrow (and any other dated files present).
-    This replaces the single-file upload_daily_card() when no path is given.
+    Historical cards are already in Supabase and don't change — re-uploading
+    them every run wastes quota and time.
     """
     import datetime, re
-    total = 0
-    # Find all daily_card_YYYY-MM-DD.csv files (root dir + daily_cards/ subfolder)
+    today = datetime.date.today().isoformat()
+    tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+
     _cards_subdir = BASE_DIR / "daily_cards"
-    dated_files = sorted(
-        p for d in [BASE_DIR, _cards_subdir] for p in d.glob("daily_card_????-??-??.csv") if d.exists()
-    )
-    # Also include legacy daily_card.csv (mapped to today)
-    legacy = BASE_DIR / "daily_card.csv"
+    total = 0
 
-    files_to_upload = {}  # date_str → path (dated files take priority)
-    if legacy.exists():
-        files_to_upload[datetime.date.today().isoformat()] = legacy
-    for f in dated_files:
-        m = re.search(r"(\d{4}-\d{2}-\d{2})", f.name)
-        if m:
-            files_to_upload[m.group(1)] = f  # overwrites legacy entry for today
+    for target_date in [today, tomorrow]:
+        # Prefer dated file over legacy daily_card.csv
+        candidates = [
+            _cards_subdir / f"daily_card_{target_date}.csv",
+            BASE_DIR / f"daily_card_{target_date}.csv",
+        ]
+        if target_date == today:
+            candidates.append(BASE_DIR / "daily_card.csv")
 
-    if not files_to_upload:
-        logger.warning("  [SKIP] No daily_card files found")
-        return 0
-
-    for date_str, path in sorted(files_to_upload.items()):
-        n = upload_daily_card(csv_path=path, game_date=date_str)
-        total += n
+        path = next((p for p in candidates if p.exists()), None)
+        if path:
+            total += upload_daily_card(csv_path=path, game_date=target_date)
 
     return total
 
@@ -503,12 +497,29 @@ def main():
         ("historical_backtest", upload_historical_backtest),
         ("pipeline_health",     upload_pipeline_health),   # always — reflects freshness
     ]:
-        if name in _hashed and _unchanged(name, _hashed[name], hashes):
+        # historical_backtest: hash all three year files combined
+        if name == "historical_backtest":
+            combined = "".join(
+                _file_hash(BASE_DIR / f"backtest_{y}_results.csv")
+                for y in [2023, 2024, 2025]
+            )
+            if hashes.get("historical_backtest") == combined:
+                logger.info("  [historical_backtest] unchanged — skipping upload")
+                results[name] = -1
+                continue
+        elif name in _hashed and _unchanged(name, _hashed[name], hashes):
             results[name] = -1  # sentinel: skipped
             continue
         try:
             results[name] = fn()
-            if name in _hashed and results[name] > 0:
+            if name == "historical_backtest" and results[name] > 0:
+                combined = "".join(
+                    _file_hash(BASE_DIR / f"backtest_{y}_results.csv")
+                    for y in [2023, 2024, 2025]
+                )
+                hashes["historical_backtest"] = combined
+                _save_hashes(hashes)
+            elif name in _hashed and results[name] > 0:
                 _mark_uploaded(name, _hashed[name], hashes)
         except RuntimeError as e:
             logger.error(f"  [ERROR] {name}: {e}")
