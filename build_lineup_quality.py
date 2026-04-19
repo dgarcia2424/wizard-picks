@@ -1,11 +1,16 @@
 """
 build_lineup_quality.py
 -----------------------
-Compute a lineup-weighted wRC+ score for each team in today's games.
+Compute lineup quality scores for each team in today's games:
+  - lineup_wrc_plus      — average wRC+ of the 9 starters (existing)
+  - lineup_xwoba_vs_rhp  — lineup-weighted xwOBA vs RHP (new)
+  - lineup_xwoba_vs_lhp  — lineup-weighted xwOBA vs LHP (new)
 
-This replaces the season-average RS/G offensive factor in the Monte Carlo
-simulation with a score derived from today's actual confirmed starters,
-implicitly capturing injuries, rest days, and day-to-day roster changes.
+The platoon xwOBA columns use per-batter splits from build_batter_splits.py
+with Bayesian shrinkage toward the league mean. In monte_carlo_runline.py,
+the appropriate column (vs_rhp or vs_lhp) is selected based on the opposing
+starter's handedness and used to scale run production more precisely than
+the generic wRC+ scaling.
 
 Usage (programmatic):
     from build_lineup_quality import build
@@ -14,7 +19,8 @@ Usage (programmatic):
 
 Output:
     data/statcast/lineup_quality_today.parquet
-    Columns: game_pk, team, lineup_wrc_plus, n_matched, game_date
+    Columns: game_pk, team, lineup_wrc_plus, n_matched, game_date,
+             lineup_xwoba_vs_rhp, lineup_xwoba_vs_lhp, n_splits_matched
 """
 
 import unicodedata
@@ -32,7 +38,9 @@ LINEUP_LONG_PATH = OUTPUT_DIR / "lineups_today_long.parquet"
 LINEUP_QUALITY_PATH = OUTPUT_DIR / "lineup_quality_today.parquet"
 FANGRAPHS_PATH = Path("data/raw/fangraphs_batters.csv")
 
-LEAGUE_WRC_PLUS = 100.0
+LEAGUE_WRC_PLUS  = 100.0
+LEAGUE_XWOBA_RHP = 0.315   # fallback when splits unavailable
+LEAGUE_XWOBA_LHP = 0.315
 
 # Staleness threshold: if the long parquet is older than this, refresh it
 STALE_HOURS = 4
@@ -60,6 +68,57 @@ def _norm_name(name: str) -> str:
 # ---------------------------------------------------------------------------
 # wRC+ lookup builder
 # ---------------------------------------------------------------------------
+
+def _build_splits_lookup() -> dict:
+    """
+    Build a player_id → {xwoba_vs_rhp, xwoba_vs_lhp} dict from
+    batter_splits parquets (built by build_batter_splits.py).
+
+    Priority: 2026 (more recent) > 2025 > 2024.
+    Returns empty dict if no splits files exist.
+    """
+    lookup: dict[int, dict] = {}
+    for year in [2024, 2025, 2026]:
+        path = OUTPUT_DIR / f"batter_splits_{year}.parquet"
+        if not path.exists():
+            continue
+        df = pd.read_parquet(path, engine="pyarrow",
+                             columns=["player_id", "xwoba_vs_rhp", "xwoba_vs_lhp",
+                                      "k_pct_vs_rhp", "k_pct_vs_lhp"])
+        for _, row in df.iterrows():
+            pid = int(row["player_id"])
+            lookup[pid] = {
+                "xwoba_vs_rhp": float(row["xwoba_vs_rhp"]),
+                "xwoba_vs_lhp": float(row["xwoba_vs_lhp"]),
+                "k_pct_vs_rhp": float(row["k_pct_vs_rhp"]),
+                "k_pct_vs_lhp": float(row["k_pct_vs_lhp"]),
+            }
+    return lookup
+
+
+def lineup_platoon_xwoba(
+    player_ids: list[int], splits_lookup: dict
+) -> tuple[float, float, int]:
+    """
+    Return (xwoba_vs_rhp, xwoba_vs_lhp, n_matched) for a list of player IDs.
+    Falls back to league average for unmatched players.
+    """
+    rhp_vals, lhp_vals = [], []
+    n_matched = 0
+    for pid in player_ids:
+        if pid in splits_lookup:
+            rhp_vals.append(splits_lookup[pid]["xwoba_vs_rhp"])
+            lhp_vals.append(splits_lookup[pid]["xwoba_vs_lhp"])
+            n_matched += 1
+        else:
+            rhp_vals.append(LEAGUE_XWOBA_RHP)
+            lhp_vals.append(LEAGUE_XWOBA_LHP)
+    if not rhp_vals:
+        return LEAGUE_XWOBA_RHP, LEAGUE_XWOBA_LHP, 0
+    return (sum(rhp_vals) / len(rhp_vals),
+            sum(lhp_vals) / len(lhp_vals),
+            n_matched)
+
 
 def _build_wrc_lookup() -> dict:
     """
@@ -218,7 +277,7 @@ def build(date_str: str, verbose: bool = True) -> dict:
                 print(f"  [INFO] No lineup rows found for {date_str}.")
             return {}
 
-    # --- Step 2: Build wRC+ lookup -------------------------------------------
+    # --- Step 2: Build lookups -----------------------------------------------
     try:
         wrc_lookup = _build_wrc_lookup()
         if verbose:
@@ -228,28 +287,45 @@ def build(date_str: str, verbose: bool = True) -> dict:
             print(f"  [WARN] Could not build wRC+ lookup: {exc}")
         return {}
 
-    # --- Step 3: Compute lineup wRC+ per game+team ---------------------------
+    splits_lookup = _build_splits_lookup()
+    if verbose:
+        print(f"  Platoon splits lookup: {len(splits_lookup):,} players")
+
+    # --- Step 3: Compute lineup wRC+ and platoon xwOBA per game+team ---------
     quality_rows = []
     result_dict: dict = {}
 
     grouped = long_df.groupby(["game_pk", "team"])
     for (game_pk, team), group in grouped:
         player_names = group["player_name"].dropna().tolist()
+        player_ids   = group["player_id"].dropna().astype(int).tolist() \
+                       if "player_id" in group.columns else []
+
         avg_wrc, n_matched = lineup_wrc_plus(player_names, wrc_lookup)
+        xwoba_rhp, xwoba_lhp, n_splits = (
+            lineup_platoon_xwoba(player_ids, splits_lookup)
+            if player_ids and splits_lookup
+            else (LEAGUE_XWOBA_RHP, LEAGUE_XWOBA_LHP, 0)
+        )
 
         quality_rows.append({
-            "game_pk":         game_pk,
-            "team":            team,
-            "lineup_wrc_plus": round(avg_wrc, 2),
-            "n_matched":       n_matched,
-            "game_date":       date_str,
+            "game_pk":              game_pk,
+            "team":                 team,
+            "lineup_wrc_plus":      round(avg_wrc, 2),
+            "n_matched":            n_matched,
+            "game_date":            date_str,
+            "lineup_xwoba_vs_rhp":  round(xwoba_rhp, 4),
+            "lineup_xwoba_vs_lhp":  round(xwoba_lhp, 4),
+            "n_splits_matched":     n_splits,
         })
         result_dict[(game_pk, team)] = avg_wrc
 
         if verbose:
             print(
                 f"  {team:>4s}  game_pk={game_pk}  "
-                f"lineup_wrc+={avg_wrc:.1f}  matched={n_matched}/{len(player_names)}"
+                f"lineup_wrc+={avg_wrc:.1f}  matched={n_matched}/{len(player_names)}  "
+                f"xwoba_vs_RHP={xwoba_rhp:.3f}  xwoba_vs_LHP={xwoba_lhp:.3f}"
+                f"  splits={n_splits}/{len(player_ids)}"
             )
 
     # --- Step 4: Save quality parquet (dated + canonical today) --------------

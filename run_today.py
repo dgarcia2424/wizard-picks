@@ -1252,18 +1252,44 @@ def _load_team_stats() -> pd.DataFrame:
     return pd.read_parquet(path, engine="pyarrow").set_index("batting_team")
 
 
-def _load_lineup_quality(date_str: str) -> dict:
+def _load_lineup_quality(date_str: str) -> tuple[dict, dict]:
     """
-    Load today's lineup wRC+ quality scores per (game_pk, team).
-    Returns dict: {(game_pk, team): wrc_plus} or {} if not available.
-    Falls back gracefully — team RS/G is still used if lineup data missing.
+    Load today's lineup quality scores per (game_pk, team).
+
+    Returns:
+      wrc_dict     — {(game_pk, team): wrc_plus}
+      platoon_dict — {(game_pk, team): {"xwoba_vs_rhp": float, "xwoba_vs_lhp": float}}
+
+    Falls back gracefully — wrc_dict={}, platoon_dict={} if unavailable.
     """
     try:
         from build_lineup_quality import build as _build_lq
-        return _build_lq(date_str, verbose=False)
+        wrc_dict = _build_lq(date_str, verbose=False)
     except Exception as e:
         print(f"  [WARN] Lineup quality unavailable: {e}")
-        return {}
+        return {}, {}
+
+    # Load platoon xwOBA from saved parquet (written by build_lineup_quality)
+    platoon_dict: dict = {}
+    try:
+        import datetime as _dt
+        today_str = _dt.date.today().isoformat()
+        dated_path = DATA_DIR / f"lineup_quality_{date_str}.parquet"
+        canonical  = DATA_DIR / "lineup_quality_today.parquet"
+        lq_path = dated_path if dated_path.exists() else canonical
+        if lq_path.exists():
+            lq_df = pd.read_parquet(lq_path, engine="pyarrow")
+            for _, row in lq_df.iterrows():
+                key = (row["game_pk"], row["team"])
+                if "lineup_xwoba_vs_rhp" in row and "lineup_xwoba_vs_lhp" in row:
+                    platoon_dict[key] = {
+                        "xwoba_vs_rhp": float(row["lineup_xwoba_vs_rhp"]),
+                        "xwoba_vs_lhp": float(row["lineup_xwoba_vs_lhp"]),
+                    }
+    except Exception as e:
+        print(f"  [WARN] Platoon xwOBA unavailable: {e}")
+
+    return wrc_dict, platoon_dict
 
 
 def _load_ump_k(date_str: str) -> dict:
@@ -1322,7 +1348,7 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
         print(f"  [WARN] Could not load team stats: {e} — using pitcher-only model")
         team_stats = None
 
-    lineup_quality = _load_lineup_quality(date_str)
+    lineup_quality, lineup_platoon = _load_lineup_quality(date_str)
     ump_k_map = _load_ump_k(date_str)
 
     # Batter prop data (hit + HR props)
@@ -1443,6 +1469,8 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
         game_pk = game.get("game_pk")
         home_lq = lineup_quality.get((game_pk, home)) or lineup_quality.get((str(game_pk), home))
         away_lq = lineup_quality.get((game_pk, away)) or lineup_quality.get((str(game_pk), away))
+        home_platoon = lineup_platoon.get((game_pk, home)) or lineup_platoon.get((str(game_pk), home))
+        away_platoon = lineup_platoon.get((game_pk, away)) or lineup_platoon.get((str(game_pk), away))
 
         # Build market_odds dict for XGBoost features (true_home_prob, true_away_prob).
         # Prefer Pinnacle de-vigged (P_true_home) — sharpest signal.
@@ -1489,6 +1517,8 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
                 away_team_stats=away_ts,
                 home_lineup_wrc=home_lq,
                 away_lineup_wrc=away_lq,
+                home_lineup_platoon=home_platoon,
+                away_lineup_platoon=away_platoon,
                 pitcher_10d=pitcher_10d,
                 posted_total=(float(vegas_tot) if not _is_missing(vegas_tot) else None),
                 market_odds=market_odds_xgb,

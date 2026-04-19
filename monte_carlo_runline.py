@@ -678,6 +678,8 @@ def build_xgb_row(home_prof: pd.Series, away_prof: pd.Series,
                   home_team: str, away_team: str,
                   temp_f: float, feature_cols: list,
                   wind_mph: float = 8.0,
+                  home_lineup_platoon: dict | None = None,
+                  away_lineup_platoon: dict | None = None,
                   home_team_stats: pd.Series | None = None,
                   away_team_stats: pd.Series | None = None,
                   pitcher_10d: dict | None = None,
@@ -884,12 +886,35 @@ def build_xgb_row(home_prof: pd.Series, away_prof: pd.Series,
         "away_bat_xwoba_vs_rhp_10d", "away_bat_xwoba_vs_lhp_10d",
         "away_bat_vs_home_sp", "away_bat_vs_home_sp_10d",
     ]
-    if home_lineup_wrc is not None and not np.isnan(float(home_lineup_wrc)):
+    _LEAGUE_XWOBA = 0.315
+    _away_hand = str(away_prof.get("p_throws", "R")).upper()[:1]
+    _home_hand = str(home_prof.get("p_throws", "R")).upper()[:1]
+
+    # Home batting scale: prefer platoon xwOBA vs opposing starter's hand
+    if home_lineup_platoon is not None:
+        _xw_key = f"xwoba_vs_{'rhp' if _away_hand == 'R' else 'lhp'}"
+        _xw = home_lineup_platoon.get(_xw_key)
+        if _xw and not np.isnan(float(_xw)):
+            scale_h = float(_xw) / _LEAGUE_XWOBA
+            for feat in _xwoba_bat_feats_home:
+                if feat in row and pd.notna(row.get(feat)):
+                    row[feat] = float(row[feat]) * scale_h
+    elif home_lineup_wrc is not None and not np.isnan(float(home_lineup_wrc)):
         scale_h = float(home_lineup_wrc) / 100.0
         for feat in _xwoba_bat_feats_home:
             if feat in row and pd.notna(row.get(feat)):
                 row[feat] = float(row[feat]) * scale_h
-    if away_lineup_wrc is not None and not np.isnan(float(away_lineup_wrc)):
+
+    # Away batting scale: prefer platoon xwOBA vs opposing starter's hand
+    if away_lineup_platoon is not None:
+        _xw_key = f"xwoba_vs_{'rhp' if _home_hand == 'R' else 'lhp'}"
+        _xw = away_lineup_platoon.get(_xw_key)
+        if _xw and not np.isnan(float(_xw)):
+            scale_a = float(_xw) / _LEAGUE_XWOBA
+            for feat in _xwoba_bat_feats_away:
+                if feat in row and pd.notna(row.get(feat)):
+                    row[feat] = float(row[feat]) * scale_a
+    elif away_lineup_wrc is not None and not np.isnan(float(away_lineup_wrc)):
         scale_a = float(away_lineup_wrc) / 100.0
         for feat in _xwoba_bat_feats_away:
             if feat in row and pd.notna(row.get(feat)):
@@ -973,6 +998,8 @@ def predict_game(
     away_team_stats: pd.Series | None = None,
     home_lineup_wrc: float | None = None,   # today's lineup wRC+ (100 = league avg)
     away_lineup_wrc: float | None = None,
+    home_lineup_platoon: dict | None = None,  # {xwoba_vs_rhp, xwoba_vs_lhp} for home batters
+    away_lineup_platoon: dict | None = None,  # same for away batters
     pitcher_10d: dict | None = None,   # {pitcher_name_upper: {k_pct_10d, xwoba_10d}}
     posted_total: float | None = None, # Vegas O/U line — used to compute mc_over_prob
     market_odds: dict | None = None,   # {true_home_prob, true_away_prob} for XGBoost
@@ -1036,12 +1063,29 @@ def predict_game(
         if away_team_stats is not None and pd.notna(away_team_stats.get("team_rs_per_game")) \
         else None
 
-    # Lineup wRC+ overrides team RS/G if available (more precise: accounts for
-    # today's actual starters, injuries, rest days — not just season average)
-    # Convert wRC+ to implied RS/G: wRC+/100 * LEAGUE_RS_PER_GAME
-    if home_lineup_wrc is not None and not pd.isna(float(home_lineup_wrc)):
+    # Lineup quality → implied RS/G.
+    # Priority: platoon xwOBA (vs specific starter handedness) > generic wRC+ > team avg
+    _LEAGUE_XWOBA = 0.315
+
+    away_hand = str(away_prof.get("p_throws", "R")).upper()[:1]  # handedness of away SP
+    home_hand = str(home_prof.get("p_throws", "R")).upper()[:1]  # handedness of home SP
+
+    # Home batters face away SP → use home_lineup_platoon vs away_hand
+    if home_lineup_platoon is not None:
+        xw_key = f"xwoba_vs_{'rhp' if away_hand == 'R' else 'lhp'}"
+        xw = home_lineup_platoon.get(xw_key)
+        if xw and not pd.isna(xw):
+            home_rs_pg = (float(xw) / _LEAGUE_XWOBA) * LEAGUE_RS_PER_GAME
+    elif home_lineup_wrc is not None and not pd.isna(float(home_lineup_wrc)):
         home_rs_pg = float(home_lineup_wrc) / 100.0 * LEAGUE_RS_PER_GAME
-    if away_lineup_wrc is not None and not pd.isna(float(away_lineup_wrc)):
+
+    # Away batters face home SP → use away_lineup_platoon vs home_hand
+    if away_lineup_platoon is not None:
+        xw_key = f"xwoba_vs_{'rhp' if home_hand == 'R' else 'lhp'}"
+        xw = away_lineup_platoon.get(xw_key)
+        if xw and not pd.isna(xw):
+            away_rs_pg = (float(xw) / _LEAGUE_XWOBA) * LEAGUE_RS_PER_GAME
+    elif away_lineup_wrc is not None and not pd.isna(float(away_lineup_wrc)):
         away_rs_pg = float(away_lineup_wrc) / 100.0 * LEAGUE_RS_PER_GAME
 
     home_bp_xwoba = float(home_team_stats["bullpen_xwoba"]) \
@@ -1252,6 +1296,8 @@ def predict_game(
         xgb_row = build_xgb_row(
             home_prof, away_prof, home_team, away_team, temp_f, feat_cols,
             wind_mph=wind_mph,
+            home_lineup_platoon=home_lineup_platoon,
+            away_lineup_platoon=away_lineup_platoon,
             home_team_stats=home_team_stats,
             away_team_stats=away_team_stats,
             pitcher_10d=pitcher_10d,

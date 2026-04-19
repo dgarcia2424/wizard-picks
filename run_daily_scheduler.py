@@ -168,6 +168,7 @@ def run_all() -> None:
         run_step("ump_pull.py", "ump_pull")
         run_step("build_ump_stats.py --years 2026", "ump_stats")
         run_step("build_bullpen_avail.py", "bullpen_avail")
+        run_step("build_batter_splits.py --years 2026", "batter_splits")
 
         # ── Step 3: Refresh raw data (Savant + MLB Stats API) ────────────
         run_step("refresh_raw_data.py", "raw_data")
@@ -247,10 +248,11 @@ def run_refresh(label: str, send_email: bool = False) -> None:
         run_step("build_pitcher_profile.py", "pitcher_profiles")
         run_step("build_team_stats_2026.py", "team_stats")
 
-        # ── Step 5: Bullpen availability ──────────────────────────────────────
+        # ── Step 5: Bullpen availability + batter platoon splits ──────────────
         run_step("build_bullpen_avail.py", "bullpen_avail")
+        run_step("build_batter_splits.py --years 2026", "batter_splits")
 
-        # ── Step 6: Lineup quality scores (wRC+ per team) ─────────────────────
+        # ── Step 6: Lineup quality scores (wRC+ + platoon xwOBA per team) ─────
         run_step("build_lineup_quality.py", "lineup_quality")
 
         # ── Step 7: Weather ────────────────────────────────────────────────────
