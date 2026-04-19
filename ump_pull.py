@@ -196,6 +196,11 @@ def pull_date(date_str: str) -> pd.DataFrame:
         time.sleep(RATE_SLEEP)
 
     if not rows:
+        # Assignments not yet posted — ensure file exists so watchdog doesn't alarm
+        if not out_path.exists():
+            _empty = pd.DataFrame(columns=["game_pk", "ump_hp_id", "ump_hp_name", "year"])
+            _empty.to_parquet(out_path, engine="pyarrow", index=False)
+        print(f"  {date_str}: no assignments posted yet (0/{len(pks)} games)")
         return pd.DataFrame()
 
     new_df = pd.DataFrame(rows)

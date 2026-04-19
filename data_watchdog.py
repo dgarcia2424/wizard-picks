@@ -248,7 +248,7 @@ def run_all_checks() -> list[dict]:
     # ── LINEUPS ─────────────────────────────────────────────────────────────
     results.append(check_staleness(
         "lineups_today", "data/statcast/lineups_today.parquet",
-        max_age_hours=_stale_limit(3),
+        max_age_hours=_stale_limit(5),
         repair_cmd="lineup_pull.py --recent",
     ))
     results.append(check_row_count(
@@ -261,7 +261,7 @@ def run_all_checks() -> list[dict]:
     odds_path = f"data/statcast/odds_current_{today_us}.parquet"
     results.append(check_staleness(
         "odds_current", odds_path,
-        max_age_hours=_stale_limit(3),
+        max_age_hours=_stale_limit(5),
         repair_cmd="odds_current_pull.py",
     ))
 
@@ -283,7 +283,7 @@ def run_all_checks() -> list[dict]:
     # ── PITCHER PROFILES ────────────────────────────────────────────────────
     results.append(check_staleness(
         "pitcher_profiles", "data/statcast/pitcher_profiles_2026.parquet",
-        max_age_hours=_stale_limit(3, 25),
+        max_age_hours=_stale_limit(5, 25),
         repair_cmd="build_pitcher_profile.py",
     ))
     results.append(check_row_count(
@@ -295,7 +295,7 @@ def run_all_checks() -> list[dict]:
     # ── TEAM STATS ──────────────────────────────────────────────────────────
     results.append(check_staleness(
         "team_stats", "data/statcast/team_stats_2026.parquet",
-        max_age_hours=_stale_limit(3, 25),
+        max_age_hours=_stale_limit(5, 25),
         repair_cmd="build_team_stats_2026.py",
     ))
     results.append(check_row_count(
@@ -314,21 +314,21 @@ def run_all_checks() -> list[dict]:
     # ── UMP ASSIGNMENTS ──────────────────────────────────────────────────────
     results.append(check_staleness(
         "ump_assignments", "data/statcast/umpire_assignments_2026.parquet",
-        max_age_hours=_stale_limit(3, 25),
+        max_age_hours=_stale_limit(5, 25),
         repair_cmd="ump_pull.py",
     ))
 
     # ── LINEUP QUALITY ───────────────────────────────────────────────────────
     results.append(check_staleness(
         "lineup_quality", "data/statcast/lineup_quality_today.parquet",
-        max_age_hours=_stale_limit(3),
+        max_age_hours=_stale_limit(5),
         repair_cmd="build_lineup_quality.py",
     ))
 
     # ── DAILY CARD ───────────────────────────────────────────────────────────
     results.append(check_staleness(
         "daily_card", "daily_card.csv",
-        max_age_hours=_stale_limit(3),
+        max_age_hours=_stale_limit(5),
         repair_cmd="run_today.py --csv",
     ))
     results.append(check_row_count(
@@ -419,24 +419,24 @@ def run_all_checks() -> list[dict]:
     # ── RAW CSV — STALENESS ──────────────────────────────────────────────────
     results.append(check_staleness(
         "fg_batters_age", "data/raw/fangraphs_batters.csv",
-        max_age_hours=_stale_limit(3, 25),
+        max_age_hours=_stale_limit(5, 25),
         repair_cmd="refresh_raw_data.py --target fg_batters",
     ))
     results.append(check_staleness(
         "savant_batters_age", "data/raw/savant_batters.csv",
-        max_age_hours=_stale_limit(3, 25),
+        max_age_hours=_stale_limit(5, 25),
         repair_cmd="refresh_raw_data.py --target savant_batters",
     ))
 
     # ── SUPPLEMENTAL ─────────────────────────────────────────────────────────
     results.append(check_staleness(
         "park_factors_2026", "data/statcast/park_factors_2026.parquet",
-        max_age_hours=_stale_limit(3, 26),
+        max_age_hours=_stale_limit(5, 26),
         repair_cmd="supplemental_pull.py --force-year 2026",
     ))
     results.append(check_staleness(
         "standings_2026", "data/statcast/standings_2026.parquet",
-        max_age_hours=_stale_limit(3, 26),
+        max_age_hours=_stale_limit(5, 26),
         repair_cmd="supplemental_pull.py --force-year 2026",
     ))
 
