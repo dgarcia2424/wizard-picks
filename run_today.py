@@ -2534,6 +2534,8 @@ def send_card_email(results: list[dict], date_str: str) -> None:
     import smtplib
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
+    from email.mime.base import MIMEBase
+    from email import encoders as _encoders
 
     gmail_from = os.getenv("GMAIL_FROM", "garcia.dan24@gmail.com")
     gmail_pass = os.getenv("GMAIL_APP_PASSWORD", "")
@@ -2567,15 +2569,32 @@ def send_card_email(results: list[dict], date_str: str) -> None:
     else:
         print(f"  HTML card inline ({html_kb}KB)")
 
-    # ── Build message: plain + HTML alternative (HTML shown by default) ──────
-    msg = MIMEMultipart("alternative")
+    # ── Build message: mixed (body + attachments) ────────────────────────────
+    msg = MIMEMultipart("mixed")
     msg["From"]    = gmail_from
     msg["To"]      = ", ".join(recipients)
     msg["Subject"] = subject
 
-    msg.attach(MIMEText(plain_body, "plain", "utf-8"))
+    # plain + HTML as nested alternative part
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText(plain_body, "plain", "utf-8"))
     if html_body:
-        msg.attach(MIMEText(html_body, "html", "utf-8"))
+        alt.attach(MIMEText(html_body, "html", "utf-8"))
+    msg.attach(alt)
+
+    # attachments: full (unfiltered) HTML + PDF
+    for att_path, mime_type, mime_sub in [
+        (Path("daily_card.html"), "text", "html"),
+        (Path("daily_card.pdf"),  "application", "pdf"),
+    ]:
+        if att_path.exists():
+            part = MIMEBase(mime_type, mime_sub)
+            part.set_payload(att_path.read_bytes())
+            _encoders.encode_base64(part)
+            part.add_header("Content-Disposition", "attachment",
+                            filename=f"wizard_mlb_{date_str}{att_path.suffix}")
+            msg.attach(part)
+            print(f"  Attached -> {att_path.name}  ({att_path.stat().st_size // 1024}KB)")
 
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as s:
