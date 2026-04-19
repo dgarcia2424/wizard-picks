@@ -3,10 +3,9 @@ run_daily_scheduler.py
 ======================
 Seven-shot daily scheduler for The Wizard Report MLB pipeline.
 
-Fires every 2 hours from 4 AM to 4 PM ET so that all data feeds stay current
-throughout the day.  One full build at 10 AM re-runs heavy daily steps
-(umpire, pitcher profiles, team stats, CLV audit, K prop tracker).
-All other shots are lightweight refreshes.
+Fires every 2 hours from 4 AM to 4 PM ET.  Every run executes the full data
+pipeline so all feeds are always current.  The 10 AM slot additionally pulls
+tomorrow's lineups and resets the Statcast / actuals baseline for the day.
 
 Usage:
     python run_daily_scheduler.py              # start scheduler (runs forever)
@@ -14,20 +13,18 @@ Usage:
     python run_daily_scheduler.py --run-refresh  # fire run_refresh immediately and exit
     python run_daily_scheduler.py --dry-run    # print schedule and exit
 
-Schedule (all times ET):
-    04:00  RUN_REFRESH — lineups, weather, lineup quality, odds, PrizePicks, card, upload, health
+Schedule (all times ET) — every run includes ALL steps:
+    04:00  RUN_REFRESH — statcast, lineups, ump, raw data, pitcher profiles,
+                         team stats, bullpen avail, lineup quality, weather,
+                         odds, PrizePicks, card, upload, CLV audit, kprop, health
     06:00  RUN_REFRESH — same
     08:00  RUN_REFRESH — same
-    10:00  RUN_ALL     — full build: umpire, pitcher profiles, team stats, lineup quality,
-                         weather, odds, PrizePicks, card + EMAIL, upload, CLV audit,
-                         K prop tracker, health
-    12:00  RUN_REFRESH — lineups, weather, lineup quality, odds, PrizePicks, card, upload, health
+    10:00  RUN_ALL     — same as refresh + tomorrow's lineups + EMAIL
+    12:00  RUN_REFRESH — same as 4 AM
     14:00  RUN_REFRESH — same + EMAIL (closing-line update)
-    16:00  RUN_REFRESH — same
+    16:00  RUN_REFRESH — same as 4 AM
 
-Light refreshes skip pitcher profiles, team stats, and umpire stats (no intraday
-updates).  Lineup quality is always re-run after a fresh lineup pull so wRC+
-reflects any late starters.  Email sends at 10 AM (morning card) and 2 PM only.
+Email sends at 10 AM (morning card) and 2 PM only.
 """
 
 import argparse
@@ -216,46 +213,60 @@ def run_all() -> None:
 
 def run_refresh(label: str, send_email: bool = False) -> None:
     """
-    Lightweight intraday refresh — every 2 hours except at 10 AM.
+    Full intraday refresh — every 2 hours, 4 AM–4 PM ET (except 10 AM which runs run_all).
 
-    Skips pitcher profiles, team stats, and umpire pulls (no intraday updates).
-    Re-pulls lineups (starters confirm through afternoon) and odds
-    (lines tighten toward close), then regenerates the card and uploads.
+    Runs every data step on every pass so all feeds are always current.
     Email is sent only when send_email=True (14:00 run).
     """
     try:
-        log_header(f"REFRESH RUN — {label} ET — lineups + weather + odds + picks")
+        log_header(f"REFRESH RUN — {label} ET")
 
         # ── Step 0: Statcast append (idempotent — no-op if already current) ──
         run_step("statcast_pull_2026.py", "statcast_pull")
 
-        # ── Step 1: Lineups — capture any starters confirmed since last run ─
+        # ── Step 1: Lineups + probable starters ──────────────────────────────
         run_step("lineup_pull.py --recent", "lineups_today")
 
-        # ── Step 1b: Lineup quality — refresh wRC+ scores with new lineups ─
+        # ── Step 2: Umpire assignments + tendencies ───────────────────────────
+        run_step("ump_pull.py", "ump_pull")
+        run_step("build_ump_stats.py --years 2026", "ump_stats")
+
+        # ── Step 3: Refresh raw data (Savant + MLB Stats API) ────────────────
+        run_step("refresh_raw_data.py", "raw_data")
+
+        # ── Step 4: Pitcher profiles + team stats ─────────────────────────────
+        run_step("build_pitcher_profile.py", "pitcher_profiles")
+        run_step("build_team_stats_2026.py", "team_stats")
+
+        # ── Step 5: Bullpen availability ──────────────────────────────────────
+        run_step("build_bullpen_avail.py", "bullpen_avail")
+
+        # ── Step 6: Lineup quality scores (wRC+ per team) ─────────────────────
         run_step("build_lineup_quality.py", "lineup_quality")
 
-        # ── Step 1c: Weather — forecast improves closer to game time ────────
+        # ── Step 7: Weather ────────────────────────────────────────────────────
         run_step(f"weather_pull.py --date {date.today().isoformat()}", "weather")
 
-        # ── Step 2: Updated odds (closing lines sharper than morning) ────────
+        # ── Step 8: Odds + PrizePicks ─────────────────────────────────────────
         rc, _ = run_step("odds_current_pull.py", "odds_pull")
         if rc != 0:
             log.error("Odds pull failed — predictions will degrade to retail-only fallback.")
-
-        # ── Step 2b: Refresh PrizePicks lines (lines shift intraday) ─────────
         run_step("prizepicks_pull.py", "prizepicks")
 
-        # ── Step 3: Regenerate card with refreshed data ───────────────────────
+        # ── Step 9: Generate card ─────────────────────────────────────────────
         card_cmd = "run_today.py --csv --email" if send_email else "run_today.py --csv"
         rc, _ = run_step(card_cmd, "picks")
         if rc != 0:
             log.warning("run_today.py exited non-zero — check model_scores.csv for errors.")
 
-        # ── Step 4: Upload updated picks to Supabase ──────────────────────────
+        # ── Step 10: Upload to Supabase ───────────────────────────────────────
         run_step("supabase_upload.py", "upload")
 
-        # ── Step 5: Health snapshot ────────────────────────────────────────────
+        # ── Step 11: CLV audit + K prop tracker ───────────────────────────────
+        run_step("clv_audit.py", "clv_audit")
+        run_step("kprop_tracker.py", "kprop_tracker")
+
+        # ── Step 12: Health snapshot ──────────────────────────────────────────
         run_step("pipeline_health.py --upload", "health")
 
     except Exception:
