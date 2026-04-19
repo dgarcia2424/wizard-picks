@@ -2205,7 +2205,7 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
     # ── F5 Rankings table ──────────────────────────────
     lines.append("\nF5 +0.5 RANKINGS")
     lines.append("-" * 80)
-    lines.append(f"{'#':<3} {'Team':<5} {'Side':<5} {'SP':<22} {'xwOBA':<7} {'Opp SP':<22} {'xwOBA':<7} {'Temp':<6} {'F5 ML% / +0.5% / Pin%':<24} {'Est Score'}")
+    lines.append(f"{'#':<3} {'Team':<5} {'Side':<5} {'SP':<22} {'xwOBA':<7} {'Opp SP':<22} {'xwOBA':<7} {'Temp':<6} {'F5 ML% / +0.5% / Pin F5%':<26} {'Est Score'}")
     lines.append("-" * 100)
     _F5_K = 1.289
     f5_rows = []
@@ -3268,7 +3268,7 @@ def write_html_card(results: list[dict], date_str: str,
   <th>#</th><th>Team</th><th>Side</th>
   <th>Their SP</th><th>xwOBA</th>
   <th>Opp SP</th><th>xwOBA</th>
-  <th>Temp</th><th>F5 ML% / +0.5% / Pin%</th><th>Est. F5 Score</th>
+  <th>Temp</th><th>F5 ML% / +0.5% / Pin F5%</th><th>Est. F5 Score</th>
 </tr></thead>
 <tbody>{trs}</tbody>
 </table></div>"""
