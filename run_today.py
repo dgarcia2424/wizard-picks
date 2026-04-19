@@ -3401,8 +3401,8 @@ def write_html_card(results: list[dict], date_str: str,
             '</div>'
         )
 
-    parlay_combos = _find_parlay_combos(results)
-    parlay_section = _parlay_html(parlay_combos)
+    parlay_combos  = _find_parlay_combos(results)
+    parlay_section = "" if email_filter else _parlay_html(parlay_combos)
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
