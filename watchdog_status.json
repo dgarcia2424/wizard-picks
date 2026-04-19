@@ -1,80 +1,17 @@
 {
-  "last_run": "2026-04-19T09:47:51",
-  "elapsed_s": 48.5,
+  "last_run": "2026-04-19T11:30:03",
+  "elapsed_s": 1.1,
   "total_checks": 35,
-  "ok": 25,
+  "ok": 34,
   "warn": 1,
-  "fail": 9,
-  "repaired": 10,
-  "overall": "fail",
+  "fail": 0,
+  "repaired": 1,
+  "overall": "warn",
   "issues": [
-    {
-      "name": "statcast_2026",
-      "status": "fail",
-      "message": "FILE MISSING: data/statcast/statcast_2026.parquet | REPAIRED via statcast_pull_2026.py",
-      "repaired": true,
-      "repair_cmd": "statcast_pull_2026.py"
-    },
-    {
-      "name": "actuals_2026",
-      "status": "fail",
-      "message": "FILE MISSING: data/statcast/actuals_2026.parquet | REPAIRED via statcast_pull_2026.py",
-      "repaired": true,
-      "repair_cmd": "statcast_pull_2026.py"
-    },
-    {
-      "name": "weather_2026",
-      "status": "fail",
-      "message": "FILE MISSING: data/statcast/weather_2026.parquet | REPAIRED via weather_pull.py --date 2026-04-19",
-      "repaired": true,
-      "repair_cmd": "weather_pull.py --date 2026-04-19"
-    },
-    {
-      "name": "pitcher_profiles",
-      "status": "fail",
-      "message": "FILE MISSING: data/statcast/pitcher_profiles_2026.parquet | REPAIRED via build_pitcher_profile.py",
-      "repaired": true,
-      "repair_cmd": "build_pitcher_profile.py"
-    },
-    {
-      "name": "pitcher_profiles_rows",
-      "status": "fail",
-      "message": "FILE MISSING: data/statcast/pitcher_profiles_2026.parquet | REPAIRED via build_pitcher_profile.py",
-      "repaired": true,
-      "repair_cmd": "build_pitcher_profile.py"
-    },
-    {
-      "name": "team_stats",
-      "status": "fail",
-      "message": "FILE MISSING: data/statcast/team_stats_2026.parquet | REPAIRED via build_team_stats_2026.py",
-      "repaired": true,
-      "repair_cmd": "build_team_stats_2026.py"
-    },
-    {
-      "name": "team_stats_rows",
-      "status": "fail",
-      "message": "FILE MISSING: data/statcast/team_stats_2026.parquet | REPAIRED via build_team_stats_2026.py",
-      "repaired": true,
-      "repair_cmd": "build_team_stats_2026.py"
-    },
-    {
-      "name": "bullpen_avail_2026",
-      "status": "fail",
-      "message": "FILE MISSING: data/statcast/bullpen_avail_2026.parquet | REPAIRED via build_bullpen_avail.py",
-      "repaired": true,
-      "repair_cmd": "build_bullpen_avail.py"
-    },
-    {
-      "name": "ump_assignments",
-      "status": "fail",
-      "message": "FILE MISSING: data/statcast/umpire_assignments_2026.parquet | REPAIRED via ump_pull.py",
-      "repaired": true,
-      "repair_cmd": "ump_pull.py"
-    },
     {
       "name": "lineup_quality",
       "status": "warn",
-      "message": "STALE: 10.3h old (limit 5h) \u2014 data/statcast/lineup_quality_today.parquet | REPAIRED via build_lineup_quality.py",
+      "message": "STALE: 12.0h old (limit 5h) \u2014 data/statcast/lineup_quality_today.parquet | REPAIRED via build_lineup_quality.py",
       "repaired": true,
       "repair_cmd": "build_lineup_quality.py"
     }

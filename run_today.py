@@ -2204,7 +2204,7 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
     # ── F5 Rankings table ──────────────────────────────
     lines.append("\nF5 +0.5 RANKINGS")
     lines.append("-" * 80)
-    lines.append(f"{'#':<3} {'Team':<5} {'Side':<5} {'SP':<22} {'xwOBA':<7} {'Opp SP':<22} {'xwOBA':<7} {'Temp':<6} {'F5 Win%/Score':<16} {'Mdl/Pin%'}")
+    lines.append(f"{'#':<3} {'Team':<5} {'Side':<5} {'SP':<22} {'xwOBA':<7} {'Opp SP':<22} {'xwOBA':<7} {'Temp':<6} {'F5 ML/+0.5':<14} {'Est Score':<12} {'Mdl/Pin%'}")
     lines.append("-" * 85)
     f5_rows = []
     for r in results:
@@ -2213,6 +2213,7 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
         if _is_missing(hw): continue
         ml_win = r.get("mc_home_win")
         pin_ml = r.get("ml_lock_p_true")
+        aw     = r.get("mc_f5_away_win_prob")
         f5_lo  = r.get("mc_f5_total_lo"); f5_hi = r.get("mc_f5_total_hi")
         f5_range = (float(f5_hi) - float(f5_lo)) if not _is_missing(f5_lo) and not _is_missing(f5_hi) else 99
         for team, side, sp_key, xw_key, osp_key, oxw_key in [
@@ -2220,6 +2221,9 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
             (away,"AWAY","away_sp","away_sp_xwoba","home_sp","home_sp_xwoba"),
         ]:
             win_prob = float(hw) if side == "HOME" else 1 - float(hw)
+            half_prob = ((1 - float(aw)) if side == "HOME" and not _is_missing(aw)
+                         else (1 - float(hw)) if side == "AWAY"
+                         else win_prob)
             ml_str = (f"{float(ml_win):.0%}" if side == "HOME" and not _is_missing(ml_win)
                       else f"{1-float(ml_win):.0%}" if side == "AWAY" and not _is_missing(ml_win) else "—")
             pin_str = (f"{float(pin_ml):.0%}" if side == "HOME" and not _is_missing(pin_ml)
@@ -2234,18 +2238,17 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
                             else f"{float(ar):.1f}–{float(hr):.1f}")
             else:
                 f5_score = "—"
-            wp_score = f"{win_prob:.0%}/{f5_score}"
             f5_rows.append((win_prob, team, side, sp,
                             f"{float(xw):.3f}" if not _is_missing(xw) else "—",
                             osp,
                             f"{float(oxw):.3f}" if not _is_missing(oxw) else "—",
                             f"{float(temp):.0f}°" if not _is_missing(temp) else "—",
-                            wp_score, ml_str, pin_str, f5_range))
+                            f"{win_prob:.0%}/{half_prob:.0%}", f5_score, ml_str, pin_str, f5_range))
     f5_rows.sort(key=lambda x: -x[0])
     f5_email_rows = [r for r in f5_rows if r[0] > 0.55]
     for i, row in enumerate(f5_email_rows, 1):
-        combo = f"{row[9]}/{row[10]}"
-        lines.append(f"{i:<3} {row[1]:<5} {row[2]:<5} {row[3]:<22} {row[4]:<7} {row[5]:<22} {row[6]:<7} {row[7]:<6} {row[8]:<16} {combo}")
+        combo = f"{row[10]}/{row[11]}"
+        lines.append(f"{i:<3} {row[1]:<5} {row[2]:<5} {row[3]:<22} {row[4]:<7} {row[5]:<22} {row[6]:<7} {row[7]:<6} {row[8]:<14} {row[9]:<12} {combo}")
     if not f5_email_rows:
         lines.append("  (no teams with F5 Win% > 55% today)")
 
@@ -3177,11 +3180,16 @@ def write_html_card(results: list[dict], date_str: str,
             if _is_missing(hw): continue
             f5_lo  = r.get("mc_f5_total_lo"); f5_hi = r.get("mc_f5_total_hi")
             f5_range = (float(f5_hi) - float(f5_lo)) if not _is_missing(f5_lo) and not _is_missing(f5_hi) else 99
+            aw = r.get("mc_f5_away_win_prob")
             for team, side, sp_key, xw_key, osp_key, oxw_key in [
                 (home, "HOME", "home_sp", "home_sp_xwoba", "away_sp", "away_sp_xwoba"),
                 (away, "AWAY", "away_sp", "away_sp_xwoba", "home_sp", "home_sp_xwoba"),
             ]:
                 win_prob = float(hw) if side == "HOME" else 1 - float(hw)
+                # +0.5 = win or tie: home +0.5 = 1 - away_win_strictly; away +0.5 = 1 - home_win_strictly
+                half_prob = ((1 - float(aw)) if side == "HOME" and not _is_missing(aw)
+                             else (1 - float(hw)) if side == "AWAY"
+                             else win_prob)
                 ml_win = r.get("mc_home_win")
                 ml_str = (f"{float(ml_win):.0%}" if side == "HOME" and not _is_missing(ml_win)
                           else f"{1-float(ml_win):.0%}" if side == "AWAY" and not _is_missing(ml_win)
@@ -3208,7 +3216,8 @@ def write_html_card(results: list[dict], date_str: str,
                     "osp": osp,
                     "oxw": float(oxw) if not _is_missing(oxw) else None,
                     "temp": float(temp) if not _is_missing(temp) else None,
-                    "win_prob": win_prob, "ml_str": ml_str,
+                    "win_prob": win_prob, "half_prob": half_prob,
+                    "ml_str": ml_str,
                     "pin_str": pin_str, "pin_val": pin_val,
                     "f5_range": f5_range, "f5_score_str": f5_score_str,
                 })
@@ -3240,7 +3249,8 @@ def write_html_card(results: list[dict], date_str: str,
                 f'<td class="rt-sp">{x["osp"]}</td>'
                 f'<td class="rt-xw {xw_cls(x["oxw"])}">{oxw_str}</td>'
                 f'<td class="rt-temp">{tmp_str}</td>'
-                f'<td class="rt-prob {wp_cls}">{x["win_prob"]:.0%} / {x["f5_score_str"]}</td>'
+                f'<td class="rt-prob {wp_cls}">{x["win_prob"]:.0%} / {x["half_prob"]:.0%}</td>'
+                f'<td class="rt-score">{x["f5_score_str"]}</td>'
                 f'<td class="rt-pin">{x["ml_str"]} / {x["pin_str"]}</td>'
                 f'</tr>'
             )
@@ -3252,7 +3262,7 @@ def write_html_card(results: list[dict], date_str: str,
   <th>#</th><th>Team</th><th>Side</th>
   <th>Their SP</th><th>xwOBA</th>
   <th>Opp SP</th><th>xwOBA</th>
-  <th>Temp</th><th>F5 Win% / Est. Score</th><th>Model% / Pin%</th>
+  <th>Temp</th><th>F5 ML / +0.5</th><th>Est. F5 Score</th><th>Model% / Pin%</th>
 </tr></thead>
 <tbody>{trs}</tbody>
 </table></div>"""
@@ -3657,6 +3667,7 @@ body {{
 .rt-prob {{ font-weight: 700; color: #ffffff; }}
 .rt-vt   {{ color: #8b949e; }}
 .rt-diff {{ font-weight: 600; font-family: monospace; }}
+.rt-score {{ color: #79c0ff; font-family: monospace; font-size: 11px; }}
 .rt-pin  {{ color: #8b949e; font-family: monospace; }}
 .rt-rng  {{ color: #6e7681; font-family: monospace; font-size: 11px; }}
 .wp-hot  {{ color: #3fb950; }}

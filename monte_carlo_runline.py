@@ -1271,6 +1271,7 @@ def predict_game(
         "mc_f5_total_lo":       int(np.percentile(f5_home_runs + f5_away_runs, 25)),
         "mc_f5_total_hi":       int(np.percentile(f5_home_runs + f5_away_runs, 75)),
         "mc_f5_home_win_prob":  round(float((f5_margin > 0).mean()), 4),
+        "mc_f5_away_win_prob":  round(float((f5_margin < 0).mean()), 4),
         "mc_f5_home_covers_rl": round(float((f5_margin >= 2).mean()), 4),
         # F1 / NRFI predictions
         "mc_nrfi_prob":         round(p_nrfi, 4),
