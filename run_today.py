@@ -3775,13 +3775,19 @@ body {{
     dated.write_text(html, encoding="utf-8")
     print(f"  Saved -> {out}  ({out.stat().st_size // 1024}KB)")
 
-    # PDF export
+    # PDF export via headless Edge
     try:
-        from weasyprint import HTML as WP_HTML
+        import subprocess, shutil
+        edge = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
         pdf_out   = Path("daily_card.pdf")
         pdf_dated = cards_dir / f"daily_card_{date_str}.pdf"
-        WP_HTML(string=html, base_url=str(Path.cwd())).write_pdf(str(pdf_out))
-        import shutil
+        html_abs  = str(out.resolve())
+        pdf_abs   = str(pdf_out.resolve())
+        subprocess.run(
+            [edge, "--headless", "--disable-gpu",
+             f"--print-to-pdf={pdf_abs}", html_abs],
+            timeout=60, capture_output=True, check=True,
+        )
         shutil.copy(pdf_out, pdf_dated)
         print(f"  Saved -> {pdf_out}  ({pdf_out.stat().st_size // 1024}KB)")
     except Exception as exc:
