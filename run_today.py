@@ -2235,9 +2235,12 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
                             f"{float(temp):.0f}°" if not _is_missing(temp) else "—",
                             f"{win_prob:.0%}", ml_str, pin_str, f5_range))
     f5_rows.sort(key=lambda x: -x[0])
-    for i, row in enumerate(f5_rows, 1):
+    f5_email_rows = [r for r in f5_rows if r[0] > 0.55]
+    for i, row in enumerate(f5_email_rows, 1):
         combo = f"{row[9]}/{row[10]}"
         lines.append(f"{i:<3} {row[1]:<5} {row[2]:<5} {row[3]:<22} {row[4]:<7} {row[5]:<22} {row[6]:<7} {row[7]:<6} {row[8]:<9} {combo}")
+    if not f5_email_rows:
+        lines.append("  (no teams with F5 Win% > 55% today)")
 
     # ── Runs Rankings table ────────────────────────────
     lines.append("\nTOTAL RUNS RANKINGS")
@@ -2267,9 +2270,12 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
             f"{float(pin):.3f}" if not _is_missing(pin) else "—",
             (f"{float(tlo):.1f}–{float(thi):.1f}" if not _is_missing(tlo) and not _is_missing(thi) else "—"),
         ))
-    run_rows.sort(key=lambda x: -x[0])
-    for i, row in enumerate(run_rows, 1):
+    run_rows.sort(key=lambda x: -abs(float(x[8]) if x[8] != "—" else 0))
+    run_email_rows = [r for r in run_rows if r[8] != "—" and abs(float(r[8])) >= 0.5]
+    for i, row in enumerate(run_email_rows, 1):
         lines.append(f"{i:<3} {row[1]:<22} {row[2]:<20} {row[3]:<7} {row[4]:<20} {row[5]:<7} {row[6]:<7} {row[7]:<7} {row[8]:<6} {row[9]:<9} {row[10]}")
+    if not run_email_rows:
+        lines.append("  (no games with model vs Vegas gap >= 0.5 runs today)")
 
     lines.append("\n" + "=" * 48)
 
@@ -3768,6 +3774,18 @@ body {{
     dated = cards_dir / f"daily_card_{date_str}.html"
     dated.write_text(html, encoding="utf-8")
     print(f"  Saved -> {out}  ({out.stat().st_size // 1024}KB)")
+
+    # PDF export
+    try:
+        from weasyprint import HTML as WP_HTML
+        pdf_out   = Path("daily_card.pdf")
+        pdf_dated = cards_dir / f"daily_card_{date_str}.pdf"
+        WP_HTML(string=html, base_url=str(Path.cwd())).write_pdf(str(pdf_out))
+        import shutil
+        shutil.copy(pdf_out, pdf_dated)
+        print(f"  Saved -> {pdf_out}  ({pdf_out.stat().st_size // 1024}KB)")
+    except Exception as exc:
+        print(f"  [WARN] PDF export skipped: {exc}")
 
 
 def main():
