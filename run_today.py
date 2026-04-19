@@ -1912,6 +1912,7 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
             "mc_f5_away_runs":      res.get("mc_f5_away_runs"),
             "mc_f5_total":          res.get("mc_f5_total"),
             "mc_f5_home_win_prob":  res.get("mc_f5_home_win_prob"),
+            "mc_f5_away_win_prob":  res.get("mc_f5_away_win_prob"),
             "mc_f5_home_covers_rl": res.get("mc_f5_home_covers_rl"),
             # F1 / NRFI
             "mc_nrfi_prob":         res.get("mc_nrfi_prob"),
