@@ -1005,6 +1005,8 @@ def predict_game(
     market_odds: dict | None = None,   # {true_home_prob, true_away_prob} for XGBoost
     game_hour_et: float | None = None, # scheduled start hour in ET (e.g. 13.75 = 1:45 PM)
     ump_k_above_avg: float = 0.0,      # HP ump trailing K% vs league avg (from ump_features)
+    home_pp_k_line: float | None = None,  # PrizePicks standard K line for home SP
+    away_pp_k_line: float | None = None,  # PrizePicks standard K line for away SP
 ) -> dict:
     """
     Full prediction pipeline for one game.
@@ -1202,6 +1204,15 @@ def predict_game(
     ump_adj = float(ump_k_above_avg) if not pd.isna(ump_k_above_avg) else 0.0
     mc_home_k_mean = home_k_rate * home_expected_bf * KPROP_MEAN_CALIB + ump_adj * home_expected_bf
     mc_away_k_mean = away_k_rate * away_expected_bf * KPROP_MEAN_CALIB + ump_adj * away_expected_bf
+
+    # Blend PrizePicks standard line as a market prior (35% weight).
+    # PP line represents sharp market consensus; pulling MC toward it improves calibration
+    # when our K rate estimate diverges significantly from the market.
+    _PP_K_WEIGHT = 0.35
+    if home_pp_k_line is not None and not pd.isna(home_pp_k_line):
+        mc_home_k_mean = (1 - _PP_K_WEIGHT) * mc_home_k_mean + _PP_K_WEIGHT * float(home_pp_k_line)
+    if away_pp_k_line is not None and not pd.isna(away_pp_k_line):
+        mc_away_k_mean = (1 - _PP_K_WEIGHT) * mc_away_k_mean + _PP_K_WEIGHT * float(away_pp_k_line)
 
     home_k_sims = simulate_k_prop_nb(mc_home_k_mean).astype(float)
     away_k_sims = simulate_k_prop_nb(mc_away_k_mean).astype(float)

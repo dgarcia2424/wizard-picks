@@ -1508,6 +1508,10 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
         ump_k = ump_k_map.get(game_pk) or ump_k_map.get(int(game_pk)) if game_pk else None
 
         try:
+            # Look up PrizePicks standard K lines to use as market prior in MC
+            _pp_home_k = _pp_k_line(pp_df, home_sp_norm) if not pp_df.empty else None
+            _pp_away_k = _pp_k_line(pp_df, away_sp_norm) if not pp_df.empty else None
+
             res = predict_game(
                 home_team=home, away_team=away,
                 home_sp_name=home_sp_norm, away_sp_name=away_sp_norm,
@@ -1524,6 +1528,8 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
                 market_odds=market_odds_xgb,
                 game_hour_et=game_hour_et_val,
                 ump_k_above_avg=float(ump_k) if ump_k is not None else 0.0,
+                home_pp_k_line=_pp_home_k,
+                away_pp_k_line=_pp_away_k,
             )
         except Exception as e:
             print(f"  {away} @ {home}: ERROR — {e}")
