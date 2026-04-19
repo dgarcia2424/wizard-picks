@@ -189,6 +189,11 @@ def refresh_savant_batters(years: list[int]) -> None:
     if not frames:
         return
     out = pd.concat(frames, ignore_index=True).drop_duplicates(subset=["player_id", "year"])
+    # Normalize to the column names score_models.py expects
+    out = out.rename(columns={"est_woba": "xwoba", "est_ba": "xba", "est_slg": "xslg",
+                               "est_woba_minus_woba_diff": "xwoba_diff",
+                               "est_ba_minus_ba_diff": "xba_diff",
+                               "est_slg_minus_slg_diff": "xslg_diff"})
     out.to_csv(RAW_DIR / "savant_batters.csv", index=False)
     print(f"  [savant_batters] saved {len(out)} rows → savant_batters.csv")
 

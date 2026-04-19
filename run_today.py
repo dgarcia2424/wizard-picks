@@ -757,9 +757,9 @@ def _get_p_model(stk_model, xgb_rl_raw: float, stacking_feats: dict | None,
     # ── Plain sklearn calibrator (Platt LogisticRegression or isotonic) ─────
     try:
         return float(stk_model.predict_proba([[xgb_rl_raw]])[0, 1])
-    except AttributeError:
+    except (AttributeError, ValueError):
         try:
-            return float(stk_model.predict([xgb_rl_raw])[0])
+            return float(stk_model.predict([[xgb_rl_raw]])[0])
         except Exception:
             pass
 

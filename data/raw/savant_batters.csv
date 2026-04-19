@@ -1,4 +1,4 @@
-"last_name, first_name",player_id,year,pa,bip,ba,est_ba,est_ba_minus_ba_diff,slg,est_slg,est_slg_minus_slg_diff,woba,est_woba,est_woba_minus_woba_diff
+"last_name, first_name",player_id,year,pa,bip,ba,xba,xba_diff,slg,xslg,xslg_diff,woba,xwoba,xwoba_diff
 "Lindor, Francisco",596019,2026,66,44,0.164,0.236,-0.0719999999999999,0.255,0.366,-0.1109999999999999,0.272,0.334,-0.062
 "Bichette, Bo",666182,2026,65,46,0.23,0.273,-0.043,0.262,0.369,-0.1069999999999999,0.242,0.293,-0.0509999999999999
 "Neto, Zach",687263,2026,65,40,0.246,0.216,0.03,0.544,0.441,0.103,0.387,0.324,0.063
