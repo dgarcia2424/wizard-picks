@@ -11,6 +11,8 @@ Uploads:
 
 Run automatically by mlb_model_run.bat after run_today.py.
 """
+import hashlib
+import json as _json
 import os
 import sys
 import logging
@@ -22,6 +24,39 @@ logger = logging.getLogger("wizard.supabase")
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 BASE_DIR = Path(__file__).parent
+_HASH_FILE = BASE_DIR / ".supabase_hashes.json"
+
+
+def _load_hashes() -> dict:
+    if _HASH_FILE.exists():
+        try:
+            return _json.loads(_HASH_FILE.read_text())
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_hashes(hashes: dict) -> None:
+    _HASH_FILE.write_text(_json.dumps(hashes, indent=2))
+
+
+def _file_hash(path: Path) -> str:
+    if not path.exists():
+        return ""
+    return hashlib.md5(path.read_bytes()).hexdigest()
+
+
+def _unchanged(key: str, path: Path, hashes: dict) -> bool:
+    current = _file_hash(path)
+    if current and hashes.get(key) == current:
+        logger.info(f"  [{key}] unchanged — skipping upload")
+        return True
+    return False
+
+
+def _mark_uploaded(key: str, path: Path, hashes: dict) -> None:
+    hashes[key] = _file_hash(path)
+    _save_hashes(hashes)
 
 
 # ---------------------------------------------------------------------------
@@ -451,17 +486,30 @@ def main():
     print("  supabase_upload.py")
     print("=" * 50)
 
+    hashes = _load_hashes()
+
+    # Hash-checked uploads: skip if source file hasn't changed since last upload
+    _hashed = {
+        "backtest":            BASE_DIR / "backtest_2026_results.csv",
+        "model_history":       BASE_DIR / "backtest_mc_2026_results.csv",
+    }
+
     # Each upload runs independently — one missing table won't stop the others
     results = {}
     for name, fn in [
-        ("daily_card",          upload_all_daily_cards),
+        ("daily_card",          upload_all_daily_cards),   # always — odds/lineups change
         ("backtest",            upload_backtest),
         ("model_history",       upload_model_history),
         ("historical_backtest", upload_historical_backtest),
-        ("pipeline_health",     upload_pipeline_health),
+        ("pipeline_health",     upload_pipeline_health),   # always — reflects freshness
     ]:
+        if name in _hashed and _unchanged(name, _hashed[name], hashes):
+            results[name] = -1  # sentinel: skipped
+            continue
         try:
             results[name] = fn()
+            if name in _hashed and results[name] > 0:
+                _mark_uploaded(name, _hashed[name], hashes)
         except RuntimeError as e:
             logger.error(f"  [ERROR] {name}: {e}")
             results[name] = 0
@@ -469,14 +517,15 @@ def main():
             logger.error(f"  [ERROR] {name} unexpected: {e}")
             results[name] = 0
 
-    total = sum(results.values())
+    total = sum(n for n in results.values() if n > 0)
     print(f"\n  Done. {total} total rows uploaded.")
     for name, n in results.items():
-        status = "OK" if n > 0 else "SKIP/FAIL"
-        print(f"    [{status:9s}] {name}: {n} rows")
+        status = "SKIP" if n == -1 else ("OK" if n > 0 else "SKIP/FAIL")
+        label = "no change" if n == -1 else f"{n} rows"
+        print(f"    [{status:9s}] {name}: {label}")
 
-    # Exit non-zero only if the critical uploads (daily_card, backtest) both failed
-    if results["daily_card"] == 0 and results["backtest"] == 0:
+    # Exit non-zero only if the critical uploads (daily_card, backtest) both failed (not skipped)
+    if results["daily_card"] == 0 and results.get("backtest", -1) == 0:
         sys.exit(1)
     sys.exit(0)
 

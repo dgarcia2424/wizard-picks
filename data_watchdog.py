@@ -459,7 +459,7 @@ def _send_alert(issues: list[dict], repaired: list[dict], dry_run: bool) -> None
         return
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M ET")
-    subject = f"[Wizard Watchdog] {len(issues)} issue(s) detected — {now}"
+    subject = f"[Wizard Watchdog] {len(issues)} unrepaired issue(s) — {now}"
 
     lines = [f"Data watchdog pass: {now}", ""]
     if repaired:
@@ -570,9 +570,10 @@ def main() -> None:
     # ── Write status ─────────────────────────────────────────────────────────
     _write_status(results, elapsed)
 
-    # ── Alert email (only when something needed attention) ───────────────────
-    if issues:
-        _send_alert(issues, repaired, dry_run=args.dry_run)
+    # ── Alert email (only when unrepaired issues remain) ─────────────────────
+    unrepaired = [r for r in issues if not r["repaired"]]
+    if unrepaired:
+        _send_alert(unrepaired, repaired, dry_run=args.dry_run)
 
     log.info("=" * 60)
 

@@ -207,7 +207,7 @@ def run_all() -> None:
         run_step("kprop_tracker.py", "kprop_tracker")
 
         # ── Step 8c: Supplemental data + backtest rebuild (daily at 10 AM) ──
-        run_step("supplemental_pull.py --force-year 2026", "supplemental")
+        run_step("supplemental_pull.py", "supplemental")
         run_step("build_backtest.py --year 2026", "backtest")
 
         # ── Step 8d: Rolling trackers ──────────────────────────────────────
@@ -281,7 +281,7 @@ def run_refresh(label: str, send_email: bool = False) -> None:
         run_step("kprop_tracker.py", "kprop_tracker")
 
         # ── Step 12: Supplemental data + backtest rebuild ─────────────────────
-        run_step("supplemental_pull.py --force-year 2026", "supplemental")
+        run_step("supplemental_pull.py", "supplemental")
         run_step("build_backtest.py --year 2026", "backtest")
 
         # ── Step 13: Health snapshot ──────────────────────────────────────────
