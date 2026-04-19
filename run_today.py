@@ -2205,7 +2205,7 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
     # ── F5 Rankings table ──────────────────────────────
     lines.append("\nF5 +0.5 RANKINGS")
     lines.append("-" * 80)
-    lines.append(f"{'#':<3} {'Team':<5} {'Side':<5} {'SP':<22} {'xwOBA':<7} {'Opp SP':<22} {'xwOBA':<7} {'Temp':<6} {'F5% / ML% / +0.5 / Pin':<26} {'Est Score'}")
+    lines.append(f"{'#':<3} {'Team':<5} {'Side':<5} {'SP':<22} {'xwOBA':<7} {'Opp SP':<22} {'xwOBA':<7} {'Temp':<6} {'F5 ML% / +0.5% / Pin%':<24} {'Est Score'}")
     lines.append("-" * 100)
     _F5_K = 1.289
     f5_rows = []
@@ -2243,7 +2243,7 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
                             else f"{float(ar):.1f}-{float(hr):.1f}")
             else:
                 f5_score = "—"
-            combo = f"{win_prob:.0%}/{ml_s}/{half_prob:.0%}/{pin_f5_s}"
+            combo = f"{win_prob:.0%}/{half_prob:.0%}/{pin_f5_s}"
             f5_rows.append((win_prob, team, side, sp,
                             f"{float(xw):.3f}" if not _is_missing(xw) else "—",
                             osp,
@@ -2253,7 +2253,7 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
     f5_rows.sort(key=lambda x: -x[0])
     f5_email_rows = [r for r in f5_rows if r[0] > 0.55]
     for i, row in enumerate(f5_email_rows, 1):
-        lines.append(f"{i:<3} {row[1]:<5} {row[2]:<5} {row[3]:<22} {row[4]:<7} {row[5]:<22} {row[6]:<7} {row[7]:<6} {row[8]:<26} {row[9]}")
+        lines.append(f"{i:<3} {row[1]:<5} {row[2]:<5} {row[3]:<22} {row[4]:<7} {row[5]:<22} {row[6]:<7} {row[7]:<6} {row[8]:<24} {row[9]}")
     if not f5_email_rows:
         lines.append("  (no teams with F5 Win% > 55% today)")
 
@@ -3256,19 +3256,19 @@ def write_html_card(results: list[dict], date_str: str,
                 f'<td class="rt-sp">{x["osp"]}</td>'
                 f'<td class="rt-xw {xw_cls(x["oxw"])}">{oxw_str}</td>'
                 f'<td class="rt-temp">{tmp_str}</td>'
-                f'<td class="rt-prob {wp_cls}">{x["win_prob"]:.0%} / {ml_s} / {x["half_prob"]:.0%} / {pin_f5_s}</td>'
+                f'<td class="rt-prob {wp_cls}">{x["win_prob"]:.0%} / {x["half_prob"]:.0%} / {pin_f5_s}</td>'
                 f'<td class="rt-score">{x["f5_score_str"]}</td>'
                 f'</tr>'
             )
         return f"""<div class="rank-section">
 <div class="rank-title">F5 +0.5 Rankings — All Teams</div>
-<div class="rank-note">F5% / ML% / +0.5% / Est.Pin F5% &nbsp;·&nbsp; Est.Pin F5 = 0.5 + 1.289*(PinML - 0.5) &nbsp;·&nbsp; <span class="wp-hot">Green</span> = model &amp; Pin agree, tight F5 range &nbsp;·&nbsp; <span class="wp-warm">Yellow</span> = agree but wide range</div>
+<div class="rank-note">F5 ML% / +0.5% / Est.Pin F5% &nbsp;·&nbsp; Est.Pin F5 = 0.5 + 1.289*(PinML - 0.5) &nbsp;·&nbsp; <span class="wp-hot">Green</span> = model &amp; Pin agree, tight F5 range &nbsp;·&nbsp; <span class="wp-warm">Yellow</span> = agree but wide range</div>
 <table class="rank-tbl">
 <thead><tr>
   <th>#</th><th>Team</th><th>Side</th>
   <th>Their SP</th><th>xwOBA</th>
   <th>Opp SP</th><th>xwOBA</th>
-  <th>Temp</th><th>F5% / ML% / +0.5 / Pin</th><th>Est. F5 Score</th>
+  <th>Temp</th><th>F5 ML% / +0.5% / Pin%</th><th>Est. F5 Score</th>
 </tr></thead>
 <tbody>{trs}</tbody>
 </table></div>"""
