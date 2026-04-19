@@ -122,7 +122,7 @@ def build_year(year: int, verbose: bool = True) -> pd.DataFrame:
         platoon_std = out["platoon_diff"].std()
         print(f"  {year}: {n} batters | "
               f"avg PA vs RHP={avg_pa_r:.0f}, vs LHP={avg_pa_l:.0f} | "
-              f"platoon_diff std={platoon_std:.4f} → {out_path.name}")
+              f"platoon_diff std={platoon_std:.4f} -> {out_path.name}")
 
     return out
 

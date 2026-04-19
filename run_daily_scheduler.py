@@ -115,6 +115,7 @@ def run_step(script: str, label: str = "") -> tuple[int, float]:
             encoding="utf-8",
             errors="replace",
             bufsize=1,
+            cwd=Path(__file__).parent,
         )
         for line in proc.stdout:
             log.info("  [%s] %s", tag, line.rstrip())
