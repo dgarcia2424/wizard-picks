@@ -2204,16 +2204,17 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
     # ── F5 Rankings table ──────────────────────────────
     lines.append("\nF5 +0.5 RANKINGS")
     lines.append("-" * 80)
-    lines.append(f"{'#':<3} {'Team':<5} {'Side':<5} {'SP':<22} {'xwOBA':<7} {'Opp SP':<22} {'xwOBA':<7} {'Temp':<6} {'F5 Win%':<9} {'Mdl/Pin%':<12} {'Shadow RL'}")
-    lines.append("-" * 95)
+    lines.append(f"{'#':<3} {'Team':<5} {'Side':<5} {'SP':<22} {'xwOBA':<7} {'Opp SP':<22} {'xwOBA':<7} {'Temp':<6} {'F5 Win%':<9} {'Mdl/Pin%'}")
+    lines.append("-" * 85)
     f5_rows = []
     for r in results:
         home, away = r["home_team"], r["away_team"]
         hw = r.get("mc_f5_home_win_prob")
         if _is_missing(hw): continue
-        emin = r.get("ensemble_min"); emax = r.get("ensemble_max")
         ml_win = r.get("mc_home_win")
         pin_ml = r.get("ml_lock_p_true")
+        f5_lo  = r.get("mc_f5_total_lo"); f5_hi = r.get("mc_f5_total_hi")
+        f5_range = (float(f5_hi) - float(f5_lo)) if not _is_missing(f5_lo) and not _is_missing(f5_hi) else 99
         for team, side, sp_key, xw_key, osp_key, oxw_key in [
             (home,"HOME","home_sp","home_sp_xwoba","away_sp","away_sp_xwoba"),
             (away,"AWAY","away_sp","away_sp_xwoba","home_sp","home_sp_xwoba"),
@@ -2223,12 +2224,6 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
                       else f"{1-float(ml_win):.0%}" if side == "AWAY" and not _is_missing(ml_win) else "—")
             pin_str = (f"{float(pin_ml):.0%}" if side == "HOME" and not _is_missing(pin_ml)
                        else f"{1-float(pin_ml):.0%}" if side == "AWAY" and not _is_missing(pin_ml) else "—")
-            if not _is_missing(emin) and not _is_missing(emax):
-                lo = float(emin) if side == "HOME" else 1 - float(emax)
-                hi = float(emax) if side == "HOME" else 1 - float(emin)
-                shd = f"{lo:.0%}–{hi:.0%}"
-            else:
-                shd = "—"
             sp  = str(r.get(sp_key,"TBD")).title()
             xw  = r.get(xw_key); oxw = r.get(oxw_key)
             osp = str(r.get(osp_key,"TBD")).title()
@@ -2238,11 +2233,11 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
                             osp,
                             f"{float(oxw):.3f}" if not _is_missing(oxw) else "—",
                             f"{float(temp):.0f}°" if not _is_missing(temp) else "—",
-                            f"{win_prob:.0%}", ml_str, pin_str, shd))
+                            f"{win_prob:.0%}", ml_str, pin_str, f5_range))
     f5_rows.sort(key=lambda x: -x[0])
     for i, row in enumerate(f5_rows, 1):
         combo = f"{row[9]}/{row[10]}"
-        lines.append(f"{i:<3} {row[1]:<5} {row[2]:<5} {row[3]:<22} {row[4]:<7} {row[5]:<22} {row[6]:<7} {row[7]:<6} {row[8]:<9} {combo:<12} {row[11]}")
+        lines.append(f"{i:<3} {row[1]:<5} {row[2]:<5} {row[3]:<22} {row[4]:<7} {row[5]:<22} {row[6]:<7} {row[7]:<6} {row[8]:<9} {combo}")
 
     # ── Runs Rankings table ────────────────────────────
     lines.append("\nTOTAL RUNS RANKINGS")
@@ -3148,30 +3143,22 @@ def write_html_card(results: list[dict], date_str: str) -> None:
             home, away = r["home_team"], r["away_team"]
             hw   = r.get("mc_f5_home_win_prob")
             if _is_missing(hw): continue
-            # shadow RL range (ensemble_min/max are RL win probs across LGBM+CatBoost)
-            emin = r.get("ensemble_min"); emax = r.get("ensemble_max")
+            f5_lo  = r.get("mc_f5_total_lo"); f5_hi = r.get("mc_f5_total_hi")
+            f5_range = (float(f5_hi) - float(f5_lo)) if not _is_missing(f5_lo) and not _is_missing(f5_hi) else 99
             for team, side, sp_key, xw_key, osp_key, oxw_key in [
                 (home, "HOME", "home_sp", "home_sp_xwoba", "away_sp", "away_sp_xwoba"),
                 (away, "AWAY", "away_sp", "away_sp_xwoba", "home_sp", "home_sp_xwoba"),
             ]:
                 win_prob = float(hw) if side == "HOME" else 1 - float(hw)
-                # Full-game ML%
                 ml_win = r.get("mc_home_win")
                 ml_str = (f"{float(ml_win):.0%}" if side == "HOME" and not _is_missing(ml_win)
                           else f"{1-float(ml_win):.0%}" if side == "AWAY" and not _is_missing(ml_win)
                           else "—")
-                # Pinnacle ML probability
                 pin_ml = r.get("ml_lock_p_true")
-                pin_str = (f"{float(pin_ml):.0%}" if side == "HOME" and not _is_missing(pin_ml)
-                           else f"{1-float(pin_ml):.0%}" if side == "AWAY" and not _is_missing(pin_ml)
-                           else "—")
-                # Shadow RL range (home perspective; flip for away)
-                if not _is_missing(emin) and not _is_missing(emax):
-                    lo = float(emin) if side == "HOME" else 1 - float(emax)
-                    hi = float(emax) if side == "HOME" else 1 - float(emin)
-                    shd_str = f"{lo:.0%}–{hi:.0%}"
-                else:
-                    shd_str = "—"
+                pin_val = (float(pin_ml) if side == "HOME" and not _is_missing(pin_ml)
+                           else 1 - float(pin_ml) if side == "AWAY" and not _is_missing(pin_ml)
+                           else None)
+                pin_str = f"{pin_val:.0%}" if pin_val is not None else "—"
                 sp  = str(r.get(sp_key, "TBD")).title()
                 xw  = r.get(xw_key)
                 osp = str(r.get(osp_key, "TBD")).title()
@@ -3184,7 +3171,8 @@ def write_html_card(results: list[dict], date_str: str) -> None:
                     "oxw": float(oxw) if not _is_missing(oxw) else None,
                     "temp": float(temp) if not _is_missing(temp) else None,
                     "win_prob": win_prob, "ml_str": ml_str,
-                    "pin_str": pin_str, "shd_str": shd_str,
+                    "pin_str": pin_str, "pin_val": pin_val,
+                    "f5_range": f5_range,
                 })
         rows.sort(key=lambda x: -x["win_prob"])
 
@@ -3194,7 +3182,11 @@ def write_html_card(results: list[dict], date_str: str) -> None:
 
         trs = ""
         for i, x in enumerate(rows, 1):
-            wp_cls  = "wp-hot" if x["win_prob"] >= 0.70 else "wp-warm" if x["win_prob"] >= 0.60 else ""
+            pin_v = x["pin_val"]
+            agree = pin_v is not None and abs(x["win_prob"] - pin_v) <= 0.08
+            wp_cls = ("wp-hot" if agree and x["f5_range"] <= 3.5
+                      else "wp-warm" if agree and x["f5_range"] > 3.5
+                      else "")
             xw_str  = f"{x['xw']:.3f}"  if x["xw"]  else "—"
             oxw_str = f"{x['oxw']:.3f}" if x["oxw"] else "—"
             tmp_str = f"{x['temp']:.0f}°" if x["temp"] else "—"
@@ -3210,18 +3202,17 @@ def write_html_card(results: list[dict], date_str: str) -> None:
                 f'<td class="rt-temp">{tmp_str}</td>'
                 f'<td class="rt-prob {wp_cls}">{x["win_prob"]:.0%}</td>'
                 f'<td class="rt-pin">{x["ml_str"]} / {x["pin_str"]}</td>'
-                f'<td class="rt-rng">{x["shd_str"]}</td>'
                 f'</tr>'
             )
         return f"""<div class="rank-section">
 <div class="rank-title">F5 +0.5 Rankings — All Teams</div>
-<div class="rank-note">F5 Win% = MC sim · ML Win% = model full-game · Pin ML = Pinnacle ML implied · Shadow RL = LGBM+CatBoost ensemble range (RL market proxy)</div>
+<div class="rank-note">F5 Win% = MC sim · Model% = full-game win% · Pin ML = Pinnacle ML implied · <span class="wp-hot">Green</span> = model &amp; Pinnacle agree, tight F5 range · <span class="wp-warm">Yellow</span> = agree but wide range</div>
 <table class="rank-tbl">
 <thead><tr>
   <th>#</th><th>Team</th><th>Side</th>
   <th>Their SP</th><th>xwOBA</th>
   <th>Opp SP</th><th>xwOBA</th>
-  <th>Temp</th><th>F5 Win%</th><th>Model% / Pin%</th><th>Shadow RL</th>
+  <th>Temp</th><th>F5 Win%</th><th>Model% / Pin%</th>
 </tr></thead>
 <tbody>{trs}</tbody>
 </table></div>"""
