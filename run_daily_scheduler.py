@@ -228,8 +228,10 @@ def run_refresh(label: str, send_email: bool = False) -> None:
         # ── Step 0: Statcast append (idempotent — no-op if already current) ──
         run_step("statcast_pull_2026.py", "statcast_pull")
 
-        # ── Step 1: Lineups + probable starters ──────────────────────────────
+        # ── Step 1: Lineups + probable starters (today + tomorrow) ──────────
         run_step("lineup_pull.py --recent", "lineups_today")
+        tomorrow = (date.today() + __import__("datetime").timedelta(days=1)).isoformat()
+        run_step(f"lineup_pull.py --date {tomorrow}", "lineups_tmrw")
 
         # ── Step 2: Umpire assignments + tendencies ───────────────────────────
         run_step("ump_pull.py", "ump_pull")
@@ -270,7 +272,11 @@ def run_refresh(label: str, send_email: bool = False) -> None:
         run_step("clv_audit.py", "clv_audit")
         run_step("kprop_tracker.py", "kprop_tracker")
 
-        # ── Step 12: Health snapshot ──────────────────────────────────────────
+        # ── Step 12: Supplemental data + backtest rebuild ─────────────────────
+        run_step("supplemental_pull.py --force-year 2026", "supplemental")
+        run_step("build_backtest.py --year 2026", "backtest")
+
+        # ── Step 13: Health snapshot ──────────────────────────────────────────
         run_step("pipeline_health.py --upload", "health")
 
     except Exception:
