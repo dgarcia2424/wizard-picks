@@ -3310,7 +3310,11 @@ def write_html_card(results: list[dict], date_str: str,
         header_sub = f"{total_locks} Locks"
         header_cls = "hdr-lock"
 
-    cards_html = "\n".join(_game_card(r) for r in results)
+    def _has_ml_rl_lock(r):
+        return any(r.get(k) is not None for k in ("lock_tier", "away_lock_tier", "ml_lock_tier"))
+
+    email_cards = [r for r in results if _has_ml_rl_lock(r)] if email_filter else results
+    cards_html = "\n".join(_game_card(r) for r in email_cards)
 
     # ── Parlay suggestions section ────────────────────────────────────────────
     def _parlay_html(combos: list[dict]) -> str:
