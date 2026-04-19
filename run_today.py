@@ -3548,6 +3548,29 @@ def main():
     if args.email and results:
         send_card_email(results, date_str)
 
+    _git_sync(date_str)
+
+
+def _git_sync(date_str: str) -> None:
+    import subprocess
+    repo = Path(__file__).parent
+    try:
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+        result = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"], cwd=repo, capture_output=True
+        )
+        if result.returncode == 0:
+            print("  [git] Nothing new to commit.")
+            return
+        subprocess.run(
+            ["git", "commit", "-m", f"Auto-sync: daily pipeline run {date_str}"],
+            cwd=repo, check=True, capture_output=True,
+        )
+        subprocess.run(["git", "push", "origin", "master"], cwd=repo, check=True, capture_output=True)
+        print(f"  [git] Pushed to GitHub ({date_str})")
+    except subprocess.CalledProcessError as e:
+        print(f"  [git] Sync failed: {e.stderr.decode().strip()}")
+
 
 if __name__ == "__main__":
     main()
