@@ -30,6 +30,7 @@ from pybaseball import playerid_reverse_lookup, cache
 cache.enable()
 
 STATCAST_DIR = Path("./data/statcast")   # where statcast_pull.py saves files
+RAW_DIR      = Path("./data/raw")
 
 # ─── SEASON DATE RANGES ───────────────────────────────────────────────────────
 
@@ -247,7 +248,8 @@ def build_season(year):
     games_df = games_df[[c for c in cols if c in games_df.columns]]
     games_df = games_df.sort_values("game_date").reset_index(drop=True)
 
-    out_path = f"backtest_games_{year}.csv"
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = RAW_DIR / f"backtest_games_{year}.csv"
     games_df.to_csv(out_path, index=False)
 
     print(f"\n  {len(games_df)} games saved → {out_path}")
