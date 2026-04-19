@@ -145,8 +145,8 @@ def load_lineups(date_str: str) -> pd.DataFrame:
 
 def load_odds(date_str: str) -> pd.DataFrame:
     """Load today's Vegas odds — tries dated file first, then most recent."""
-    # Try exact date file
-    dated = DATA_DIR / f"odds_current_{date_str}.parquet"
+    # odds_current_pull.py saves with underscores (e.g. odds_current_2026_04_18.parquet)
+    dated = DATA_DIR / f"odds_current_{date_str.replace('-', '_')}.parquet"
     if dated.exists():
         df = pd.read_parquet(dated, engine="pyarrow")
     else:

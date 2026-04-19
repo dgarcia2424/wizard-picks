@@ -1484,6 +1484,23 @@ def pull_odds_for_date(target_date: str, force: bool = False) -> None:
     df = df.drop_duplicates(subset=["game_date", "home_team", "away_team"], keep="first")
     df = df.sort_values(["game_date", "home_team"]).reset_index(drop=True)
 
+    # Merge with previous save: preserve non-null Pinnacle/retail values from earlier
+    # pulls so that lines captured at game time aren't wiped by post-game re-runs
+    # (Pinnacle removes lines once a game starts; later pulls would overwrite with NaN).
+    if output_path.exists():
+        try:
+            prev = pd.read_parquet(output_path, engine="pyarrow")
+            _key = ["home_team", "away_team"]
+            _fill_cols = [c for c in prev.columns if c not in _key
+                          and c in df.columns and c != "pull_timestamp"]
+            prev_idx = prev.set_index(_key)
+            df = df.set_index(_key)
+            for col in _fill_cols:
+                df[col] = df[col].fillna(prev_idx[col].reindex(df.index))
+            df = df.reset_index()
+        except Exception as exc:
+            log.warning("Could not merge with previous odds file: %s", exc)
+
     df.to_parquet(output_path, engine="pyarrow", index=False)
     log.info("Saved %s — shape: %s", output_path.name, df.shape)
     print(f"Saved {output_path.name} — shape: {df.shape}")
