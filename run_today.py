@@ -2559,12 +2559,8 @@ def send_card_email(results: list[dict], date_str: str) -> None:
     # ── Plain-text body (fallback) ───────────────────────────────────────────
     plain_body = _build_email_body(results, date_str)
 
-    # ── Ensure HTML card is written and current ──────────────────────────────
-    html_path = Path("daily_card.html")
-    if not html_path.exists():
-        write_html_card(results, date_str)
-
-    html_body = html_path.read_text(encoding="utf-8") if html_path.exists() else ""
+    # ── Build filtered HTML for email (F5 > 55%, runs |diff| >= 0.5) ─────────
+    html_body = write_html_card(results, date_str, email_filter=True)
     html_kb   = len(html_body.encode("utf-8")) // 1024
     if html_kb >= 100:
         print(f"  [WARN] HTML card is {html_kb}KB — Gmail may clip at 102KB")
@@ -2590,7 +2586,8 @@ def send_card_email(results: list[dict], date_str: str) -> None:
         print(f"  [ERROR] Email failed: {e}")
 
 
-def write_html_card(results: list[dict], date_str: str) -> None:
+def write_html_card(results: list[dict], date_str: str,
+                    email_filter: bool = False) -> str:
     """
     Write a self-contained daily_card.html — open in any browser after triage.
 
@@ -3143,7 +3140,10 @@ def write_html_card(results: list[dict], date_str: str) -> None:
 </div>"""
 
     # ── F5 & Runs ranking tables ──────────────────────────────────────────────
-    def _f5_rank_table() -> str:
+    email_min_f5       = 0.55 if email_filter else 0.0
+    email_min_run_diff = 0.5  if email_filter else 0.0
+
+    def _f5_rank_table(min_prob: float = 0.0) -> str:
         rows = []
         for r in results:
             home, away = r["home_team"], r["away_team"]
@@ -3181,6 +3181,8 @@ def write_html_card(results: list[dict], date_str: str) -> None:
                     "f5_range": f5_range,
                 })
         rows.sort(key=lambda x: -x["win_prob"])
+        if min_prob > 0:
+            rows = [r for r in rows if r["win_prob"] > min_prob]
 
         def xw_cls(v):
             if v is None: return ""
@@ -3223,7 +3225,7 @@ def write_html_card(results: list[dict], date_str: str) -> None:
 <tbody>{trs}</tbody>
 </table></div>"""
 
-    def _runs_rank_table() -> str:
+    def _runs_rank_table(min_diff: float = 0.0) -> str:
         rows = []
         for r in results:
             home, away = r["home_team"], r["away_team"]
@@ -3246,7 +3248,9 @@ def write_html_card(results: list[dict], date_str: str) -> None:
                 "rng": (f"{float(tlo):.1f}–{float(thi):.1f}"
                         if not _is_missing(tlo) and not _is_missing(thi) else "—"),
             })
-        rows.sort(key=lambda x: -x["mt"])
+        rows.sort(key=lambda x: -abs(x["diff"]))
+        if min_diff > 0:
+            rows = [r for r in rows if abs(r["diff"]) >= min_diff]
 
         def diff_cls(d):
             return "val-green" if d >= 0.5 else "val-red" if d <= -0.5 else "val-dim"
@@ -3290,8 +3294,8 @@ def write_html_card(results: list[dict], date_str: str) -> None:
 <tbody>{trs}</tbody>
 </table></div>"""
 
-    f5_rank_html   = _f5_rank_table()
-    runs_rank_html = _runs_rank_table()
+    f5_rank_html   = _f5_rank_table(min_prob=email_min_f5)
+    runs_rank_html = _runs_rank_table(min_diff=email_min_run_diff)
 
     # ── assemble HTML ─────────────────────────────────────────────────────────
     gen_time = _dt.datetime.now().strftime("%H:%M")
@@ -3767,6 +3771,9 @@ body {{
 </body>
 </html>"""
 
+    if email_filter:
+        return html
+
     out = Path("daily_card.html")
     out.write_text(html, encoding="utf-8")
     cards_dir = Path("daily_cards")
@@ -3792,6 +3799,7 @@ body {{
         print(f"  Saved -> {pdf_out}  ({pdf_out.stat().st_size // 1024}KB)")
     except Exception as exc:
         print(f"  [WARN] PDF export skipped: {exc}")
+    return html
 
 
 def main():
