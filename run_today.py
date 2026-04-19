@@ -2204,7 +2204,7 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
     # ── F5 Rankings table ──────────────────────────────
     lines.append("\nF5 +0.5 RANKINGS")
     lines.append("-" * 80)
-    lines.append(f"{'#':<3} {'Team':<5} {'Side':<5} {'SP':<22} {'xwOBA':<7} {'Opp SP':<22} {'xwOBA':<7} {'Temp':<6} {'F5 Win%':<9} {'ML Win%':<9} {'Pin ML':<8} {'Shadow RL'}")
+    lines.append(f"{'#':<3} {'Team':<5} {'Side':<5} {'SP':<22} {'xwOBA':<7} {'Opp SP':<22} {'xwOBA':<7} {'Temp':<6} {'F5 Win%':<9} {'Mdl/Pin%':<12} {'Shadow RL'}")
     lines.append("-" * 95)
     f5_rows = []
     for r in results:
@@ -2221,8 +2221,8 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
             win_prob = float(hw) if side == "HOME" else 1 - float(hw)
             ml_str = (f"{float(ml_win):.0%}" if side == "HOME" and not _is_missing(ml_win)
                       else f"{1-float(ml_win):.0%}" if side == "AWAY" and not _is_missing(ml_win) else "—")
-            pin_str = (f"{float(pin_ml):.3f}" if side == "HOME" and not _is_missing(pin_ml)
-                       else f"{1-float(pin_ml):.3f}" if side == "AWAY" and not _is_missing(pin_ml) else "—")
+            pin_str = (f"{float(pin_ml):.0%}" if side == "HOME" and not _is_missing(pin_ml)
+                       else f"{1-float(pin_ml):.0%}" if side == "AWAY" and not _is_missing(pin_ml) else "—")
             if not _is_missing(emin) and not _is_missing(emax):
                 lo = float(emin) if side == "HOME" else 1 - float(emax)
                 hi = float(emax) if side == "HOME" else 1 - float(emin)
@@ -2241,7 +2241,8 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
                             f"{win_prob:.0%}", ml_str, pin_str, shd))
     f5_rows.sort(key=lambda x: -x[0])
     for i, row in enumerate(f5_rows, 1):
-        lines.append(f"{i:<3} {row[1]:<5} {row[2]:<5} {row[3]:<22} {row[4]:<7} {row[5]:<22} {row[6]:<7} {row[7]:<6} {row[8]:<9} {row[9]:<9} {row[10]:<8} {row[11]}")
+        combo = f"{row[9]}/{row[10]}"
+        lines.append(f"{i:<3} {row[1]:<5} {row[2]:<5} {row[3]:<22} {row[4]:<7} {row[5]:<22} {row[6]:<7} {row[7]:<6} {row[8]:<9} {combo:<12} {row[11]}")
 
     # ── Runs Rankings table ────────────────────────────
     lines.append("\nTOTAL RUNS RANKINGS")
@@ -3161,8 +3162,8 @@ def write_html_card(results: list[dict], date_str: str) -> None:
                           else "—")
                 # Pinnacle ML probability
                 pin_ml = r.get("ml_lock_p_true")
-                pin_str = (f"{float(pin_ml):.3f}" if side == "HOME" and not _is_missing(pin_ml)
-                           else f"{1-float(pin_ml):.3f}" if side == "AWAY" and not _is_missing(pin_ml)
+                pin_str = (f"{float(pin_ml):.0%}" if side == "HOME" and not _is_missing(pin_ml)
+                           else f"{1-float(pin_ml):.0%}" if side == "AWAY" and not _is_missing(pin_ml)
                            else "—")
                 # Shadow RL range (home perspective; flip for away)
                 if not _is_missing(emin) and not _is_missing(emax):
@@ -3208,8 +3209,7 @@ def write_html_card(results: list[dict], date_str: str) -> None:
                 f'<td class="rt-xw {xw_cls(x["oxw"])}">{oxw_str}</td>'
                 f'<td class="rt-temp">{tmp_str}</td>'
                 f'<td class="rt-prob {wp_cls}">{x["win_prob"]:.0%}</td>'
-                f'<td class="rt-pin">{x["ml_str"]}</td>'
-                f'<td class="rt-pin">{x["pin_str"]}</td>'
+                f'<td class="rt-pin">{x["ml_str"]} / {x["pin_str"]}</td>'
                 f'<td class="rt-rng">{x["shd_str"]}</td>'
                 f'</tr>'
             )
@@ -3221,7 +3221,7 @@ def write_html_card(results: list[dict], date_str: str) -> None:
   <th>#</th><th>Team</th><th>Side</th>
   <th>Their SP</th><th>xwOBA</th>
   <th>Opp SP</th><th>xwOBA</th>
-  <th>Temp</th><th>F5 Win%</th><th>ML Win%</th><th>Pin ML</th><th>Shadow RL</th>
+  <th>Temp</th><th>F5 Win%</th><th>Model% / Pin%</th><th>Shadow RL</th>
 </tr></thead>
 <tbody>{trs}</tbody>
 </table></div>"""
