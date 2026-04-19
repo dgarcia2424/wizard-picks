@@ -2205,8 +2205,9 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
     # ── F5 Rankings table ──────────────────────────────
     lines.append("\nF5 +0.5 RANKINGS")
     lines.append("-" * 80)
-    lines.append(f"{'#':<3} {'Team':<5} {'Side':<5} {'SP':<22} {'xwOBA':<7} {'Opp SP':<22} {'xwOBA':<7} {'Temp':<6} {'F5 ML/+0.5':<14} {'Est Score':<12} {'Mdl/Pin%'}")
-    lines.append("-" * 85)
+    lines.append(f"{'#':<3} {'Team':<5} {'Side':<5} {'SP':<22} {'xwOBA':<7} {'Opp SP':<22} {'xwOBA':<7} {'Temp':<6} {'F5% / ML% / +0.5 / Pin':<26} {'Est Score'}")
+    lines.append("-" * 100)
+    _F5_K = 1.289
     f5_rows = []
     for r in results:
         home, away = r["home_team"], r["away_team"]
@@ -2225,31 +2226,34 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
             half_prob = ((1 - float(aw)) if side == "HOME" and not _is_missing(aw)
                          else (1 - float(hw)) if side == "AWAY"
                          else win_prob)
-            ml_str = (f"{float(ml_win):.0%}" if side == "HOME" and not _is_missing(ml_win)
-                      else f"{1-float(ml_win):.0%}" if side == "AWAY" and not _is_missing(ml_win) else "—")
-            pin_str = (f"{float(pin_ml):.0%}" if side == "HOME" and not _is_missing(pin_ml)
-                       else f"{1-float(pin_ml):.0%}" if side == "AWAY" and not _is_missing(pin_ml) else "—")
+            ml_prob = (float(ml_win) if side == "HOME" and not _is_missing(ml_win)
+                       else 1 - float(ml_win) if side == "AWAY" and not _is_missing(ml_win) else None)
+            pin_ml_prob = (float(pin_ml) if side == "HOME" and not _is_missing(pin_ml)
+                           else 1 - float(pin_ml) if side == "AWAY" and not _is_missing(pin_ml) else None)
+            est_pin_f5 = (0.5 + _F5_K * (pin_ml_prob - 0.5)) if pin_ml_prob is not None else None
+            ml_s    = f"{ml_prob:.0%}"      if ml_prob    is not None else "—"
+            pin_f5_s = f"{est_pin_f5:.0%}"  if est_pin_f5 is not None else "—"
             sp  = str(r.get(sp_key,"TBD")).title()
             xw  = r.get(xw_key); oxw = r.get(oxw_key)
             osp = str(r.get(osp_key,"TBD")).title()
             temp = r.get("temp_f")
             hr = r.get("mc_f5_home_runs"); ar = r.get("mc_f5_away_runs")
             if not _is_missing(hr) and not _is_missing(ar):
-                f5_score = (f"{float(hr):.1f}–{float(ar):.1f}" if side == "HOME"
-                            else f"{float(ar):.1f}–{float(hr):.1f}")
+                f5_score = (f"{float(hr):.1f}-{float(ar):.1f}" if side == "HOME"
+                            else f"{float(ar):.1f}-{float(hr):.1f}")
             else:
                 f5_score = "—"
+            combo = f"{win_prob:.0%}/{ml_s}/{half_prob:.0%}/{pin_f5_s}"
             f5_rows.append((win_prob, team, side, sp,
                             f"{float(xw):.3f}" if not _is_missing(xw) else "—",
                             osp,
                             f"{float(oxw):.3f}" if not _is_missing(oxw) else "—",
-                            f"{float(temp):.0f}°" if not _is_missing(temp) else "—",
-                            f"{win_prob:.0%}/{half_prob:.0%}", f5_score, ml_str, pin_str, f5_range))
+                            f"{float(temp):.0f}" if not _is_missing(temp) else "—",
+                            combo, f5_score, f5_range))
     f5_rows.sort(key=lambda x: -x[0])
     f5_email_rows = [r for r in f5_rows if r[0] > 0.55]
     for i, row in enumerate(f5_email_rows, 1):
-        combo = f"{row[10]}/{row[11]}"
-        lines.append(f"{i:<3} {row[1]:<5} {row[2]:<5} {row[3]:<22} {row[4]:<7} {row[5]:<22} {row[6]:<7} {row[7]:<6} {row[8]:<14} {row[9]:<12} {combo}")
+        lines.append(f"{i:<3} {row[1]:<5} {row[2]:<5} {row[3]:<22} {row[4]:<7} {row[5]:<22} {row[6]:<7} {row[7]:<6} {row[8]:<26} {row[9]}")
     if not f5_email_rows:
         lines.append("  (no teams with F5 Win% > 55% today)")
 
@@ -3173,6 +3177,8 @@ def write_html_card(results: list[dict], date_str: str,
     email_min_f5       = 0.55 if email_filter else 0.0
     email_min_run_diff = 0.5  if email_filter else 0.0
 
+    _F5_K = 1.289
+
     def _f5_rank_table(min_prob: float = 0.0) -> str:
         rows = []
         for r in results:
@@ -3187,19 +3193,18 @@ def write_html_card(results: list[dict], date_str: str,
                 (away, "AWAY", "away_sp", "away_sp_xwoba", "home_sp", "home_sp_xwoba"),
             ]:
                 win_prob = float(hw) if side == "HOME" else 1 - float(hw)
-                # +0.5 = win or tie: home +0.5 = 1 - away_win_strictly; away +0.5 = 1 - home_win_strictly
                 half_prob = ((1 - float(aw)) if side == "HOME" and not _is_missing(aw)
                              else (1 - float(hw)) if side == "AWAY"
                              else win_prob)
                 ml_win = r.get("mc_home_win")
-                ml_str = (f"{float(ml_win):.0%}" if side == "HOME" and not _is_missing(ml_win)
-                          else f"{1-float(ml_win):.0%}" if side == "AWAY" and not _is_missing(ml_win)
-                          else "—")
-                pin_ml = r.get("ml_lock_p_true")
-                pin_val = (float(pin_ml) if side == "HOME" and not _is_missing(pin_ml)
-                           else 1 - float(pin_ml) if side == "AWAY" and not _is_missing(pin_ml)
+                ml_prob = (float(ml_win) if side == "HOME" and not _is_missing(ml_win)
+                           else 1 - float(ml_win) if side == "AWAY" and not _is_missing(ml_win)
                            else None)
-                pin_str = f"{pin_val:.0%}" if pin_val is not None else "—"
+                pin_ml = r.get("ml_lock_p_true")
+                pin_ml_prob = (float(pin_ml) if side == "HOME" and not _is_missing(pin_ml)
+                               else 1 - float(pin_ml) if side == "AWAY" and not _is_missing(pin_ml)
+                               else None)
+                est_pin_f5 = (0.5 + _F5_K * (pin_ml_prob - 0.5)) if pin_ml_prob is not None else None
                 sp  = str(r.get(sp_key, "TBD")).title()
                 xw  = r.get(xw_key)
                 osp = str(r.get(osp_key, "TBD")).title()
@@ -3218,8 +3223,7 @@ def write_html_card(results: list[dict], date_str: str,
                     "oxw": float(oxw) if not _is_missing(oxw) else None,
                     "temp": float(temp) if not _is_missing(temp) else None,
                     "win_prob": win_prob, "half_prob": half_prob,
-                    "ml_str": ml_str,
-                    "pin_str": pin_str, "pin_val": pin_val,
+                    "ml_prob": ml_prob, "est_pin_f5": est_pin_f5,
                     "f5_range": f5_range, "f5_score_str": f5_score_str,
                 })
         rows.sort(key=lambda x: -x["win_prob"])
@@ -3232,14 +3236,16 @@ def write_html_card(results: list[dict], date_str: str,
 
         trs = ""
         for i, x in enumerate(rows, 1):
-            pin_v = x["pin_val"]
-            agree = pin_v is not None and abs(x["win_prob"] - pin_v) <= 0.08
+            pin_f5 = x["est_pin_f5"]
+            agree = pin_f5 is not None and abs(x["win_prob"] - pin_f5) <= 0.08
             wp_cls = ("wp-hot" if agree and x["f5_range"] <= 3.5
                       else "wp-warm" if agree and x["f5_range"] > 3.5
                       else "")
             xw_str  = f"{x['xw']:.3f}"  if x["xw"]  else "—"
             oxw_str = f"{x['oxw']:.3f}" if x["oxw"] else "—"
             tmp_str = f"{x['temp']:.0f}°" if x["temp"] else "—"
+            ml_s    = f"{x['ml_prob']:.0%}"  if x["ml_prob"]  is not None else "—"
+            pin_f5_s = f"{pin_f5:.0%}"       if pin_f5        is not None else "—"
             trs += (
                 f'<tr>'
                 f'<td class="rt-n">{i}</td>'
@@ -3250,20 +3256,19 @@ def write_html_card(results: list[dict], date_str: str,
                 f'<td class="rt-sp">{x["osp"]}</td>'
                 f'<td class="rt-xw {xw_cls(x["oxw"])}">{oxw_str}</td>'
                 f'<td class="rt-temp">{tmp_str}</td>'
-                f'<td class="rt-prob {wp_cls}">{x["win_prob"]:.0%} / {x["half_prob"]:.0%}</td>'
+                f'<td class="rt-prob {wp_cls}">{x["win_prob"]:.0%} / {ml_s} / {x["half_prob"]:.0%} / {pin_f5_s}</td>'
                 f'<td class="rt-score">{x["f5_score_str"]}</td>'
-                f'<td class="rt-pin">{x["ml_str"]} / {x["pin_str"]}</td>'
                 f'</tr>'
             )
         return f"""<div class="rank-section">
 <div class="rank-title">F5 +0.5 Rankings — All Teams</div>
-<div class="rank-note">F5 Win% = MC sim · Model% = full-game win% · Pin ML = Pinnacle ML implied · <span class="wp-hot">Green</span> = model &amp; Pinnacle agree, tight F5 range · <span class="wp-warm">Yellow</span> = agree but wide range</div>
+<div class="rank-note">F5% / ML% / +0.5% / Est.Pin F5% &nbsp;·&nbsp; Est.Pin F5 = 0.5 + 1.289*(PinML - 0.5) &nbsp;·&nbsp; <span class="wp-hot">Green</span> = model &amp; Pin agree, tight F5 range &nbsp;·&nbsp; <span class="wp-warm">Yellow</span> = agree but wide range</div>
 <table class="rank-tbl">
 <thead><tr>
   <th>#</th><th>Team</th><th>Side</th>
   <th>Their SP</th><th>xwOBA</th>
   <th>Opp SP</th><th>xwOBA</th>
-  <th>Temp</th><th>F5 ML / +0.5</th><th>Est. F5 Score</th><th>Model% / Pin%</th>
+  <th>Temp</th><th>F5% / ML% / +0.5 / Pin</th><th>Est. F5 Score</th>
 </tr></thead>
 <tbody>{trs}</tbody>
 </table></div>"""
