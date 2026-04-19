@@ -2504,7 +2504,7 @@ def send_card_email(results: list[dict], date_str: str) -> None:
         msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as s:
             s.login(gmail_from, gmail_pass)
             s.sendmail(gmail_from, recipients, msg.as_string())
         print(f"  Email sent -> {', '.join(recipients)}")

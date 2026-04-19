@@ -1,0 +1,1036 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>MLB Wizard Pipeline — Data Flow Diagram</title>
+<style>
+  /* ── Base ─────────────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: #0a0e1a;
+    color: #e0e6f0;
+    min-height: 100vh;
+  }
+
+  /* ── Header ───────────────────────────────────────────────────── */
+  header {
+    background: linear-gradient(135deg, #0d1b4e 0%, #1a2d7a 50%, #0d1b4e 100%);
+    border-bottom: 3px solid #3a6df0;
+    padding: 28px 40px 22px;
+    text-align: center;
+  }
+  header h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: 1px;
+  }
+  header h1 span { color: #5b8fff; }
+  header p {
+    font-size: 0.9rem;
+    color: #8fa8d0;
+    margin-top: 6px;
+  }
+
+  /* ── Legend ───────────────────────────────────────────────────── */
+  .legend {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    flex-wrap: wrap;
+    padding: 14px 40px;
+    background: #0d1221;
+    border-bottom: 1px solid #1e2d55;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 0.78rem;
+    color: #9ab0d0;
+  }
+  .legend-dot {
+    width: 14px; height: 14px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+
+  /* ── Layout ───────────────────────────────────────────────────── */
+  .flow-container {
+    display: grid;
+    grid-template-columns: 220px 1fr 220px;
+    gap: 0;
+    min-height: calc(100vh - 160px);
+  }
+
+  /* ── Column Labels ────────────────────────────────────────────── */
+  .col-label {
+    background: #0d1221;
+    border-right: 1px solid #1e2d55;
+    padding: 16px 10px;
+    text-align: center;
+  }
+  .col-label:last-child { border-right: none; border-left: 1px solid #1e2d55; }
+  .col-label h2 {
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: #5b8fff;
+  }
+
+  /* ── Main canvas ──────────────────────────────────────────────── */
+  .pipeline-canvas {
+    padding: 30px 24px;
+    position: relative;
+  }
+
+  /* ── Phase rows ───────────────────────────────────────────────── */
+  .phase {
+    margin-bottom: 32px;
+    position: relative;
+  }
+  .phase-label {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 2.5px;
+    text-transform: uppercase;
+    color: #4a6aaa;
+    margin-bottom: 10px;
+    padding-left: 4px;
+    border-left: 3px solid #3a6df0;
+    padding-left: 8px;
+  }
+  .phase-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  /* ── Node cards ───────────────────────────────────────────────── */
+  .node {
+    border-radius: 8px;
+    padding: 10px 13px;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s;
+    position: relative;
+    min-width: 130px;
+    max-width: 180px;
+  }
+  .node:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(91,143,255,0.35);
+  }
+  .node.active {
+    outline: 2px solid #ffcc44;
+    box-shadow: 0 0 16px rgba(255,204,68,0.5);
+  }
+  .node-title {
+    font-weight: 700;
+    font-size: 0.8rem;
+    margin-bottom: 3px;
+  }
+  .node-sub {
+    font-size: 0.7rem;
+    opacity: 0.78;
+  }
+
+  /* Node color themes */
+  .node-api    { background: #0e2a4a; border: 1px solid #1d6fa8; color: #7ecfff; }
+  .node-db     { background: #0e1f40; border: 1px solid #2d5096; color: #88aaff; }
+  .node-file   { background: #0f2020; border: 1px solid #1a5a3a; color: #6deaa0; }
+  .node-script { background: #1a1030; border: 1px solid #4a2db0; color: #b89eff; }
+  .node-model  { background: #1e0e2c; border: 1px solid #7a2dd0; color: #d090ff; }
+  .node-gate   { background: #2a1500; border: 1px solid #b05020; color: #ffaa55; }
+  .node-output { background: #0e2a16; border: 1px solid #1f8040; color: #55eeaa; }
+  .node-email  { background: #200a20; border: 1px solid #801880; color: #ee88ee; }
+  .node-supa   { background: #0a1a2a; border: 1px solid #1060a0; color: #60c0ff; }
+
+  /* ── Arrow connector ──────────────────────────────────────────── */
+  .arrow-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 0;
+    gap: 6px;
+    font-size: 0.7rem;
+    color: #4a6aaa;
+  }
+  .arrow-down {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    color: #3a6df0;
+    font-size: 1.2rem;
+  }
+  .arrow-label {
+    font-size: 0.65rem;
+    color: #4a7090;
+    font-style: italic;
+  }
+
+  /* ── Full-width step bars ─────────────────────────────────────── */
+  .step-bar {
+    background: linear-gradient(90deg, #0d1b4e 0%, #152560 100%);
+    border: 1px solid #2a4080;
+    border-left: 4px solid #3a6df0;
+    border-radius: 6px;
+    padding: 12px 18px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .step-bar:hover { background: linear-gradient(90deg, #12245e 0%, #1c3070 100%); }
+  .step-bar.active { border-left-color: #ffcc44; background: linear-gradient(90deg, #1a1a00 0%, #2a2400 100%); }
+  .step-num {
+    background: #3a6df0;
+    color: #fff;
+    border-radius: 50%;
+    width: 26px; height: 26px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+  .step-bar.active .step-num { background: #ffcc44; color: #000; }
+  .step-content { flex: 1; }
+  .step-title { font-size: 0.82rem; font-weight: 700; color: #d0e0ff; }
+  .step-meta { font-size: 0.7rem; color: #7090b0; margin-top: 2px; }
+  .step-tags {
+    display: flex;
+    gap: 5px;
+    flex-wrap: wrap;
+    margin-top: 5px;
+  }
+  .tag {
+    font-size: 0.62rem;
+    padding: 2px 7px;
+    border-radius: 20px;
+    font-weight: 600;
+  }
+  .tag-gpu   { background: #4a2db0; color: #d0b8ff; }
+  .tag-cpu   { background: #1a4a2a; color: #88ddaa; }
+  .tag-api   { background: #0e3a5a; color: #88ccff; }
+  .tag-db    { background: #0e2060; color: #88aaff; }
+  .tag-file  { background: #1a3a20; color: #66dd88; }
+  .tag-lock  { background: #5a2a00; color: #ffaa44; }
+  .tag-kelly { background: #2a1a40; color: #cc88ff; }
+
+  /* ── Detail panel ─────────────────────────────────────────────── */
+  .detail-panel {
+    background: #0d1628;
+    border: 1px solid #1e3060;
+    border-radius: 10px;
+    padding: 20px;
+    margin-top: 20px;
+    display: none;
+  }
+  .detail-panel.visible { display: block; }
+  .detail-panel h3 { color: #7eb4ff; font-size: 0.95rem; margin-bottom: 12px; }
+  .detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 10px;
+  }
+  .detail-item {
+    background: #0a1020;
+    border: 1px solid #1a2840;
+    border-radius: 6px;
+    padding: 10px;
+  }
+  .detail-item .di-label {
+    font-size: 0.65rem;
+    color: #5080a0;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+  }
+  .detail-item .di-val {
+    font-size: 0.78rem;
+    color: #c0d8f0;
+    font-family: 'Courier New', monospace;
+  }
+
+  /* ── Side column nodes ────────────────────────────────────────── */
+  .side-col {
+    padding: 20px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background: #0a0f1e;
+  }
+  .side-col h3 {
+    font-size: 0.68rem;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: #3a6090;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #1e2d55;
+    margin-bottom: 4px;
+  }
+  .side-node {
+    border-radius: 6px;
+    padding: 9px 11px;
+    font-size: 0.72rem;
+    line-height: 1.4;
+    border: 1px solid #1e3060;
+    background: #0d1628;
+    color: #9ab8d8;
+    transition: transform 0.15s;
+  }
+  .side-node:hover { transform: translateX(3px); }
+  .side-node strong { display: block; color: #c0d8f0; font-size: 0.75rem; margin-bottom: 2px; }
+  .side-node.inp { border-left: 3px solid #1d6fa8; }
+  .side-node.out { border-left: 3px solid #1f8040; }
+  .side-node.out.email { border-left-color: #801880; }
+  .side-node.out.supa  { border-left-color: #1060a0; }
+
+  /* ── Connector line ───────────────────────────────────────────── */
+  .connector {
+    width: 2px;
+    background: linear-gradient(180deg, #3a6df0 0%, #1a3a8a 100%);
+    margin: 2px auto;
+    min-height: 20px;
+  }
+
+  /* ── Stats bar ────────────────────────────────────────────────── */
+  .stats-bar {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    flex-wrap: wrap;
+    padding: 14px 40px;
+    background: #0a0e1a;
+    border-top: 1px solid #1e2d55;
+    border-bottom: 1px solid #1e2d55;
+  }
+  .stat-item { text-align: center; }
+  .stat-val { font-size: 1.3rem; font-weight: 700; color: #5b8fff; }
+  .stat-lbl { font-size: 0.65rem; color: #5a7090; text-transform: uppercase; letter-spacing: 1px; }
+
+  /* ── Tooltip ──────────────────────────────────────────────────── */
+  .tooltip {
+    position: fixed;
+    background: #0d1b3e;
+    border: 1px solid #3a6df0;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 0.75rem;
+    color: #c0d8f0;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+    z-index: 1000;
+    max-width: 280px;
+    line-height: 1.5;
+  }
+  .tooltip.show { opacity: 1; }
+
+  /* ── SVG arrow overlay ────────────────────────────────────────── */
+  svg.arrows {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    overflow: visible;
+  }
+
+  /* ── Footer ───────────────────────────────────────────────────── */
+  footer {
+    text-align: center;
+    padding: 14px;
+    font-size: 0.72rem;
+    color: #3a5070;
+    background: #0a0e1a;
+    border-top: 1px solid #1a2540;
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Header ───────────────────────────────────────────────────── -->
+<header>
+  <h1>⚾ <span>Wizard Report</span> — MLB Prediction Pipeline</h1>
+  <p>Data Flow Diagram &nbsp;·&nbsp; Inputs → Pipeline Internals → Outputs &nbsp;·&nbsp; Daily 11:00 AM ET</p>
+</header>
+
+<!-- ── Stats bar ────────────────────────────────────────────────── -->
+<div class="stats-bar">
+  <div class="stat-item"><div class="stat-val">8</div><div class="stat-lbl">Pipeline Steps</div></div>
+  <div class="stat-item"><div class="stat-val">17+</div><div class="stat-lbl">Python Scripts</div></div>
+  <div class="stat-item"><div class="stat-val">97</div><div class="stat-lbl">Feature Matrix</div></div>
+  <div class="stat-item"><div class="stat-val">50K</div><div class="stat-lbl">Monte Carlo Trials</div></div>
+  <div class="stat-item"><div class="stat-val">0.5963</div><div class="stat-lbl">NCV Mean AUC</div></div>
+  <div class="stat-item"><div class="stat-val">RTX 5080</div><div class="stat-lbl">GPU Training</div></div>
+  <div class="stat-item"><div class="stat-val">5</div><div class="stat-lbl">Supabase Tables</div></div>
+</div>
+
+<!-- ── Legend ───────────────────────────────────────────────────── -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#1d6fa8"></div>External API / Data Source</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#4a2db0"></div>Processing Script</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#7a2dd0"></div>ML Model</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#b05020"></div>Decision Gate</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#1f8040"></div>Output / Deliverable</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#1060a0"></div>Database (Supabase)</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#801880"></div>Email Dispatch</div>
+</div>
+
+<!-- ── Three-column flow layout ─────────────────────────────────── -->
+<div class="flow-container">
+
+  <!-- LEFT: Inputs -->
+  <div class="side-col" style="border-right:1px solid #1e2d55;">
+    <h3>📥 Inputs</h3>
+
+    <div class="side-node inp">
+      <strong>MLB Stats API</strong>
+      statsapi.mlb.com<br/>
+      Schedules, lineups, scores
+    </div>
+    <div class="side-node inp">
+      <strong>Statcast (pybaseball)</strong>
+      Pitch-level data<br/>
+      xwOBA, EV, barrel%
+    </div>
+    <div class="side-node inp">
+      <strong>The Odds API</strong>
+      api.the-odds-api.com<br/>
+      Pinnacle moneylines
+    </div>
+    <div class="side-node inp">
+      <strong>Weather API</strong>
+      Open-Meteo / wttr.in<br/>
+      Wind, temp, conditions
+    </div>
+    <div class="side-node inp">
+      <strong>Baseball Reference</strong>
+      Seasonal park factors<br/>
+      Umpire data
+    </div>
+    <div class="side-node inp">
+      <strong>Parquet Cache</strong>
+      pitcher_stats.parquet<br/>
+      batter_stats.parquet<br/>
+      team_stats.parquet
+    </div>
+    <div class="side-node inp">
+      <strong>Supabase DB</strong>
+      Historical picks<br/>
+      Pipeline health logs
+    </div>
+    <div class="side-node inp" style="border-left-color:#2a8a2a;">
+      <strong>Trained Models</strong>
+      xgb_rl_model.json<br/>
+      xgb_ml_model.json<br/>
+      stacking_model.pkl
+    </div>
+  </div>
+
+  <!-- CENTER: Pipeline -->
+  <div class="pipeline-canvas" id="pipelineCanvas">
+
+    <!-- Phase 1 -->
+    <div class="phase">
+      <div class="phase-label">Phase 1 — Data Ingestion &amp; Feature Engineering</div>
+      <div class="step-bar" onclick="toggleStep(this,'s1')" id="bar-s1">
+        <div class="step-num">1</div>
+        <div class="step-content">
+          <div class="step-title">fetch_and_prepare_data.py</div>
+          <div class="step-meta">Pull today's schedule · hydrate pitcher EWMA windows · build game feature matrix</div>
+          <div class="step-tags">
+            <span class="tag tag-api">MLB API</span>
+            <span class="tag tag-api">Statcast</span>
+            <span class="tag tag-api">Odds API</span>
+            <span class="tag tag-file">Parquet Cache</span>
+            <span class="tag tag-cpu">CPU</span>
+          </div>
+        </div>
+      </div>
+      <div class="detail-panel" id="s1">
+        <h3>Step 1 — Data Ingestion Detail</h3>
+        <div class="detail-grid">
+          <div class="detail-item"><div class="di-label">Primary Script</div><div class="di-val">fetch_and_prepare_data.py</div></div>
+          <div class="detail-item"><div class="di-label">Output File</div><div class="di-val">today_games.parquet</div></div>
+          <div class="detail-item"><div class="di-label">Raw API Calls</div><div class="di-val">MLB schedule + Odds API + Weather</div></div>
+          <div class="detail-item"><div class="di-label">Pitcher EWMA Spans</div><div class="di-val">5g, 10g, 20g, 40g, 80g, season</div></div>
+          <div class="detail-item"><div class="di-label">xwOBA→R/G</div><div class="di-val">−3.0 + 24.0 × xwOBA (clipped 0–20)</div></div>
+          <div class="detail-item"><div class="di-label">Feature Groups Built</div><div class="di-val">Calendar(2), SP EWMA(38), Batting(16), Park+Ump(5), Market(7)</div></div>
+          <div class="detail-item"><div class="di-label">Cache Strategy</div><div class="di-val">Read parquet if file age &lt; 6h, else re-fetch from API</div></div>
+          <div class="detail-item"><div class="di-label">NaN Handling</div><div class="di-val">Fill with training-set medians (stored in medians.json)</div></div>
+        </div>
+      </div>
+
+      <div class="step-bar" onclick="toggleStep(this,'s2')" id="bar-s2">
+        <div class="step-num">2</div>
+        <div class="step-content">
+          <div class="step-title">build_features.py + matchup_engine.py</div>
+          <div class="step-meta">SP differential features · bullpen depth · matchup handedness · park/umpire context</div>
+          <div class="step-tags">
+            <span class="tag tag-file">today_games.parquet</span>
+            <span class="tag tag-cpu">CPU / pandas</span>
+          </div>
+        </div>
+      </div>
+      <div class="detail-panel" id="s2">
+        <h3>Step 2 — Feature Engineering Detail</h3>
+        <div class="detail-grid">
+          <div class="detail-item"><div class="di-label">Total Features</div><div class="di-val">97 features across 9 groups</div></div>
+          <div class="detail-item"><div class="di-label">SP Diffs (9)</div><div class="di-val">home_era_diff, away_era_diff, k9_diff, bb9_diff, xfip_diff, whip_diff, hr9_diff, lhb_ba_diff, rhb_ba_diff</div></div>
+          <div class="detail-item"><div class="di-label">Matchup (6)</div><div class="di-val">lhb_pct, rhb_pct, platoon_adv_home, platoon_adv_away, lineup_depth_home, lineup_depth_away</div></div>
+          <div class="detail-item"><div class="di-label">Bullpen (13)</div><div class="di-val">bp_era_home/away, bp_k9, bp_whip, bp_saves_opp, closer_avail_home/away, bp_innings_last3, etc.</div></div>
+          <div class="detail-item"><div class="di-label">Park+Ump (5)</div><div class="di-val">park_factor, ump_era_impact, ump_k_rate, altitude_ft, roof_type_enc</div></div>
+          <div class="detail-item"><div class="di-label">Market+Circ (7)</div><div class="di-val">pinnacle_prob_home, line_move_home, sharp_money_flag, circadian_lag_home, circadian_lag_away, days_rest_home, days_rest_away</div></div>
+          <div class="detail-item"><div class="di-label">MC Residual (1)</div><div class="di-val">mc_residual (Monte Carlo δ from Step 3)</div></div>
+          <div class="detail-item"><div class="di-label">Framework</div><div class="di-val">Standard pandas — no cuDF, no GPU acceleration</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Phase 2 -->
+    <div class="phase">
+      <div class="phase-label">Phase 2 — Monte Carlo Simulation</div>
+      <div class="step-bar" onclick="toggleStep(this,'s3')" id="bar-s3">
+        <div class="step-num">3</div>
+        <div class="step-content">
+          <div class="step-title">monte_carlo.py</div>
+          <div class="step-meta">50,000 trials per game · Poisson R/G draws · win probability aggregation</div>
+          <div class="step-tags">
+            <span class="tag tag-cpu">CPU / NumPy</span>
+            <span class="tag tag-file">xwOBA inputs</span>
+          </div>
+        </div>
+      </div>
+      <div class="detail-panel" id="s3">
+        <h3>Step 3 — Monte Carlo Detail</h3>
+        <div class="detail-grid">
+          <div class="detail-item"><div class="di-label">Trials per Game</div><div class="di-val">50,000 independent Poisson draws</div></div>
+          <div class="detail-item"><div class="di-label">R/G Formula</div><div class="di-val">λ = max(0, −3.0 + 24.0 × xwOBA)</div></div>
+          <div class="detail-item"><div class="di-label">Scoring Model</div><div class="di-val">Inning-by-inning Poisson; ties → extra innings loop</div></div>
+          <div class="detail-item"><div class="di-label">Outputs</div><div class="di-val">mc_prob_home, mc_prob_away, mc_residual</div></div>
+          <div class="detail-item"><div class="di-label">mc_residual Role</div><div class="di-val">97th feature fed into stacking model</div></div>
+          <div class="detail-item"><div class="di-label">Runtime</div><div class="di-val">~8–12 seconds per slate (CPU, numpy vectorised)</div></div>
+          <div class="detail-item"><div class="di-label">Variance handling</div><div class="di-val">Bullpen depth, park HR factor, wind speed adjustments applied per trial</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Phase 3 -->
+    <div class="phase">
+      <div class="phase-label">Phase 3 — Model Inference (XGBoost + Stacking)</div>
+      <div class="step-bar" onclick="toggleStep(this,'s4')" id="bar-s4">
+        <div class="step-num">4</div>
+        <div class="step-content">
+          <div class="step-title">predict.py — XGBoost Inference</div>
+          <div class="step-meta">Load xgb_rl + xgb_ml models · raw probability output · Platt calibration</div>
+          <div class="step-tags">
+            <span class="tag tag-cpu">CPU inference</span>
+            <span class="tag tag-file">xgb_rl_model.json</span>
+            <span class="tag tag-file">xgb_ml_model.json</span>
+          </div>
+        </div>
+      </div>
+      <div class="detail-panel" id="s4">
+        <h3>Step 4 — XGBoost Inference Detail</h3>
+        <div class="detail-grid">
+          <div class="detail-item"><div class="di-label">Models Loaded</div><div class="di-val">xgb_rl_model.json (Run Line), xgb_ml_model.json (Money Line)</div></div>
+          <div class="detail-item"><div class="di-label">Training Device</div><div class="di-val">CUDA / RTX 5080 (train_xgboost.py only)</div></div>
+          <div class="detail-item"><div class="di-label">Inference Device</div><div class="di-val">CPU — no GPU needed at prediction time</div></div>
+          <div class="detail-item"><div class="di-label">XGB Params</div><div class="di-val">tree_method=hist, device=cuda, lr=0.04, depth=5, n_est=600, subsample=0.80</div></div>
+          <div class="detail-item"><div class="di-label">Platt Calibration</div><div class="di-val">LogisticRegression(C=1e10, solver=lbfgs) fitted on pooled OOF probabilities</div></div>
+          <div class="detail-item"><div class="di-label">Outputs (per game)</div><div class="di-val">rl_raw, rl_cal, ml_raw, ml_cal</div></div>
+          <div class="detail-item"><div class="di-label">Val 2025 AUC (RL)</div><div class="di-val">0.5753 (stacked) — from eval_predictions.csv</div></div>
+          <div class="detail-item"><div class="di-label">Val 2025 AUC (ML)</div><div class="di-val">0.5631 (stacked)</div></div>
+        </div>
+      </div>
+
+      <div class="step-bar" onclick="toggleStep(this,'s5')" id="bar-s5">
+        <div class="step-num">5</div>
+        <div class="step-content">
+          <div class="step-title">stacking_model.py — Level-2 Ensemble</div>
+          <div class="step-meta">LogisticRegression(C=10) · 12 inputs · blends XGB + MC + domain signals</div>
+          <div class="step-tags">
+            <span class="tag tag-cpu">CPU / sklearn</span>
+            <span class="tag tag-file">stacking_model.pkl</span>
+          </div>
+        </div>
+      </div>
+      <div class="detail-panel" id="s5">
+        <h3>Step 5 — Stacking Ensemble Detail</h3>
+        <div class="detail-grid">
+          <div class="detail-item"><div class="di-label">Stacker Class</div><div class="di-val">StackingModel (stacking_model.py)</div></div>
+          <div class="detail-item"><div class="di-label">Level-2 Learner</div><div class="di-val">LogisticRegression(C=10, solver=lbfgs)</div></div>
+          <div class="detail-item"><div class="di-label">12 Inputs</div><div class="di-val">xgb_raw, mc_prob, pinnacle_prob, line_move, sharp_flag, circadian_lag ×2, days_rest ×2, park_factor, ump_era, bp_era_diff</div></div>
+          <div class="detail-item"><div class="di-label">Key Methods</div><div class="di-val">_build_X(), predict_proba(), predict()</div></div>
+          <div class="detail-item"><div class="di-label">NaN fill</div><div class="di-val">Column medians from training data stored in pkl</div></div>
+          <div class="detail-item"><div class="di-label">NCV Results</div><div class="di-val">Fold1: AUC=0.6056 · Fold2: AUC=0.5869 · Mean=0.5963</div></div>
+          <div class="detail-item"><div class="di-label">NCV Protocol</div><div class="di-val">Fold1: Train 2023/Val 2024 · Fold2: Train 2023+2024/Val 2025</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Phase 4 -->
+    <div class="phase">
+      <div class="phase-label">Phase 4 — Three-Part Lock Gate</div>
+      <div class="step-bar" onclick="toggleStep(this,'s6')" id="bar-s6">
+        <div class="step-num">6</div>
+        <div class="step-content">
+          <div class="step-title">lock_gate.py — Three-Part Lock</div>
+          <div class="step-meta">Sanity · Odds Floor · Edge Threshold → Pass / Reject</div>
+          <div class="step-tags">
+            <span class="tag tag-lock">Gate</span>
+            <span class="tag tag-cpu">CPU</span>
+          </div>
+        </div>
+      </div>
+      <div class="detail-panel" id="s6">
+        <h3>Step 6 — Three-Part Lock Gate Detail</h3>
+        <div class="detail-grid">
+          <div class="detail-item"><div class="di-label">Lock 1 — Sanity</div><div class="di-val">|P_model − P_pinnacle| ≤ 0.04<br/>Rejects: model too far from market</div></div>
+          <div class="detail-item"><div class="di-label">Lock 2 — Odds Floor</div><div class="di-val">American odds ≥ −225<br/>Rejects: juice too high to overcome</div></div>
+          <div class="detail-item"><div class="di-label">Lock 3 — Edge (Tier 1)</div><div class="di-val">EDGE_TIER1 = 0.030 (3.0%)<br/>Full quarter-Kelly qualifying edge</div></div>
+          <div class="detail-item"><div class="di-label">Lock 3 — Edge (Tier 2)</div><div class="di-val">EDGE_TIER2 = 0.010 (1.0%)<br/>Half-stake eighth-Kelly opportunity</div></div>
+          <div class="detail-item"><div class="di-label">Pass →</div><div class="di-val">Game advances to Kelly staking module</div></div>
+          <div class="detail-item"><div class="di-label">Reject →</div><div class="di-val">Game logged to Supabase with rejection reason; not staked</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Phase 5 -->
+    <div class="phase">
+      <div class="phase-label">Phase 5 — Kelly Staking &amp; Report Assembly</div>
+      <div class="step-bar" onclick="toggleStep(this,'s7')" id="bar-s7">
+        <div class="step-num">7</div>
+        <div class="step-content">
+          <div class="step-title">kelly_staking.py + report_builder.py</div>
+          <div class="step-meta">Quarter/eighth-Kelly sizing · bankroll constraints · Wizard Report card assembly</div>
+          <div class="step-tags">
+            <span class="tag tag-kelly">Kelly</span>
+            <span class="tag tag-cpu">CPU</span>
+          </div>
+        </div>
+      </div>
+      <div class="detail-panel" id="s7">
+        <h3>Step 7 — Kelly Staking Detail</h3>
+        <div class="detail-grid">
+          <div class="detail-item"><div class="di-label">SYNTHETIC_BANKROLL</div><div class="di-val">$2,000</div></div>
+          <div class="detail-item"><div class="di-label">MAX_BET</div><div class="di-val">$50</div></div>
+          <div class="detail-item"><div class="di-label">Tier 1 Stake</div><div class="di-val">¼ × Kelly fraction × bankroll (capped at $50)</div></div>
+          <div class="detail-item"><div class="di-label">Tier 2 Stake</div><div class="di-val">⅛ × Kelly fraction × bankroll (capped at $50)</div></div>
+          <div class="detail-item"><div class="di-label">Kelly Formula</div><div class="di-val">f = (b·p − q) / b where b=decimal odds−1</div></div>
+          <div class="detail-item"><div class="di-label">Report Assembly</div><div class="di-val">report_builder.py → structured picks dict with star ratings</div></div>
+          <div class="detail-item"><div class="di-label">★★ threshold</div><div class="di-val">Away +1.5 RL: AWAY +1.5 qualifying picks get ★★ label</div></div>
+          <div class="detail-item"><div class="di-label">Historical ROI ★★</div><div class="di-val">+27.5% (2023) · +22.9% (2024) · +26.7% (2025) · +31.8% (2026 YTD)</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Phase 6 -->
+    <div class="phase">
+      <div class="phase-label">Phase 6 — Output Dispatch</div>
+      <div class="step-bar" onclick="toggleStep(this,'s8')" id="bar-s8">
+        <div class="step-num">8</div>
+        <div class="step-content">
+          <div class="step-title">send_report.py + supabase_writer.py</div>
+          <div class="step-meta">HTML email digest · Supabase DB write · pipeline health log · CLV audit</div>
+          <div class="step-tags">
+            <span class="tag tag-api">SMTP</span>
+            <span class="tag tag-db">Supabase</span>
+            <span class="tag tag-file">CSV logs</span>
+          </div>
+        </div>
+      </div>
+      <div class="detail-panel" id="s8">
+        <h3>Step 8 — Output Dispatch Detail</h3>
+        <div class="detail-grid">
+          <div class="detail-item"><div class="di-label">Email Dispatch</div><div class="di-val">SMTP via Gmail relay · HTML Wizard Report template · garcia.dan24@gmail.com</div></div>
+          <div class="detail-item"><div class="di-label">Supabase Table 1</div><div class="di-val">wizard_daily_card — today's picks with probabilities and stakes</div></div>
+          <div class="detail-item"><div class="di-label">Supabase Table 2</div><div class="di-val">wizard_backtest — per-bet P&amp;L log</div></div>
+          <div class="detail-item"><div class="di-label">Supabase Table 3</div><div class="di-val">wizard_model_history — daily AUC / Brier snapshots</div></div>
+          <div class="detail-item"><div class="di-label">Supabase Table 4</div><div class="di-val">wizard_backtest_historical — multi-year ROI archive</div></div>
+          <div class="detail-item"><div class="di-label">Supabase Table 5</div><div class="di-val">wizard_pipeline_health — step-level timing, errors, row counts</div></div>
+          <div class="detail-item"><div class="di-label">CLV Audit</div><div class="di-val">clv_audit.csv — closing line value tracking per live bet</div></div>
+          <div class="detail-item"><div class="di-label">Scheduler</div><div class="di-val">run_daily_scheduler.py · APScheduler cron · 11:00 AM ET daily</div></div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /pipeline-canvas -->
+
+  <!-- RIGHT: Outputs -->
+  <div class="side-col" style="border-left:1px solid #1e2d55;">
+    <h3>📤 Outputs</h3>
+
+    <div class="side-node out email">
+      <strong>📧 Wizard Report Email</strong>
+      HTML digest · daily picks<br/>
+      Stakes · edge · star rating
+    </div>
+    <div class="side-node out supa">
+      <strong>🗄 wizard_daily_card</strong>
+      Today's qualifying picks<br/>
+      Supabase table
+    </div>
+    <div class="side-node out supa">
+      <strong>🗄 wizard_backtest</strong>
+      P&amp;L log per resolved bet<br/>
+      Supabase table
+    </div>
+    <div class="side-node out supa">
+      <strong>🗄 wizard_model_history</strong>
+      AUC / Brier daily snapshots<br/>
+      Supabase table
+    </div>
+    <div class="side-node out supa">
+      <strong>🗄 pipeline_health</strong>
+      Step timing &amp; error log<br/>
+      Supabase table
+    </div>
+    <div class="side-node out" style="border-left-color:#b09020;">
+      <strong>📊 today_games.parquet</strong>
+      Feature matrix for today<br/>
+      Persisted for re-runs
+    </div>
+    <div class="side-node out" style="border-left-color:#206030;">
+      <strong>📄 clv_audit.csv</strong>
+      Closing line value<br/>
+      per live bet
+    </div>
+    <div class="side-node out" style="border-left-color:#306090;">
+      <strong>📄 eval_predictions.csv</strong>
+      Validation probabilities<br/>
+      for model monitoring
+    </div>
+  </div>
+
+</div><!-- /flow-container -->
+
+<!-- ── Full data flow timeline ───────────────────────────────────── -->
+<div style="background:#0a0e1a; padding: 30px 40px;">
+  <h2 style="color:#5b8fff; font-size:1rem; letter-spacing:2px; text-transform:uppercase; margin-bottom:20px; border-bottom:1px solid #1e2d55; padding-bottom:10px;">
+    🔄 End-to-End Data Flow Timeline
+  </h2>
+
+  <div style="display:flex; flex-direction:column; gap:0; position:relative; padding-left:50px;">
+
+    <!-- Vertical line -->
+    <div style="position:absolute; left:20px; top:10px; bottom:10px; width:2px; background:linear-gradient(180deg,#1d6fa8,#4a2db0,#7a2dd0,#b05020,#1f8040); border-radius:1px;"></div>
+
+    <!-- Timeline items -->
+    <div class="tl-item" style="display:flex; gap:16px; align-items:flex-start; margin-bottom:22px; position:relative;">
+      <div style="position:absolute; left:-38px; top:4px; width:14px; height:14px; border-radius:50%; background:#1d6fa8; border:2px solid #0a0e1a;"></div>
+      <div style="flex:1; background:#0d1628; border:1px solid #1e3060; border-radius:8px; padding:14px 18px;">
+        <div style="font-size:0.7rem; color:#4a7090; margin-bottom:4px;">T = 0:00</div>
+        <div style="font-weight:700; color:#7ecfff; font-size:0.85rem;">APScheduler fires — 11:00 AM ET</div>
+        <div style="font-size:0.75rem; color:#7090b0; margin-top:4px;">run_daily_scheduler.py invokes pipeline chain · sets RUN_DATE = today</div>
+      </div>
+    </div>
+
+    <div class="tl-item" style="display:flex; gap:16px; align-items:flex-start; margin-bottom:22px; position:relative;">
+      <div style="position:absolute; left:-38px; top:4px; width:14px; height:14px; border-radius:50%; background:#1d8fa8; border:2px solid #0a0e1a;"></div>
+      <div style="flex:1; background:#0d1628; border:1px solid #1e3060; border-radius:8px; padding:14px 18px;">
+        <div style="font-size:0.7rem; color:#4a7090; margin-bottom:4px;">T + 0:30</div>
+        <div style="font-weight:700; color:#7ecfff; font-size:0.85rem;">Step 1 — Fetch today's schedule &amp; odds</div>
+        <div style="font-size:0.75rem; color:#7090b0; margin-top:4px;">MLB Stats API → game IDs · The Odds API → Pinnacle lines · Weather API · cache to parquet</div>
+      </div>
+    </div>
+
+    <div class="tl-item" style="display:flex; gap:16px; align-items:flex-start; margin-bottom:22px; position:relative;">
+      <div style="position:absolute; left:-38px; top:4px; width:14px; height:14px; border-radius:50%; background:#2040a0; border:2px solid #0a0e1a;"></div>
+      <div style="flex:1; background:#0d1628; border:1px solid #1e3060; border-radius:8px; padding:14px 18px;">
+        <div style="font-size:0.7rem; color:#4a7090; margin-bottom:4px;">T + 1:30</div>
+        <div style="font-weight:700; color:#88aaff; font-size:0.85rem;">Step 2 — Build 97-feature matrix</div>
+        <div style="font-size:0.75rem; color:#7090b0; margin-top:4px;">Pitcher EWMAs (6 spans) · SP diffs · Batting · Bullpen · Park/Ump · Matchup · Market signals</div>
+      </div>
+    </div>
+
+    <div class="tl-item" style="display:flex; gap:16px; align-items:flex-start; margin-bottom:22px; position:relative;">
+      <div style="position:absolute; left:-38px; top:4px; width:14px; height:14px; border-radius:50%; background:#3a3090; border:2px solid #0a0e1a;"></div>
+      <div style="flex:1; background:#0d1628; border:1px solid #1e3060; border-radius:8px; padding:14px 18px;">
+        <div style="font-size:0.7rem; color:#4a7090; margin-bottom:4px;">T + 2:00</div>
+        <div style="font-weight:700; color:#b89eff; font-size:0.85rem;">Step 3 — Monte Carlo (50,000 trials)</div>
+        <div style="font-size:0.75rem; color:#7090b0; margin-top:4px;">Poisson R/G simulation · outputs mc_prob_home/away + mc_residual feature</div>
+      </div>
+    </div>
+
+    <div class="tl-item" style="display:flex; gap:16px; align-items:flex-start; margin-bottom:22px; position:relative;">
+      <div style="position:absolute; left:-38px; top:4px; width:14px; height:14px; border-radius:50%; background:#6020b0; border:2px solid #0a0e1a;"></div>
+      <div style="flex:1; background:#0d1628; border:1px solid #1e3060; border-radius:8px; padding:14px 18px;">
+        <div style="font-size:0.7rem; color:#4a7090; margin-bottom:4px;">T + 2:30</div>
+        <div style="font-weight:700; color:#d090ff; font-size:0.85rem;">Step 4 — XGBoost inference → rl_raw, ml_raw</div>
+        <div style="font-size:0.75rem; color:#7090b0; margin-top:4px;">Load JSON models (CPU) · predict_proba → raw probs · Platt calibration → rl_cal, ml_cal</div>
+      </div>
+    </div>
+
+    <div class="tl-item" style="display:flex; gap:16px; align-items:flex-start; margin-bottom:22px; position:relative;">
+      <div style="position:absolute; left:-38px; top:4px; width:14px; height:14px; border-radius:50%; background:#8030c0; border:2px solid #0a0e1a;"></div>
+      <div style="flex:1; background:#0d1628; border:1px solid #1e3060; border-radius:8px; padding:14px 18px;">
+        <div style="font-size:0.7rem; color:#4a7090; margin-bottom:4px;">T + 2:45</div>
+        <div style="font-weight:700; color:#d090ff; font-size:0.85rem;">Step 5 — Stacking ensemble (12 inputs)</div>
+        <div style="font-size:0.75rem; color:#7090b0; margin-top:4px;">Level-2 LogisticRegression(C=10) · blends XGB + MC + market · outputs p_stacked per game</div>
+      </div>
+    </div>
+
+    <div class="tl-item" style="display:flex; gap:16px; align-items:flex-start; margin-bottom:22px; position:relative;">
+      <div style="position:absolute; left:-38px; top:4px; width:14px; height:14px; border-radius:50%; background:#b05020; border:2px solid #0a0e1a;"></div>
+      <div style="flex:1; background:#1a0e00; border:1px solid #3a2010; border-radius:8px; padding:14px 18px;">
+        <div style="font-size:0.7rem; color:#7a5030; margin-bottom:4px;">T + 3:00</div>
+        <div style="font-weight:700; color:#ffaa55; font-size:0.85rem;">Step 6 — Three-Part Lock Gate ⛩</div>
+        <div style="font-size:0.75rem; color:#8a7050; margin-top:4px;">
+          <span style="color:#ff8844;">✗</span> Sanity: |p_model − p_pinnacle| &gt; 0.04 → REJECT<br/>
+          <span style="color:#ff8844;">✗</span> Odds Floor: line &lt; −225 → REJECT<br/>
+          <span style="color:#ffcc44;">✓</span> Tier 1 Edge ≥ 3.0% → PASS (quarter-Kelly)<br/>
+          <span style="color:#ddaa44;">✓</span> Tier 2 Edge ≥ 1.0% → PASS (eighth-Kelly)
+        </div>
+      </div>
+    </div>
+
+    <div class="tl-item" style="display:flex; gap:16px; align-items:flex-start; margin-bottom:22px; position:relative;">
+      <div style="position:absolute; left:-38px; top:4px; width:14px; height:14px; border-radius:50%; background:#188040; border:2px solid #0a0e1a;"></div>
+      <div style="flex:1; background:#0d1628; border:1px solid #1e3060; border-radius:8px; padding:14px 18px;">
+        <div style="font-size:0.7rem; color:#4a7090; margin-bottom:4px;">T + 3:15</div>
+        <div style="font-weight:700; color:#55eeaa; font-size:0.85rem;">Step 7 — Kelly staking + Report assembly</div>
+        <div style="font-size:0.75rem; color:#7090b0; margin-top:4px;">Compute f* = (b·p − q)/b · apply ¼ or ⅛ Kelly · cap at $50 · build Wizard Report card</div>
+      </div>
+    </div>
+
+    <div class="tl-item" style="display:flex; gap:16px; align-items:flex-start; margin-bottom:0; position:relative;">
+      <div style="position:absolute; left:-38px; top:4px; width:14px; height:14px; border-radius:50%; background:#1f8040; border:2px solid #0a0e1a;"></div>
+      <div style="flex:1; background:#0e1e10; border:1px solid #1e4020; border-radius:8px; padding:14px 18px;">
+        <div style="font-size:0.7rem; color:#4a7050; margin-bottom:4px;">T + 3:30</div>
+        <div style="font-weight:700; color:#55eeaa; font-size:0.85rem;">Step 8 — Dispatch outputs</div>
+        <div style="font-size:0.75rem; color:#6a9070; margin-top:4px;">
+          📧 Email → garcia.dan24@gmail.com (HTML Wizard Report)<br/>
+          🗄 Supabase → wizard_daily_card + wizard_pipeline_health<br/>
+          📄 clv_audit.csv updated · eval_predictions.csv appended
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── Training Pipeline (separate) ─────────────────────────────── -->
+<div style="background:#0d0a1a; padding: 30px 40px; border-top: 2px solid #2a1060;">
+  <h2 style="color:#b89eff; font-size:1rem; letter-spacing:2px; text-transform:uppercase; margin-bottom:20px; border-bottom:1px solid #2a1050; padding-bottom:10px;">
+    🖥 Model Training Pipeline (Offline / CUDA GPU)
+  </h2>
+
+  <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:14px;">
+
+    <div style="background:#100a20; border:1px solid #3a1880; border-radius:8px; padding:14px;">
+      <div style="font-weight:700; color:#d0a0ff; font-size:0.82rem; margin-bottom:6px;">1. Historical Data Pull</div>
+      <div style="font-size:0.72rem; color:#9070c0; line-height:1.5;">
+        pybaseball · Statcast · 2021–2025<br/>
+        Stored as parquet per season
+      </div>
+    </div>
+
+    <div style="background:#100a20; border:1px solid #3a1880; border-radius:8px; padding:14px;">
+      <div style="font-weight:700; color:#d0a0ff; font-size:0.82rem; margin-bottom:6px;">2. NCV Feature Matrix</div>
+      <div style="font-size:0.72rem; color:#9070c0; line-height:1.5;">
+        Same 97-feature build<br/>
+        2023 train / 2024 val (Fold 1)<br/>
+        2023+24 train / 2025 val (Fold 2)
+      </div>
+    </div>
+
+    <div style="background:#100a20; border:1px solid #5a20a0; border-radius:8px; padding:14px; border-left-width:3px;">
+      <div style="font-weight:700; color:#e0b0ff; font-size:0.82rem; margin-bottom:6px;">3. XGBoost GPU Training ⚡</div>
+      <div style="font-size:0.72rem; color:#a080d0; line-height:1.5;">
+        <span style="color:#d0a0ff;">train_xgboost.py</span><br/>
+        device=&quot;cuda&quot; · RTX 5080<br/>
+        n_estimators=600, lr=0.04, depth=5<br/>
+        subsample=0.80, min_child=20
+      </div>
+    </div>
+
+    <div style="background:#100a20; border:1px solid #3a1880; border-radius:8px; padding:14px;">
+      <div style="font-weight:700; color:#d0a0ff; font-size:0.82rem; margin-bottom:6px;">4. Platt Calibration</div>
+      <div style="font-size:0.72rem; color:#9070c0; line-height:1.5;">
+        OOF probabilities pooled<br/>
+        LogisticRegression(C=1e10)<br/>
+        Brier score minimised
+      </div>
+    </div>
+
+    <div style="background:#100a20; border:1px solid #3a1880; border-radius:8px; padding:14px;">
+      <div style="font-weight:700; color:#d0a0ff; font-size:0.82rem; margin-bottom:6px;">5. Stacking Level-2 Fit</div>
+      <div style="font-size:0.72rem; color:#9070c0; line-height:1.5;">
+        LogisticRegression(C=10)<br/>
+        12 meta-features<br/>
+        NCV AUC: 0.6056 / 0.5869
+      </div>
+    </div>
+
+    <div style="background:#100a20; border:1px solid #3a1880; border-radius:8px; padding:14px;">
+      <div style="font-weight:700; color:#d0a0ff; font-size:0.82rem; margin-bottom:6px;">6. Model Serialisation</div>
+      <div style="font-size:0.72rem; color:#9070c0; line-height:1.5;">
+        xgb_rl_model.json<br/>
+        xgb_ml_model.json<br/>
+        stacking_model.pkl<br/>
+        medians.json
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── Script inventory ───────────────────────────────────────────── -->
+<div style="background:#0a0e1a; padding: 30px 40px; border-top: 1px solid #1e2d55;">
+  <h2 style="color:#5b8fff; font-size:1rem; letter-spacing:2px; text-transform:uppercase; margin-bottom:20px; border-bottom:1px solid #1e2d55; padding-bottom:10px;">
+    📁 Script Inventory (17+ Python Modules)
+  </h2>
+  <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap:10px;">
+
+    <div style="background:#0d1628; border:1px solid #1e3060; border-left:3px solid #3a6df0; border-radius:6px; padding:10px 14px;">
+      <div style="font-size:0.78rem; font-weight:700; color:#88aaff; margin-bottom:3px;">run_daily_scheduler.py</div>
+      <div style="font-size:0.7rem; color:#5a7090;">APScheduler 11:00 AM ET cron · orchestrates all 8 pipeline steps</div>
+    </div>
+
+    <div style="background:#0d1628; border:1px solid #1e3060; border-left:3px solid #1d6fa8; border-radius:6px; padding:10px 14px;">
+      <div style="font-size:0.78rem; font-weight:700; color:#7ecfff; margin-bottom:3px;">fetch_and_prepare_data.py</div>
+      <div style="font-size:0.7rem; color:#5a7090;">MLB API + Odds API + Weather · parquet cache · EWMA hydration</div>
+    </div>
+
+    <div style="background:#0d1628; border:1px solid #1e3060; border-left:3px solid #1d6fa8; border-radius:6px; padding:10px 14px;">
+      <div style="font-size:0.78rem; font-weight:700; color:#7ecfff; margin-bottom:3px;">build_features.py</div>
+      <div style="font-size:0.7rem; color:#5a7090;">97-feature matrix assembly across 9 groups · SP diffs · matchup</div>
+    </div>
+
+    <div style="background:#0d1628; border:1px solid #1e3060; border-left:3px solid #1d6fa8; border-radius:6px; padding:10px 14px;">
+      <div style="font-size:0.78rem; font-weight:700; color:#7ecfff; margin-bottom:3px;">matchup_engine.py</div>
+      <div style="font-size:0.7rem; color:#5a7090;">Handedness matchup · platoon advantage · lineup depth scoring</div>
+    </div>
+
+    <div style="background:#0d1628; border:1px solid #1e3060; border-left:3px solid #3a50c0; border-radius:6px; padding:10px 14px;">
+      <div style="font-size:0.78rem; font-weight:700; color:#aaccff; margin-bottom:3px;">monte_carlo.py</div>
+      <div style="font-size:0.7rem; color:#5a7090;">50K Poisson trials · R/G from xwOBA · mc_residual feature output</div>
+    </div>
+
+    <div style="background:#0d1628; border:1px solid #1e3060; border-left:3px solid #7a2dd0; border-radius:6px; padding:10px 14px;">
+      <div style="font-size:0.78rem; font-weight:700; color:#d090ff; margin-bottom:3px;">train_xgboost.py</div>
+      <div style="font-size:0.7rem; color:#5a7090;"><span style="color:#c060ff;">CUDA GPU (RTX 5080)</span> · NCV training · model serialisation</div>
+    </div>
+
+    <div style="background:#0d1628; border:1px solid #1e3060; border-left:3px solid #7a2dd0; border-radius:6px; padding:10px 14px;">
+      <div style="font-size:0.78rem; font-weight:700; color:#d090ff; margin-bottom:3px;">predict.py</div>
+      <div style="font-size:0.7rem; color:#5a7090;">Load JSON models · CPU inference · raw + Platt-calibrated probs</div>
+    </div>
+
+    <div style="background:#0d1628; border:1px solid #1e3060; border-left:3px solid #7a2dd0; border-radius:6px; padding:10px 14px;">
+      <div style="font-size:0.78rem; font-weight:700; color:#d090ff; margin-bottom:3px;">stacking_model.py</div>
+      <div style="font-size:0.7rem; color:#5a7090;">StackingModel class · Level-2 LR(C=10) · _build_X / predict_proba</div>
+    </div>
+
+    <div style="background:#0d1628; border:1px solid #1e3060; border-left:3px solid #7a2dd0; border-radius:6px; padding:10px 14px;">
+      <div style="font-size:0.78rem; font-weight:700; color:#d090ff; margin-bottom:3px;">calibration.py</div>
+      <div style="font-size:0.7rem; color:#5a7090;">Platt scaling · LogisticRegression(C=1e10) · OOF pool fit</div>
+    </div>
+
+    <div style="background:#0d1628; border:1px solid #1e3060; border-left:3px solid #b05020; border-radius:6px; padding:10px 14px;">
+      <div style="font-size:0.78rem; font-weight:700; color:#ffaa55; margin-bottom:3px;">lock_gate.py</div>
+      <div style="font-size:0.7rem; color:#5a7090;">Three-Part Lock · sanity / odds floor / edge tier logic</div>
+    </div>
+
+    <div style="background:#0d1628; border:1px solid #1e3060; border-left:3px solid #806020; border-radius:6px; padding:10px 14px;">
+      <div style="font-size:0.78rem; font-weight:700; color:#ffcc66; margin-bottom:3px;">kelly_staking.py</div>
+      <div style="font-size:0.7rem; color:#5a7090;">Quarter/eighth Kelly · $2,000 bankroll · $50 max bet cap</div>
+    </div>
+
+    <div style="background:#0d1628; border:1px solid #1e3060; border-left:3px solid #1f8040; border-radius:6px; padding:10px 14px;">
+      <div style="font-size:0.78rem; font-weight:700; color:#55eeaa; margin-bottom:3px;">report_builder.py</div>
+      <div style="font-size:0.7rem; color:#5a7090;">Wizard Report card assembly · star ratings · pick formatting</div>
+    </div>
+
+    <div style="background:#0d1628; border:1px solid #1e3060; border-left:3px solid #801880; border-radius:6px; padding:10px 14px;">
+      <div style="font-size:0.78rem; font-weight:700; color:#ee88ee; margin-bottom:3px;">send_report.py</div>
+      <div style="font-size:0.7rem; color:#5a7090;">SMTP Gmail relay · HTML email template · attachment dispatch</div>
+    </div>
+
+    <div style="background:#0d1628; border:1px solid #1e3060; border-left:3px solid #1060a0; border-radius:6px; padding:10px 14px;">
+      <div style="font-size:0.78rem; font-weight:700; color:#60c0ff; margin-bottom:3px;">supabase_writer.py</div>
+      <div style="font-size:0.7rem; color:#5a7090;">5-table Supabase upsert · pipeline health · backtest log</div>
+    </div>
+
+    <div style="background:#0d1628; border:1px solid #1e3060; border-left:3px solid #1060a0; border-radius:6px; padding:10px 14px;">
+      <div style="font-size:0.78rem; font-weight:700; color:#60c0ff; margin-bottom:3px;">clv_tracker.py</div>
+      <div style="font-size:0.7rem; color:#5a7090;">Closing line value audit · live bet monitoring · clv_audit.csv</div>
+    </div>
+
+    <div style="background:#0d1628; border:1px solid #1e3060; border-left:3px solid #208050; border-radius:6px; padding:10px 14px;">
+      <div style="font-size:0.78rem; font-weight:700; color:#66dd88; margin-bottom:3px;">evaluate_model.py</div>
+      <div style="font-size:0.7rem; color:#5a7090;">AUC / Brier / LogLoss per model · monthly breakdown · ROI calc</div>
+    </div>
+
+    <div style="background:#0d1628; border:1px solid #1e3060; border-left:3px solid #208050; border-radius:6px; padding:10px 14px;">
+      <div style="font-size:0.78rem; font-weight:700; color:#66dd88; margin-bottom:3px;">backtest_engine.py</div>
+      <div style="font-size:0.7rem; color:#5a7090;">Multi-year ROI simulation · Kelly re-simulation · per-tier breakdown</div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── Footer ───────────────────────────────────────────────────── -->
+<footer>
+  MLB Wizard Pipeline · Generated 2026-04-17 · Internal use only
+</footer>
+
+<!-- ── Tooltip ──────────────────────────────────────────────────── -->
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+  // Step toggle
+  function toggleStep(bar, id) {
+    const panel = document.getElementById(id);
+    const wasVisible = panel.classList.contains('visible');
+    // Close all
+    document.querySelectorAll('.detail-panel').forEach(p => p.classList.remove('visible'));
+    document.querySelectorAll('.step-bar').forEach(b => b.classList.remove('active'));
+    if (!wasVisible) {
+      panel.classList.add('visible');
+      bar.classList.add('active');
+      // Smooth scroll
+      setTimeout(() => panel.scrollIntoView({behavior:'smooth', block:'nearest'}), 50);
+    }
+  }
+
+  // Tooltip for side nodes
+  const tooltipData = {
+    'MLB Stats API': 'statsapi.mlb.com — schedules, rosters, boxscores, probable pitchers',
+    'Statcast': 'pybaseball.statcast() — pitch-level xwOBA, exit velocity, barrel rate, spin rate',
+    'The Odds API': 'Pinnacle moneylines and run lines · used for sanity check and edge calculation',
+    'Weather API': 'Open-Meteo · wind speed/direction, temperature, precipitation probability',
+  };
+
+  // Animated entrance
+  const bars = document.querySelectorAll('.step-bar');
+  bars.forEach((bar, i) => {
+    bar.style.opacity = '0';
+    bar.style.transform = 'translateX(-20px)';
+    bar.style.transition = 'opacity 0.3s, transform 0.3s';
+    setTimeout(() => {
+      bar.style.opacity = '1';
+      bar.style.transform = 'translateX(0)';
+    }, 100 + i * 80);
+  });
+
+  const sideNodes = document.querySelectorAll('.side-node');
+  sideNodes.forEach((node, i) => {
+    node.style.opacity = '0';
+    setTimeout(() => {
+      node.style.opacity = '1';
+      node.style.transition = 'opacity 0.3s';
+    }, 200 + i * 60);
+  });
+</script>
+</body>
+</html>

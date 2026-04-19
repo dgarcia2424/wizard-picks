@@ -1,0 +1,1417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wizard Report — 2026-04-18</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  background: #0d1117; color: #c9d1d9; padding: 16px; font-size: 13px;
+}
+
+/* ── Header ─────────────────────────────────────── */
+.hdr {
+  background: #161b22; border: 1px solid #21262d;
+  border-left: 4px solid #388bfd;
+  border-radius: 8px; padding: 18px 22px; margin-bottom: 16px;
+}
+.hdr h1 { font-size: 20px; font-weight: 800; color: #ffffff; letter-spacing: .5px; }
+.hdr .date { color: #8b949e; font-size: 12px; margin-top: 2px; }
+.hdr .sub  { font-size: 15px; font-weight: 700; margin-top: 8px; }
+.hdr-none .sub { color: #6e7681; }
+.hdr-lock .sub { color: #3fb950; }
+.hdr .meta { color: #6e7681; font-size: 11px; margin-top: 6px; }
+
+/* ── Game cards ──────────────────────────────────── */
+.gc {
+  background: #161b22; border: 1px solid #21262d;
+  border-radius: 8px; margin-bottom: 12px; overflow: hidden;
+}
+.card-t1   { border-left: 3px solid #3fb950; }
+.card-t2   { border-left: 3px solid #d29922; }
+.card-near { border-left: 3px solid #388bfd; }
+.card-npin { border-left: 3px solid #30363d; }
+
+/* Card header */
+.gc-head {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 8px;
+  padding: 10px 16px; background: #1c2128; border-bottom: 1px solid #21262d;
+}
+.gc-head-left  { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.gc-head-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.gc-teams { font-size: 16px; font-weight: 800; color: #ffffff; }
+.gc-time  { font-size: 11px; color: #8b949e; }
+.gc-conf  { font-size: 10px; color: #6e7681; }
+.gc-odds  { font-size: 12px; color: #8b949e; }
+
+/* Score prediction row */
+.gc-score {
+  padding: 6px 16px; background: #0d1117;
+  font-size: 12px; color: #8b949e;
+  border-bottom: 1px solid #21262d;
+}
+.score-val { color: #ffffff; font-weight: 700; }
+.score-lbl { color: #6e7681; font-size: 11px; }
+.score-sep { color: #30363d; }
+.ou-line   { color: #6e7681; font-size: 11px; }
+.band      { color: #6e7681; font-size: 11px; }
+
+/* F5 / 1st inning / props rows */
+.gc-extra-section {
+  padding: 5px 16px; font-size: 12px;
+  border-bottom: 1px solid #21262d; background: #0d1117;
+}
+.gc-extra-lbl {
+  font-size: 9px; font-weight: 800; color: #388bfd;
+  text-transform: uppercase; letter-spacing: .8px; margin-right: 4px;
+}
+.gc-extra-dim { color: #6e7681; }
+.gc-extra-val { color: #c9d1d9; font-weight: 700; }
+.gc-props { padding-top: 6px; padding-bottom: 6px; }
+.prop-list  { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 4px; }
+.prop-row   { font-size: 11px; }
+.prop-name  { color: #e6edf3; font-weight: 600; }
+.prop-sep   { color: #30363d; }
+.prop-val   { font-weight: 700; }
+/* PrizePicks badges */
+.pp-badge   { display: inline-block; background: #1a2b1a; border: 1px solid #2ea043;
+               border-radius: 3px; padding: 0 4px; font-size: 10px; font-weight: 700; color: #7ee787; }
+.pp-k-source { font-size: 9px; font-weight: 800; color: #7ee787;
+                text-transform: uppercase; letter-spacing: .5px; }
+.pp-k-row   { margin-left: 4px; }
+.pp-edge-go   { color: #3fb950; font-weight: 800; }   /* ≥7.7% edge — PP-worthy */
+.pp-edge-lean { color: #d29922; font-weight: 700; }   /* positive but below PP threshold */
+.pp-edge-no   { color: #f85149; font-weight: 700; }   /* negative edge — fade */
+
+/* Body: starters + markets side by side */
+.gc-body {
+  display: flex; gap: 0;
+}
+.gc-starters {
+  padding: 12px 16px; min-width: 220px; max-width: 280px;
+  border-right: 1px solid #21262d; flex-shrink: 0;
+}
+.gc-sp { margin-bottom: 10px; line-height: 1.5; }
+.gc-sp:last-of-type { margin-bottom: 0; }
+.sp-team { color: #6e7681; font-size: 10px; font-weight: 700;
+            text-transform: uppercase; letter-spacing: .5px; }
+.sp-name { color: #ffffff; font-weight: 600; font-size: 13px; }
+.xwoba   { color: #8b949e; font-size: 11px; margin-left: 4px; }
+.sp-flag { font-size: 9px; font-weight: 700; color: #d29922;
+            border: 1px solid #d29922; border-radius: 3px; padding: 1px 4px; margin-left: 4px; }
+.k-props { font-size: 11px; }
+.k-line  { color: #6e7681; }
+.k-pover { color: #8b949e; }
+.k-edge  { font-weight: 600; }
+.tbd-notice { font-size: 11px; color: #d29922; margin-top: 6px; }
+
+/* Market grid */
+.gc-markets {
+  display: flex; flex: 1; flex-wrap: wrap;
+}
+.mkt {
+  flex: 1; min-width: 160px;
+  padding: 12px 14px;
+  border-right: 1px solid #21262d;
+}
+.mkt:last-child { border-right: none; }
+.mkt-label {
+  font-size: 10px; font-weight: 800; color: #8b949e;
+  text-transform: uppercase; letter-spacing: .6px;
+  margin-bottom: 8px;
+}
+.mkt-tbl { border-collapse: collapse; width: 100%; }
+.mkt-tbl .ml {
+  color: #6e7681; font-size: 11px; padding: 2px 0; width: 55%;
+}
+.mkt-tbl .mv {
+  font-size: 13px; font-weight: 600; padding: 2px 0; text-align: right;
+}
+.mkt-badge { margin-top: 8px; }
+
+/* Value colours */
+.bright    { color: #ffffff; }
+.pin       { color: #58a6ff; }
+.ret       { color: #8b949e; }
+.val-green { color: #3fb950; }
+.val-yellow{ color: #d29922; }
+.val-red   { color: #f85149; }
+.val-dim   { color: #6e7681; }
+
+/* Shadow ensemble range colours */
+.shadow-agree { color: #3fb950; font-size: 12px; }
+.shadow-warn  { color: #d29922; font-size: 12px; }
+.shadow-split { color: #f85149; font-size: 12px; }
+.spread-pill  {
+  display: inline-block; font-size: 10px; font-weight: 700;
+  background: rgba(255,255,255,0.08); border-radius: 3px;
+  padding: 0 4px; margin-left: 3px; vertical-align: middle;
+}
+
+/* Quantile band colours (total Q10–Q90 range) */
+.qband-tight { color: #3fb950; font-size: 12px; }   /* spread < 4.0 — narrow, confident */
+.qband-mid   { color: #d29922; font-size: 12px; }   /* spread 4–6   — moderate */
+.qband-wide  { color: #f85149; font-size: 12px; }   /* spread > 6.0 — high variance */
+
+/* Badges */
+.badge {
+  display: inline-block; font-size: 10px; font-weight: 700;
+  letter-spacing: .4px; padding: 2px 7px; border-radius: 4px;
+}
+.badge-green  { background: #0f2d1a; color: #3fb950; border: 1px solid #3fb950; }
+.badge-amber  { background: #2d1b00; color: #d29922; border: 1px solid #d29922; }
+.badge-yellow { background: #2d2800; color: #e3b341; border: 1px solid #e3b341; }
+.badge-orange { background: #2d1600; color: #db6d28; border: 1px solid #db6d28; }
+.badge-red    { background: #2d0d0d; color: #f85149; border: 1px solid #f85149; }
+.badge-gray   { background: #161b22; color: #6e7681; border: 1px solid #30363d; }
+.stake { color: #3fb950; font-weight: 800; margin-left: 4px; }
+
+/* Glossary */
+.defs {
+  margin-top: 16px;
+  background: #161b22; border: 1px solid #21262d; border-radius: 8px;
+  padding: 16px 20px;
+}
+.defs-title {
+  font-size: 11px; font-weight: 700; color: #6e7681;
+  letter-spacing: .8px; text-transform: uppercase; margin-bottom: 14px;
+}
+.defs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 20px;
+}
+.def-section { }
+.def-heading {
+  font-size: 10px; font-weight: 700; color: #388bfd;
+  letter-spacing: .6px; text-transform: uppercase;
+  margin-bottom: 8px; padding-bottom: 4px;
+  border-bottom: 1px solid #21262d;
+}
+.def-row {
+  display: flex; gap: 8px; margin-bottom: 6px; align-items: baseline;
+}
+.def-term {
+  font-size: 11px; font-weight: 700; color: #c9d1d9;
+  white-space: nowrap; min-width: 90px; flex-shrink: 0;
+}
+.def-desc {
+  font-size: 11px; color: #6e7681; line-height: 1.4;
+}
+
+@media (max-width: 700px) {
+  .gc-body { flex-direction: column; }
+  .gc-starters { max-width: 100%; border-right: none;
+                  border-bottom: 1px solid #21262d; }
+  .mkt { min-width: 130px; }
+}
+
+/* ── Parlay suggestions ────────────────────────────── */
+.pl-section {
+  background: #161b22; border: 1px solid #21262d;
+  border-left: 4px solid #8957e5;
+  border-radius: 8px; padding: 16px 20px; margin-bottom: 16px;
+}
+.pl-title {
+  font-size: 14px; font-weight: 800; color: #d2a8ff;
+  letter-spacing: .3px; margin-bottom: 4px;
+}
+.pl-note {
+  font-size: 11px; color: #6e7681; margin-bottom: 12px; line-height: 1.5;
+}
+.pl-combos { display: flex; flex-direction: column; gap: 12px; }
+.pl-combo {
+  background: #0d1117; border: 1px solid #21262d;
+  border-radius: 6px; overflow: hidden;
+}
+.pl-combo-head {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+  padding: 8px 14px; background: #1c2128; border-bottom: 1px solid #21262d;
+}
+.pl-n {
+  font-size: 10px; font-weight: 800; color: #6e7681;
+  letter-spacing: 1px; text-transform: uppercase;
+}
+.pl-sgp {
+  font-size: 9px; font-weight: 700; color: #d29922;
+  background: #2d2a1f; border: 1px solid #d29922;
+  border-radius: 3px; padding: 1px 5px; letter-spacing: .5px;
+}
+.pl-price {
+  font-size: 18px; font-weight: 800; color: #d2a8ff;
+}
+.pl-stats {
+  font-size: 11px; color: #8b949e; margin-left: auto;
+}
+.pl-tbl {
+  width: 100%; border-collapse: collapse; font-size: 12px;
+}
+.pl-tbl th {
+  padding: 5px 14px; text-align: left;
+  font-size: 10px; font-weight: 700; color: #6e7681;
+  letter-spacing: .5px; text-transform: uppercase;
+  border-bottom: 1px solid #21262d;
+}
+.pl-tbl td {
+  padding: 6px 14px; border-bottom: 1px solid #161b22;
+  vertical-align: middle;
+}
+.pl-tbl tr:last-child td { border-bottom: none; }
+.pl-game  { color: #8b949e; font-size: 11px; white-space: nowrap; }
+.pl-leg   { color: #c9d1d9; font-weight: 600; }
+.pl-odds  { color: #ffffff; font-weight: 700; white-space: nowrap; }
+.pl-prob  { color: #8b949e; }
+.pl-corr  { font-size: 10px; color: #d29922; font-style: italic; }
+.edge-pos { color: #3fb950; font-weight: 700; }
+.edge-med { color: #d29922; font-weight: 700; }
+.edge-neg { color: #f85149; font-weight: 700; }
+.pl-empty {
+  font-size: 12px; color: #6e7681; font-style: italic; padding: 8px 0;
+}
+</style>
+</head>
+<body>
+
+<div class="hdr hdr-lock">
+  <h1>THE WIZARD REPORT</h1>
+  <div class="date">2026-04-18</div>
+  <div class="sub">2 Locks</div>
+  <div class="meta">Generated 23:27 ET &nbsp;·&nbsp;
+    Three-Part Lock: |P_model − P_Pinnacle| ≤ 4% &nbsp;·&nbsp; odds ≥ −225 &nbsp;·&nbsp; edge ≥ 1.0% vs retail
+  </div>
+</div>
+
+<div class="gc card-t1">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">TB @ PIT</span>
+      <span class="gc-time">3:30 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds">ML -2900 / +930 · RL -101</span>
+      <span class="badge badge-green">O/U TIER 1</span> 
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">PIT</span>&nbsp;<span class="score-val">4.7</span> <span class="band">(2–6)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">TB</span>&nbsp;<span class="score-val">3.6</span> <span class="band">(1–5)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">8.2</span> <span class="band">(5–11)</span> <span class="ou-line">vs 7.5</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">F5</span>&nbsp;<span class="gc-extra-dim">TB win</span>&nbsp;<span class="gc-extra-val">44%</span>&nbsp;&nbsp;<span class="gc-extra-dim">PIT win</span>&nbsp;<span class="gc-extra-val">56%</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="gc-extra-dim">Proj</span>&nbsp;<span class="gc-extra-val">1.4–2.2</span>&nbsp;<span class="gc-extra-dim">Total</span>&nbsp;<span class="gc-extra-val">3.5</span> <span class="band">(2–5)</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">1st Inn</span>&nbsp;<span class="gc-extra-dim">NRFI</span>&nbsp;<span class="gc-extra-val">49%</span>&nbsp;&nbsp;<span class="gc-extra-dim">PIT scores</span>&nbsp;<span class="gc-extra-val">35%</span>&nbsp;&nbsp;<span class="gc-extra-dim">TB scores</span>&nbsp;<span class="gc-extra-val">24%</span></div>
+  <div class="gc-extra-section gc-props"><span class="gc-extra-lbl">Props</span><div class="prop-list"><div class="prop-row"><span class="gc-extra-dim">TB</span>&nbsp;<span class="prop-name">#1 Chandler Simpson</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">76%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">TB</span>&nbsp;<span class="prop-name">#3 Jonathan Aranda</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">72%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">TB</span>&nbsp;<span class="prop-name">#4 Yandy Díaz</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">69%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">TB</span>&nbsp;<span class="prop-name">#2 Junior Caminero</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">68%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">PIT</span>&nbsp;<span class="prop-name">#4 Ryan O'Hearn</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">68%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">PIT</span>&nbsp;<span class="prop-name">#1 Oneil Cruz</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">66%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div></div></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">PIT</span> <span class="sp-name">Paul Skenes</span> <span class="xwoba">0.223</span></div>
+      <div class="gc-sp"><span class="sp-team">TB</span> <span class="sp-name">Drew Rasmussen</span> <span class="xwoba">0.280</span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · PIT WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.819</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.819</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.909</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">—</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · PIT -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.516</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.463</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.471</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-agree">58%–67% <span class="spread-pill">±9%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · TB +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.484</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.537</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.529</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE 7.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">8.2 <span class="band">(5–11)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">5.1–15.2 <span class="spread-pill">±10.1</span></span></td></tr>
+    <tr><td class="ml">P(UNDER)</td><td class="mv bright">0.508</td></tr>
+    <tr><td class="ml">Pin P(UNDER)</td><td class="mv pin">0.519</td></tr>
+    <tr><td class="ml">Ret P(UNDER)</td><td class="mv ret">0.462</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-green">+4.5%</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-green">TIER 1</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc card-t1">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">DET @ BOS</span>
+      <span class="gc-time">4:10 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds">ML +215 / -296 · RL +101</span>
+      <span class="badge badge-green">ML TIER 1 $10</span> 
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">BOS</span>&nbsp;<span class="score-val">3.5</span> <span class="band">(1–5)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">DET</span>&nbsp;<span class="score-val">4.3</span> <span class="band">(2–6)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">7.8</span> <span class="band">(5–10)</span> <span class="ou-line">vs 5.5</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">F5</span>&nbsp;<span class="gc-extra-dim">DET win</span>&nbsp;<span class="gc-extra-val">73%</span>&nbsp;&nbsp;<span class="gc-extra-dim">BOS win</span>&nbsp;<span class="gc-extra-val">27%</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="gc-extra-dim">Proj</span>&nbsp;<span class="gc-extra-val">2.5–1.8</span>&nbsp;<span class="gc-extra-dim">Total</span>&nbsp;<span class="gc-extra-val">4.3</span> <span class="band">(3–6)</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">1st Inn</span>&nbsp;<span class="gc-extra-dim">NRFI</span>&nbsp;<span class="gc-extra-val">42%</span>&nbsp;&nbsp;<span class="gc-extra-dim">BOS scores</span>&nbsp;<span class="gc-extra-val">30%</span>&nbsp;&nbsp;<span class="gc-extra-dim">DET scores</span>&nbsp;<span class="gc-extra-val">40%</span></div>
+  <div class="gc-extra-section gc-props"><span class="gc-extra-lbl">Props</span><div class="prop-list"><div class="prop-row"><span class="gc-extra-dim">DET</span>&nbsp;<span class="prop-name">#3 Colt Keith</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">77%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">DET</span>&nbsp;<span class="prop-name">#1 Kevin McGonigle</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">73%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">BOS</span>&nbsp;<span class="prop-name">#5 Wilyer Abreu</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">70%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">DET</span>&nbsp;<span class="prop-name">#2 Gleyber Torres</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">68%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">BOS</span>&nbsp;<span class="prop-name">#1 Roman Anthony</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">67%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">BOS</span>&nbsp;<span class="prop-name">#3 Willson Contreras</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">66%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div></div></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">BOS</span> <span class="sp-name">Brayan Bello</span> <span class="xwoba">0.327</span></div>
+      <div class="gc-sp"><span class="sp-team">DET</span> <span class="sp-name">Tarik Skubal</span> <span class="xwoba">0.269</span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · DET WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.331</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.321</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.298</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-green">+3.3%</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-green">TIER 1</span> <span class="stake">$10</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · BOS -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.143</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.477</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.467</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-warn">23%–39% <span class="spread-pill">±17%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · DET +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.857</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.523</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.533</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE 5.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">7.8 <span class="band">(5–10)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">4.4–14.6 <span class="spread-pill">±10.1</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">0.662</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">0.475</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">0.462</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc card-t2">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">STL @ HOU</span>
+      <span class="gc-time">7:10 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds">ML -149 / +124 · RL +140</span>
+      <span class="badge badge-amber">RL STL +1.5 TIER 2 $38</span> 
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">HOU</span>&nbsp;<span class="score-val">5.5</span> <span class="band">(3–7)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">STL</span>&nbsp;<span class="score-val">5.4</span> <span class="band">(3–7)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">10.9</span> <span class="band">(7–14)</span> <span class="ou-line">vs 9.0</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">F5</span>&nbsp;<span class="gc-extra-dim">STL win</span>&nbsp;<span class="gc-extra-val">53%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HOU win</span>&nbsp;<span class="gc-extra-val">47%</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="gc-extra-dim">Proj</span>&nbsp;<span class="gc-extra-val">2.8–3.2</span>&nbsp;<span class="gc-extra-dim">Total</span>&nbsp;<span class="gc-extra-val">6.0</span> <span class="band">(4–8)</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">1st Inn</span>&nbsp;<span class="gc-extra-dim">NRFI</span>&nbsp;<span class="gc-extra-val">30%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HOU scores</span>&nbsp;<span class="gc-extra-val">47%</span>&nbsp;&nbsp;<span class="gc-extra-dim">STL scores</span>&nbsp;<span class="gc-extra-val">43%</span></div>
+  <div class="gc-extra-section gc-props"><span class="gc-extra-lbl">Props</span><div class="prop-list"><div class="prop-row"><span class="gc-extra-dim">HOU</span>&nbsp;<span class="prop-name">#2 Yordan Alvarez</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">75%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">STL</span>&nbsp;<span class="prop-name">#2 Iván Herrera</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">66%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">HOU</span>&nbsp;<span class="prop-name">#3 Carlos Correa</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">66%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">STL</span>&nbsp;<span class="prop-name">#4 Jordan Walker</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">66%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">STL</span>&nbsp;<span class="prop-name">#3 Alec Burleson</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">65%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div></div></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">HOU</span> <span class="sp-name">Lance Mccullers Jr.</span> <span class="xwoba">0.332</span><br><span class="k-props"><span class="k-line">K 4.5</span>&nbsp;<span class="k-pover">P(O)&nbsp;59%</span>&nbsp;<span class="val-green k-edge">+2.6%</span></span>&nbsp;&nbsp;<span class="k-props pp-k-row"><span class="pp-k-source">PP</span>&nbsp;<span class="k-line">K 5.0</span>&nbsp;<span class="k-pover">P(O)&nbsp;43%</span>&nbsp;<span class="pp-edge-no k-edge">-7%</span></span></div>
+      <div class="gc-sp"><span class="sp-team">STL</span> <span class="sp-name">Andre Pallante</span> <span class="xwoba">0.355</span><br><span class="k-props"><span class="k-line">K 3.5</span>&nbsp;<span class="k-pover">P(O)&nbsp;24%</span>&nbsp;<span class="val-red k-edge">-18.0%</span></span>&nbsp;&nbsp;<span class="k-props pp-k-row"><span class="pp-k-source">PP</span>&nbsp;<span class="k-line">K 3.0</span>&nbsp;<span class="k-pover">P(O)&nbsp;24%</span>&nbsp;<span class="pp-edge-no k-edge">-26%</span></span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · HOU WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.552</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.562</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.573</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-red">-2.0%</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-orange">Edge -2.0%</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · HOU -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.385</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.394</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.399</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-warn">44%–63% <span class="spread-pill">±19%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-red">-1.4%</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-orange">Edge -1.4%</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · STL +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.615</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.606</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.601</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-green">+1.4%</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-amber">TIER 2</span> <span class="stake">$38</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE 9.0</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">10.9 <span class="band">(7–14)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">4.8–14.9 <span class="spread-pill">±10.1</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">0.536</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">0.495</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">0.489</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc card-near">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">TEX @ SEA</span>
+      <span class="gc-time">7:15 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds">ML -136 / +113 · RL +169</span>
+      
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">SEA</span>&nbsp;<span class="score-val">4.1</span> <span class="band">(2–6)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">TEX</span>&nbsp;<span class="score-val">3.9</span> <span class="band">(2–5)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">7.9</span> <span class="band">(5–10)</span> <span class="ou-line">vs 7.0</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">F5</span>&nbsp;<span class="gc-extra-dim">TEX win</span>&nbsp;<span class="gc-extra-val">54%</span>&nbsp;&nbsp;<span class="gc-extra-dim">SEA win</span>&nbsp;<span class="gc-extra-val">46%</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="gc-extra-dim">Proj</span>&nbsp;<span class="gc-extra-val">2.1–2.4</span>&nbsp;<span class="gc-extra-dim">Total</span>&nbsp;<span class="gc-extra-val">4.4</span> <span class="band">(3–6)</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">1st Inn</span>&nbsp;<span class="gc-extra-dim">NRFI</span>&nbsp;<span class="gc-extra-val">41%</span>&nbsp;&nbsp;<span class="gc-extra-dim">SEA scores</span>&nbsp;<span class="gc-extra-val">38%</span>&nbsp;&nbsp;<span class="gc-extra-dim">TEX scores</span>&nbsp;<span class="gc-extra-val">34%</span></div>
+  <div class="gc-extra-section gc-props"><span class="gc-extra-lbl">Props</span><div class="prop-list"><div class="prop-row"><span class="gc-extra-dim">TEX</span>&nbsp;<span class="prop-name">#1 Brandon Nimmo</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">75%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">SEA</span>&nbsp;<span class="prop-name">#1 J.P. Crawford</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">67%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">TEX</span>&nbsp;<span class="prop-name">#2 Corey Seager</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">65%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div></div></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">SEA</span> <span class="sp-name">George Kirby</span> <span class="xwoba">0.279</span><br><span class="k-props"></span><span class="k-props pp-k-row"><span class="pp-k-source">PP</span>&nbsp;<span class="k-line">K 6.0</span>&nbsp;<span class="k-pover">P(O)&nbsp;40%</span>&nbsp;<span class="pp-edge-no k-edge">-10%</span></span></div>
+      <div class="gc-sp"><span class="sp-team">TEX</span> <span class="sp-name">Nathan Eovaldi</span> <span class="xwoba">0.302</span><br><span class="k-props"><span class="k-line">K 5.5</span>&nbsp;<span class="k-pover">P(O)&nbsp;63%</span>&nbsp;<span class="val-green k-edge">+6.6%</span></span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · SEA WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.537</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.548</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.551</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-red">-1.4%</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-orange">Edge -1.4%</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · SEA -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.322</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.364</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.355</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-agree">47%–56% <span class="spread-pill">±9%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · TEX +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.678</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.636</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.645</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE 7.0</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">7.9 <span class="band">(5–10)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">4.0–13.4 <span class="spread-pill">±9.3</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">0.462</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">0.514</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">0.522</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc ">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">BAL @ CLE</span>
+      <span class="gc-time">6:10 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds">ML -143 / +119 · RL +159</span>
+      
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">CLE</span>&nbsp;<span class="score-val">5.2</span> <span class="band">(3–7)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">BAL</span>&nbsp;<span class="score-val">5.2</span> <span class="band">(2–7)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">10.4</span> <span class="band">(6–13)</span> <span class="ou-line">vs 7.5</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">F5</span>&nbsp;<span class="gc-extra-dim">BAL win</span>&nbsp;<span class="gc-extra-val">52%</span>&nbsp;&nbsp;<span class="gc-extra-dim">CLE win</span>&nbsp;<span class="gc-extra-val">48%</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="gc-extra-dim">Proj</span>&nbsp;<span class="gc-extra-val">2.8–3.2</span>&nbsp;<span class="gc-extra-dim">Total</span>&nbsp;<span class="gc-extra-val">6.1</span> <span class="band">(4–8)</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">1st Inn</span>&nbsp;<span class="gc-extra-dim">NRFI</span>&nbsp;<span class="gc-extra-val">30%</span>&nbsp;&nbsp;<span class="gc-extra-dim">CLE scores</span>&nbsp;<span class="gc-extra-val">48%</span>&nbsp;&nbsp;<span class="gc-extra-dim">BAL scores</span>&nbsp;<span class="gc-extra-val">43%</span></div>
+  <div class="gc-extra-section gc-props"><span class="gc-extra-lbl">Props</span><div class="prop-list"><div class="prop-row"><span class="gc-extra-dim">BAL</span>&nbsp;<span class="prop-name">#2 Taylor Ward</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">75%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div></div></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">CLE</span> <span class="sp-name">Gavin Williams</span> <span class="xwoba">0.342</span><br><span class="k-props"><span class="k-line">K 6.5</span>&nbsp;<span class="k-pover">P(O)&nbsp;48%</span>&nbsp;<span class="val-red k-edge">-7.3%</span></span></div>
+      <div class="gc-sp"><span class="sp-team">BAL</span> <span class="sp-name">Dean Kremer</span> <span class="xwoba">0.371</span><br><span class="k-props"><span class="k-line">K 4.5</span>&nbsp;<span class="k-pover">P(O)&nbsp;58%</span>&nbsp;<span class="val-green k-edge">+11.4%</span></span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · CLE WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.541</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.560</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.563</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-red">-2.2%</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-orange">Edge -2.2%</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · CLE -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.318</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.369</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.369</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-split">29%–62% <span class="spread-pill">±33%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · BAL +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.682</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.631</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.631</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE 7.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">10.4 <span class="band">(6–13)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">4.6–15.4 <span class="spread-pill">±10.7</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">0.657</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">0.467</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">0.483</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc ">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">ATL @ PHI</span>
+      <span class="gc-time">7:15 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds">ML -132 / +109 · RL +164</span>
+      
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">PHI</span>&nbsp;<span class="score-val">4.3</span> <span class="band">(2–6)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">ATL</span>&nbsp;<span class="score-val">4.9</span> <span class="band">(2–7)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">9.1</span> <span class="band">(6–12)</span> <span class="ou-line">vs 7.0</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">F5</span>&nbsp;<span class="gc-extra-dim">ATL win</span>&nbsp;<span class="gc-extra-val">64%</span>&nbsp;&nbsp;<span class="gc-extra-dim">PHI win</span>&nbsp;<span class="gc-extra-val">36%</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="gc-extra-dim">Proj</span>&nbsp;<span class="gc-extra-val">2.7–2.4</span>&nbsp;<span class="gc-extra-dim">Total</span>&nbsp;<span class="gc-extra-val">5.1</span> <span class="band">(3–6)</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">1st Inn</span>&nbsp;<span class="gc-extra-dim">NRFI</span>&nbsp;<span class="gc-extra-val">36%</span>&nbsp;&nbsp;<span class="gc-extra-dim">PHI scores</span>&nbsp;<span class="gc-extra-val">38%</span>&nbsp;&nbsp;<span class="gc-extra-dim">ATL scores</span>&nbsp;<span class="gc-extra-val">42%</span></div>
+  <div class="gc-extra-section gc-props"><span class="gc-extra-lbl">Props</span><div class="prop-list"><div class="prop-row"><span class="gc-extra-dim">ATL</span>&nbsp;<span class="prop-name">#2 Drake Baldwin</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">79%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">ATL</span>&nbsp;<span class="prop-name">#1 Ronald Acuña Jr.</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">74%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">PHI</span>&nbsp;<span class="prop-name">#3 Bryce Harper</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">70%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">PHI</span>&nbsp;<span class="prop-name">#1 Trea Turner</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">67%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">ATL</span>&nbsp;<span class="prop-name">#6 Mauricio Dubón</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">66%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">PHI</span>&nbsp;<span class="prop-name">#4 Adolis García</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">66%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div></div></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">PHI</span> <span class="sp-name">Cristopher Sánchez</span> <span class="xwoba">0.327</span><br><span class="k-props"></span><span class="k-props pp-k-row"><span class="pp-k-source">PP</span>&nbsp;<span class="k-line">K 6.0</span>&nbsp;<span class="k-pover">P(O)&nbsp;23%</span>&nbsp;<span class="pp-edge-no k-edge">-27%</span></span></div>
+      <div class="gc-sp"><span class="sp-team">ATL</span> <span class="sp-name">Chris Sale</span> <span class="xwoba">0.309</span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · PHI WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.506</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.526</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.543</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-red">-3.7%</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">Edge -3.7%</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · PHI -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.287</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.343</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.362</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-warn">40%–51% <span class="spread-pill">±11%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · ATL +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.713</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.657</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.638</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE 7.0</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">9.1 <span class="band">(6–12)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">5.3–15.2 <span class="spread-pill">±9.9</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">0.569</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">0.509</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">0.511</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc ">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">CIN @ MIN</span>
+      <span class="gc-time">2:10 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds">ML +501 / -1040 · RL -255</span>
+      
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">MIN</span>&nbsp;<span class="score-val">4.2</span> <span class="band">(2–6)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">CIN</span>&nbsp;<span class="score-val">4.0</span> <span class="band">(2–5)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">8.2</span> <span class="band">(5–11)</span> <span class="ou-line">vs 9.5</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">F5</span>&nbsp;<span class="gc-extra-dim">CIN win</span>&nbsp;<span class="gc-extra-val">50%</span>&nbsp;&nbsp;<span class="gc-extra-dim">MIN win</span>&nbsp;<span class="gc-extra-val">50%</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="gc-extra-dim">Proj</span>&nbsp;<span class="gc-extra-val">2.0–2.6</span>&nbsp;<span class="gc-extra-dim">Total</span>&nbsp;<span class="gc-extra-val">4.6</span> <span class="band">(3–6)</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">1st Inn</span>&nbsp;<span class="gc-extra-dim">NRFI</span>&nbsp;<span class="gc-extra-val">40%</span>&nbsp;&nbsp;<span class="gc-extra-dim">MIN scores</span>&nbsp;<span class="gc-extra-val">40%</span>&nbsp;&nbsp;<span class="gc-extra-dim">CIN scores</span>&nbsp;<span class="gc-extra-val">34%</span></div>
+  <div class="gc-extra-section gc-props"><span class="gc-extra-lbl">Props</span><div class="prop-list"><div class="prop-row"><span class="gc-extra-dim">CIN</span>&nbsp;<span class="prop-name">#4 Sal Stewart</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">73%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">MIN</span>&nbsp;<span class="prop-name">#2 Austin Martin</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">72%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">MIN</span>&nbsp;<span class="prop-name">#3 Josh Bell</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">71%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">MIN</span>&nbsp;<span class="prop-name">#4 Ryan Jeffers</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">68%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">MIN</span>&nbsp;<span class="prop-name">#5 Luke Keaschall</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">65%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div></div></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">MIN</span> <span class="sp-name">Taj Bradley</span> <span class="xwoba">0.282</span></div>
+      <div class="gc-sp"><span class="sp-team">CIN</span> <span class="sp-name">Andrew Abbott</span> <span class="xwoba">0.320</span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · CIN WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.266</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.810</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.154</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · MIN -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.538</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.386</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.675</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-warn">46%–62% <span class="spread-pill">±15%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · CIN +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.462</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.614</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.325</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE 9.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">8.2 <span class="band">(5–11)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">5.2–15.4 <span class="spread-pill">±10.2</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">0.327</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">0.460</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">0.494</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc ">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">SF @ WSH</span>
+      <span class="gc-time">4:05 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds">ML -720 / +426 · RL -128</span>
+      
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">WSH</span>&nbsp;<span class="score-val">5.4</span> <span class="band">(3–7)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">SF</span>&nbsp;<span class="score-val">5.6</span> <span class="band">(3–7)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">10.9</span> <span class="band">(7–14)</span> <span class="ou-line">vs 13.5</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">F5</span>&nbsp;<span class="gc-extra-dim">SF win</span>&nbsp;<span class="gc-extra-val">55%</span>&nbsp;&nbsp;<span class="gc-extra-dim">WSH win</span>&nbsp;<span class="gc-extra-val">45%</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="gc-extra-dim">Proj</span>&nbsp;<span class="gc-extra-val">3.1–3.3</span>&nbsp;<span class="gc-extra-dim">Total</span>&nbsp;<span class="gc-extra-val">6.4</span> <span class="band">(5–8)</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">1st Inn</span>&nbsp;<span class="gc-extra-dim">NRFI</span>&nbsp;<span class="gc-extra-val">28%</span>&nbsp;&nbsp;<span class="gc-extra-dim">WSH scores</span>&nbsp;<span class="gc-extra-val">48%</span>&nbsp;&nbsp;<span class="gc-extra-dim">SF scores</span>&nbsp;<span class="gc-extra-val">47%</span></div>
+  <div class="gc-extra-section gc-props"><span class="gc-extra-lbl">Props</span><div class="prop-list"><div class="prop-row"><span class="gc-extra-dim">WSH</span>&nbsp;<span class="prop-name">#5 Jacob Young</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">79%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">WSH</span>&nbsp;<span class="prop-name">#2 Luis García Jr.</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">78%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">WSH</span>&nbsp;<span class="prop-name">#1 James Wood</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">76%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">WSH</span>&nbsp;<span class="prop-name">#4 CJ Abrams</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">73%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">WSH</span>&nbsp;<span class="prop-name">#6 Daylen Lile</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">70%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">WSH</span>&nbsp;<span class="prop-name">#3 José Tena</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">69%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div></div></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">WSH</span> <span class="sp-name">Cade Cavalli</span> <span class="xwoba">0.357</span><br><span class="k-props"><span class="k-line">K 5.5</span>&nbsp;<span class="k-pover">P(O)&nbsp;10%</span>&nbsp;<span class="val-red k-edge">-48.2%</span></span></div>
+      <div class="gc-sp"><span class="sp-team">SF</span> <span class="sp-name">Adrian Houser</span> <span class="xwoba">0.366</span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · WSH WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.724</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.585</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.822</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · WSH -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.354</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.498</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.528</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-split">40%–64% <span class="spread-pill">±24%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · SF +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.646</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.502</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.472</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE 13.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">10.9 <span class="band">(7–14)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">5.3–15.5 <span class="spread-pill">±10.2</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">0.271</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">0.517</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">0.462</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc ">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">CWS @ ATH</span>
+      <span class="gc-time">4:05 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds">ML +199 / -270 · RL -134</span>
+      
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">ATH</span>&nbsp;<span class="score-val">5.5</span> <span class="band">(3–7)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">CWS</span>&nbsp;<span class="score-val">4.8</span> <span class="band">(2–7)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">10.3</span> <span class="band">(6–13)</span> <span class="ou-line">vs 13.5</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">F5</span>&nbsp;<span class="gc-extra-dim">CWS win</span>&nbsp;<span class="gc-extra-val">56%</span>&nbsp;&nbsp;<span class="gc-extra-dim">ATH win</span>&nbsp;<span class="gc-extra-val">44%</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="gc-extra-dim">Proj</span>&nbsp;<span class="gc-extra-val">2.6–2.8</span>&nbsp;<span class="gc-extra-dim">Total</span>&nbsp;<span class="gc-extra-val">5.4</span> <span class="band">(4–7)</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">1st Inn</span>&nbsp;<span class="gc-extra-dim">NRFI</span>&nbsp;<span class="gc-extra-val">34%</span>&nbsp;&nbsp;<span class="gc-extra-dim">ATH scores</span>&nbsp;<span class="gc-extra-val">43%</span>&nbsp;&nbsp;<span class="gc-extra-dim">CWS scores</span>&nbsp;<span class="gc-extra-val">41%</span></div>
+  <div class="gc-extra-section gc-props"><span class="gc-extra-lbl">Props</span><div class="prop-list"><div class="prop-row"><span class="gc-extra-dim">ATH</span>&nbsp;<span class="prop-name">#1 Jeff McNeil</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">73%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">ATH</span>&nbsp;<span class="prop-name">#2 Shea Langeliers</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">69%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div></div></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">ATH</span> <span class="sp-name">Luis Severino</span> <span class="xwoba">0.319</span><br><span class="k-props"><span class="k-line">K 3.5</span>&nbsp;<span class="k-pover">P(O)&nbsp;84%</span>&nbsp;<span class="val-green k-edge">+21.3%</span></span></div>
+      <div class="gc-sp"><span class="sp-team">CWS</span> <span class="sp-name">Erick Fedde</span> <span class="xwoba">0.327</span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · CWS WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.395</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.158</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.314</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · ATH -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.128</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.526</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.538</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-agree">26%–35% <span class="spread-pill">±9%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · CWS +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.872</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.474</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.462</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE 13.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">10.3 <span class="band">(6–13)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">4.8–15.5 <span class="spread-pill">±10.7</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">0.235</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">0.504</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">0.498</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc ">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">MIL @ MIA</span>
+      <span class="gc-time">4:10 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds">ML -235 / +176 · RL +115</span>
+      
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">MIA</span>&nbsp;<span class="score-val">3.8</span> <span class="band">(2–5)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">MIL</span>&nbsp;<span class="score-val">4.4</span> <span class="band">(2–6)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">8.2</span> <span class="band">(5–11)</span> <span class="ou-line">vs 6.5</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">F5</span>&nbsp;<span class="gc-extra-dim">MIL win</span>&nbsp;<span class="gc-extra-val">73%</span>&nbsp;&nbsp;<span class="gc-extra-dim">MIA win</span>&nbsp;<span class="gc-extra-val">27%</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="gc-extra-dim">Proj</span>&nbsp;<span class="gc-extra-val">2.3–1.7</span>&nbsp;<span class="gc-extra-dim">Total</span>&nbsp;<span class="gc-extra-val">4.0</span> <span class="band">(3–5)</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">1st Inn</span>&nbsp;<span class="gc-extra-dim">NRFI</span>&nbsp;<span class="gc-extra-val">45%</span>&nbsp;&nbsp;<span class="gc-extra-dim">MIA scores</span>&nbsp;<span class="gc-extra-val">28%</span>&nbsp;&nbsp;<span class="gc-extra-dim">MIL scores</span>&nbsp;<span class="gc-extra-val">37%</span></div>
+  <div class="gc-extra-section gc-props"><span class="gc-extra-lbl">Props</span><div class="prop-list"><div class="prop-row"><span class="gc-extra-dim">MIA</span>&nbsp;<span class="prop-name">#4 Liam Hicks</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">75%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">MIL</span>&nbsp;<span class="prop-name">#2 William Contreras</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">75%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">MIA</span>&nbsp;<span class="prop-name">#2 Xavier Edwards</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">72%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">MIL</span>&nbsp;<span class="prop-name">#1 Sal Frelick</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">67%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">MIA</span>&nbsp;<span class="prop-name">#5 Otto Lopez</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">66%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">MIL</span>&nbsp;<span class="prop-name">#4 Gary Sánchez</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">66%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div></div></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">MIA</span> <span class="sp-name">Sandy Alcantara</span> <span class="xwoba">0.293</span><br><span class="k-props"><span class="k-line">K 3.5</span>&nbsp;<span class="k-pover">P(O)&nbsp;64%</span>&nbsp;<span class="val-green k-edge">+14.8%</span></span></div>
+      <div class="gc-sp"><span class="sp-team">MIL</span> <span class="sp-name">Brandon Woodruff</span> <span class="xwoba">0.245</span><br><span class="k-props"><span class="k-line">K 3.5</span>&nbsp;<span class="k-pover">P(O)&nbsp;64%</span>&nbsp;<span class="val-green k-edge">+15.6%</span></span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · MIA WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.595</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.574</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.659</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">—</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · MIA -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.325</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.469</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.437</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-split">36%–64% <span class="spread-pill">±27%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · MIL +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.675</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.531</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.563</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE 6.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">8.2 <span class="band">(5–11)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">4.3–14.6 <span class="spread-pill">±10.3</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">0.583</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">0.485</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">0.471</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc card-npin">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">KC @ NYY</span>
+      <span class="gc-time">1:35 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds"></span>
+      
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">NYY</span>&nbsp;<span class="score-val">5.4</span> <span class="band">(3–7)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">KC</span>&nbsp;<span class="score-val">4.5</span> <span class="band">(2–6)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">9.9</span> <span class="band">(6–13)</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">F5</span>&nbsp;<span class="gc-extra-dim">KC win</span>&nbsp;<span class="gc-extra-val">52%</span>&nbsp;&nbsp;<span class="gc-extra-dim">NYY win</span>&nbsp;<span class="gc-extra-val">48%</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="gc-extra-dim">Proj</span>&nbsp;<span class="gc-extra-val">2.5–2.9</span>&nbsp;<span class="gc-extra-dim">Total</span>&nbsp;<span class="gc-extra-val">5.3</span> <span class="band">(4–7)</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">1st Inn</span>&nbsp;<span class="gc-extra-dim">NRFI</span>&nbsp;<span class="gc-extra-val">34%</span>&nbsp;&nbsp;<span class="gc-extra-dim">NYY scores</span>&nbsp;<span class="gc-extra-val">44%</span>&nbsp;&nbsp;<span class="gc-extra-dim">KC scores</span>&nbsp;<span class="gc-extra-val">39%</span></div>
+  <div class="gc-extra-section gc-props"><span class="gc-extra-lbl">Props</span><div class="prop-list"><div class="prop-row"><span class="gc-extra-dim">KC</span>&nbsp;<span class="prop-name">#1 Maikel Garcia</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">79%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">KC</span>&nbsp;<span class="prop-name">#2 Bobby Witt Jr.</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">79%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div></div></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">NYY</span> <span class="sp-name">Will Warren</span> <span class="xwoba">0.318</span></div>
+      <div class="gc-sp"><span class="sp-team">KC</span> <span class="sp-name">Noah Cameron</span> <span class="xwoba">0.348</span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · NYY WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.525</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · NYY -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.507</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-warn">55%–68% <span class="spread-pill">±13%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · KC +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.493</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE —</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">9.9 <span class="band">(6–13)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">5.5–16.0 <span class="spread-pill">±10.6</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">—</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc card-npin">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">NYM @ CHC</span>
+      <span class="gc-time">2:20 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds">· RL -5100</span>
+      
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">CHC</span>&nbsp;<span class="score-val">4.2</span> <span class="band">(2–6)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">NYM</span>&nbsp;<span class="score-val">4.1</span> <span class="band">(2–6)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">8.3</span> <span class="band">(5–11)</span> <span class="ou-line">vs 6.5</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">F5</span>&nbsp;<span class="gc-extra-dim">NYM win</span>&nbsp;<span class="gc-extra-val">59%</span>&nbsp;&nbsp;<span class="gc-extra-dim">CHC win</span>&nbsp;<span class="gc-extra-val">41%</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="gc-extra-dim">Proj</span>&nbsp;<span class="gc-extra-val">2.2–2.3</span>&nbsp;<span class="gc-extra-dim">Total</span>&nbsp;<span class="gc-extra-val">4.5</span> <span class="band">(3–6)</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">1st Inn</span>&nbsp;<span class="gc-extra-dim">NRFI</span>&nbsp;<span class="gc-extra-val">41%</span>&nbsp;&nbsp;<span class="gc-extra-dim">CHC scores</span>&nbsp;<span class="gc-extra-val">36%</span>&nbsp;&nbsp;<span class="gc-extra-dim">NYM scores</span>&nbsp;<span class="gc-extra-val">36%</span></div>
+  <div class="gc-extra-section gc-props"><span class="gc-extra-lbl">Props</span><div class="prop-list"><div class="prop-row"><span class="gc-extra-dim">CHC</span>&nbsp;<span class="prop-name">#1 Nico Hoerner</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">79%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">NYM</span>&nbsp;<span class="prop-name">#2 Bo Bichette</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">72%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">NYM</span>&nbsp;<span class="prop-name">#4 Luis Robert Jr.</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">68%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">NYM</span>&nbsp;<span class="prop-name">#6 Francisco Alvarez</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">66%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div></div></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">CHC</span> <span class="sp-name">Jameson Taillon</span> <span class="xwoba">0.298</span></div>
+      <div class="gc-sp"><span class="sp-team">NYM</span> <span class="sp-name">Freddy Peralta</span> <span class="xwoba">0.299</span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · CHC WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.447</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">0.927</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · CHC -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.518</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.922</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-warn">54%–66% <span class="spread-pill">±12%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · NYM +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.482</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">0.078</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE 6.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">8.3 <span class="band">(5–11)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">4.6–14.3 <span class="spread-pill">±9.7</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">0.600</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">0.245</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">0.078</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-red">Sanity fail</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc card-npin">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">LAD @ COL</span>
+      <span class="gc-time">8:10 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds"></span>
+      
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">COL</span>&nbsp;<span class="score-val">6.5</span> <span class="band">(3–9)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">LAD</span>&nbsp;<span class="score-val">6.3</span> <span class="band">(3–8)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">12.8</span> <span class="band">(8–16)</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">F5</span>&nbsp;<span class="gc-extra-dim">LAD win</span>&nbsp;<span class="gc-extra-val">53%</span>&nbsp;&nbsp;<span class="gc-extra-dim">COL win</span>&nbsp;<span class="gc-extra-val">47%</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="gc-extra-dim">Proj</span>&nbsp;<span class="gc-extra-val">3.9–4.2</span>&nbsp;<span class="gc-extra-dim">Total</span>&nbsp;<span class="gc-extra-val">8.0</span> <span class="band">(6–10)</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">1st Inn</span>&nbsp;<span class="gc-extra-dim">NRFI</span>&nbsp;<span class="gc-extra-val">20%</span>&nbsp;&nbsp;<span class="gc-extra-dim">COL scores</span>&nbsp;<span class="gc-extra-val">57%</span>&nbsp;&nbsp;<span class="gc-extra-dim">LAD scores</span>&nbsp;<span class="gc-extra-val">55%</span></div>
+  <div class="gc-extra-section gc-props"><span class="gc-extra-lbl">Props</span><div class="prop-list"><div class="prop-row"><span class="gc-extra-dim">LAD</span>&nbsp;<span class="prop-name">#4 Freddie Freeman</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">68%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">LAD</span>&nbsp;<span class="prop-name">#3 Andy Pages</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">68%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">LAD</span>&nbsp;<span class="prop-name">#1 Shohei Ohtani</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">66%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">COL</span>&nbsp;<span class="prop-name">#1 Edouard Julien</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-dim prop-val">—</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-yellow prop-val">17%</span>&nbsp;<span class="pp-badge">PP&nbsp;0.5&nbsp;<span class="pp-edge-no">-33%</span></span></div><div class="prop-row"><span class="gc-extra-dim">COL</span>&nbsp;<span class="prop-name">#2 Mickey Moniak</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-dim prop-val">—</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-yellow prop-val">16%</span>&nbsp;<span class="pp-badge">PP&nbsp;0.5&nbsp;<span class="pp-edge-no">-34%</span></span></div></div></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">COL</span> <span class="sp-name">Ryan Feltner</span> <span class="sp-flag">GAINER</span> <span class="xwoba">0.349</span><br><span class="k-props"></span><span class="k-props pp-k-row"><span class="pp-k-source">PP</span>&nbsp;<span class="k-line">K 3.5</span>&nbsp;<span class="k-pover">P(O)&nbsp;40%</span>&nbsp;<span class="pp-edge-no k-edge">-10%</span></span></div>
+      <div class="gc-sp"><span class="sp-team">LAD</span> <span class="sp-name">Emmet Sheehan</span> <span class="xwoba">0.365</span><br><span class="k-props"></span><span class="k-props pp-k-row"><span class="pp-k-source">PP</span>&nbsp;<span class="k-line">K 6.0</span>&nbsp;<span class="k-pover">P(O)&nbsp;31%</span>&nbsp;<span class="pp-edge-no k-edge">-19%</span></span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · COL WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.467</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · COL -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.318</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-agree">48%–55% <span class="spread-pill">±7%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · LAD +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.682</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE —</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">12.8 <span class="band">(8–16)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">6.3–16.6 <span class="spread-pill">±10.3</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">—</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc card-npin">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">TOR @ AZ</span>
+      <span class="gc-time">8:10 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds"></span>
+      
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">AZ</span>&nbsp;<span class="score-val">5.8</span> <span class="band">(3–8)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">TOR</span>&nbsp;<span class="score-val">5.6</span> <span class="band">(3–8)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">11.4</span> <span class="band">(7–15)</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">F5</span>&nbsp;<span class="gc-extra-dim">TOR win</span>&nbsp;<span class="gc-extra-val">53%</span>&nbsp;&nbsp;<span class="gc-extra-dim">AZ win</span>&nbsp;<span class="gc-extra-val">47%</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="gc-extra-dim">Proj</span>&nbsp;<span class="gc-extra-val">3.1–3.4</span>&nbsp;<span class="gc-extra-dim">Total</span>&nbsp;<span class="gc-extra-val">6.5</span> <span class="band">(5–8)</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">1st Inn</span>&nbsp;<span class="gc-extra-dim">NRFI</span>&nbsp;<span class="gc-extra-val">27%</span>&nbsp;&nbsp;<span class="gc-extra-dim">AZ scores</span>&nbsp;<span class="gc-extra-val">49%</span>&nbsp;&nbsp;<span class="gc-extra-dim">TOR scores</span>&nbsp;<span class="gc-extra-val">46%</span></div>
+  <div class="gc-extra-section gc-props"><span class="gc-extra-lbl">Props</span><div class="prop-list"><div class="prop-row"><span class="gc-extra-dim">TOR</span>&nbsp;<span class="prop-name">#3 Vladimir Guerrero Jr.</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">80%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">TOR</span>&nbsp;<span class="prop-name">#2 Ernie Clement</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">78%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">TOR</span>&nbsp;<span class="prop-name">#4 Jesús Sánchez</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">77%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">TOR</span>&nbsp;<span class="prop-name">#1 Nathan Lukes</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">72%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">AZ</span>&nbsp;<span class="prop-name">#8 Ildemaro Vargas</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">71%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">AZ</span>&nbsp;<span class="prop-name">#2 Corbin Carroll</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-green prop-val">71%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">AZ</span>&nbsp;<span class="prop-name">#1 Ketel Marte</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">66%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div><div class="prop-row"><span class="gc-extra-dim">TOR</span>&nbsp;<span class="prop-name">#6 Andrés Giménez</span>&nbsp;<span class="prop-sep">·</span>&nbsp;<span class="gc-extra-dim">1+ Hit</span>&nbsp;<span class="val-yellow prop-val">65%</span>&nbsp;&nbsp;<span class="gc-extra-dim">HR</span>&nbsp;<span class="val-dim prop-val">—</span></div></div></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">AZ</span> <span class="sp-name">Zac Gallen</span> <span class="xwoba">0.327</span><br><span class="k-props"></span><span class="k-props pp-k-row"><span class="pp-k-source">PP</span>&nbsp;<span class="k-line">K 4.0</span>&nbsp;<span class="k-pover">P(O)&nbsp;22%</span>&nbsp;<span class="pp-edge-no k-edge">-28%</span></span></div>
+      <div class="gc-sp"><span class="sp-team">TOR</span> <span class="sp-name">Max Scherzer</span> <span class="xwoba">0.348</span><br><span class="k-props"></span><span class="k-props pp-k-row"><span class="pp-k-source">PP</span>&nbsp;<span class="k-line">K 4.0</span>&nbsp;<span class="k-pover">P(O)&nbsp;35%</span>&nbsp;<span class="pp-edge-no k-edge">-15%</span></span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · AZ WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.470</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · AZ -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.422</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-warn">44%–57% <span class="spread-pill">±13%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · TOR +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.578</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE —</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">11.4 <span class="band">(7–15)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">6.1–16.5 <span class="spread-pill">±10.3</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">—</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc card-npin">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">SD @ LAA</span>
+      <span class="gc-time">9:38 pm ET</span>
+      <span class="gc-conf">~ projected</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds"></span>
+      
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">LAA</span>&nbsp;<span class="score-val">5.4</span> <span class="band">(3–7)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">SD</span>&nbsp;<span class="score-val">5.3</span> <span class="band">(3–7)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">10.7</span> <span class="band">(7–14)</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">F5</span>&nbsp;<span class="gc-extra-dim">SD win</span>&nbsp;<span class="gc-extra-val">53%</span>&nbsp;&nbsp;<span class="gc-extra-dim">LAA win</span>&nbsp;<span class="gc-extra-val">47%</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="gc-extra-dim">Proj</span>&nbsp;<span class="gc-extra-val">3.1–3.4</span>&nbsp;<span class="gc-extra-dim">Total</span>&nbsp;<span class="gc-extra-val">6.4</span> <span class="band">(5–8)</span></div>
+  <div class="gc-extra-section"><span class="gc-extra-lbl">1st Inn</span>&nbsp;<span class="gc-extra-dim">NRFI</span>&nbsp;<span class="gc-extra-val">28%</span>&nbsp;&nbsp;<span class="gc-extra-dim">LAA scores</span>&nbsp;<span class="gc-extra-val">49%</span>&nbsp;&nbsp;<span class="gc-extra-dim">SD scores</span>&nbsp;<span class="gc-extra-val">46%</span></div>
+  
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">LAA</span> <span class="sp-name">Yusei Kikuchi</span> <span class="xwoba">0.348</span><br><span class="k-props"></span><span class="k-props pp-k-row"><span class="pp-k-source">PP</span>&nbsp;<span class="k-line">K 5.0</span>&nbsp;<span class="k-pover">P(O)&nbsp;32%</span>&nbsp;<span class="pp-edge-no k-edge">-18%</span></span></div>
+      <div class="gc-sp"><span class="sp-team">SD</span> <span class="sp-name">Germán Márquez</span> <span class="xwoba">0.349</span><br><span class="k-props"></span><span class="k-props pp-k-row"><span class="pp-k-source">PP</span>&nbsp;<span class="k-line">K 3.5</span>&nbsp;<span class="k-pover">P(O)&nbsp;55%</span>&nbsp;<span class="pp-edge-lean k-edge">+5%</span></span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · LAA WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.460</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · LAA -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.402</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-warn">48%–65% <span class="spread-pill">±17%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · SD +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.598</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE —</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">10.7 <span class="band">(7–14)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">5.5–15.9 <span class="spread-pill">±10.4</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">—</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+    </div>
+  </div>
+</div>
+
+<div class="pl-section"><div class="pl-title">🎯 Correlated Parlay Suggestions</div><div class="pl-note">Top 5 combo(s) with positive combined model edge in the +280–+450 range. SGP = Same-Game Parlay — sportsbook applies its own correlation haircut to the payout. Market odds shown are the raw multiplication; actual SGP payout will be lower.</div><div class="pl-combos"><div class="pl-combo"><div class="pl-combo-head"><span class="pl-n">2-LEG PARLAY</span> <span class="pl-sgp">SGP</span><span class="pl-price">+311</span><span class="pl-stats">Model: 44.8% &nbsp;·&nbsp; Mkt: 24.3% &nbsp;·&nbsp; Edge: <span class="edge-pos">+20.4%</span></span></div><table class="pl-tbl"><tr><th>Game</th><th>Leg</th><th>Odds</th><th>Model P</th><th>Edge</th></tr><tr><td class="pl-game">STL@HOU</td><td class="pl-leg">STL ML<span class="pl-corr"> corr</span></td><td class="pl-odds">+124</td><td class="pl-prob">45%</td><td class="edge-med">+0.1%</td></tr><tr><td class="pl-game">STL@HOU</td><td class="pl-leg">STL +1.5<span class="pl-corr"> corr</span></td><td class="pl-odds">-120</td><td class="pl-prob">62%</td><td class="edge-pos">+7.0%</td></tr></table></div>
+<div class="pl-combo"><div class="pl-combo-head"><span class="pl-n">2-LEG PARLAY</span> <span class="pl-price">+306</span><span class="pl-stats">Model: 41.1% &nbsp;·&nbsp; Mkt: 24.6% &nbsp;·&nbsp; Edge: <span class="edge-pos">+16.4%</span></span></div><table class="pl-tbl"><tr><th>Game</th><th>Leg</th><th>Odds</th><th>Model P</th><th>Edge</th></tr><tr><td class="pl-game">SF@WSH</td><td class="pl-leg">SF +1.5</td><td class="pl-odds">+108</td><td class="pl-prob">65%</td><td class="edge-pos">+16.5%</td></tr><tr><td class="pl-game">MIL@MIA</td><td class="pl-leg">Woodruff K O3.5</td><td class="pl-odds">-105</td><td class="pl-prob">64%</td><td class="edge-pos">+12.4%</td></tr></table></div>
+<div class="pl-combo"><div class="pl-combo-head"><span class="pl-n">2-LEG PARLAY</span> <span class="pl-price">+297</span><span class="pl-stats">Model: 41.2% &nbsp;·&nbsp; Mkt: 25.2% &nbsp;·&nbsp; Edge: <span class="edge-pos">+16.0%</span></span></div><table class="pl-tbl"><tr><th>Game</th><th>Leg</th><th>Odds</th><th>Model P</th><th>Edge</th></tr><tr><td class="pl-game">SF@WSH</td><td class="pl-leg">SF +1.5</td><td class="pl-odds">+108</td><td class="pl-prob">65%</td><td class="edge-pos">+16.5%</td></tr><tr><td class="pl-game">MIL@MIA</td><td class="pl-leg">Alcantara K O3.5</td><td class="pl-odds">-110</td><td class="pl-prob">64%</td><td class="edge-pos">+11.4%</td></tr></table></div>
+<div class="pl-combo"><div class="pl-combo-head"><span class="pl-n">2-LEG PARLAY</span> <span class="pl-price">+341</span><span class="pl-stats">Model: 37.7% &nbsp;·&nbsp; Mkt: 22.7% &nbsp;·&nbsp; Edge: <span class="edge-pos">+15.0%</span></span></div><table class="pl-tbl"><tr><th>Game</th><th>Leg</th><th>Odds</th><th>Model P</th><th>Edge</th></tr><tr><td class="pl-game">SF@WSH</td><td class="pl-leg">SF +1.5</td><td class="pl-odds">+108</td><td class="pl-prob">65%</td><td class="edge-pos">+16.5%</td></tr><tr><td class="pl-game">MIL@MIA</td><td class="pl-leg">OVER 6.5</td><td class="pl-odds">+112</td><td class="pl-prob">58%</td><td class="edge-pos">+11.1%</td></tr></table></div>
+<div class="pl-combo"><div class="pl-combo-head"><span class="pl-n">2-LEG PARLAY</span> <span class="pl-price">+324</span><span class="pl-stats">Model: 37.7% &nbsp;·&nbsp; Mkt: 23.6% &nbsp;·&nbsp; Edge: <span class="edge-pos">+14.1%</span></span></div><table class="pl-tbl"><tr><th>Game</th><th>Leg</th><th>Odds</th><th>Model P</th><th>Edge</th></tr><tr><td class="pl-game">BAL@CLE</td><td class="pl-leg">Kremer K O4.5</td><td class="pl-odds">+104</td><td class="pl-prob">58%</td><td class="edge-pos">+9.3%</td></tr><tr><td class="pl-game">SF@WSH</td><td class="pl-leg">SF +1.5</td><td class="pl-odds">+108</td><td class="pl-prob">65%</td><td class="edge-pos">+16.5%</td></tr></table></div></div></div>
+
+<div class="defs">
+  <div class="defs-title">&#9432; GLOSSARY</div>
+  <div class="defs-grid">
+
+    <div class="def-section">
+      <div class="def-heading">PROBABILITIES</div>
+      <div class="def-row"><span class="def-term" style="color:#ffffff">Model</span><span class="def-desc">Our simulation's estimated win/cover/over probability for this game</span></div>
+      <div class="def-row"><span class="def-term" style="color:#58a6ff">Pinnacle</span><span class="def-desc">Sharp offshore book — de-vigged implied probability. Best market signal available. Used as the sanity check</span></div>
+      <div class="def-row"><span class="def-term" style="color:#8b949e">Retail</span><span class="def-desc">US sportsbook (DraftKings / FanDuel / BetMGM) — de-vigged implied probability. This is what you actually bet into</span></div>
+      <div class="def-row"><span class="def-term">Edge</span><span class="def-desc">Model prob minus Retail implied prob. Positive = model likes this side more than the market does</span></div>
+      <div class="def-row"><span class="def-term">Band (3–7)</span><span class="def-desc">25th–75th percentile range from the simulation. The game lands inside this range 50% of the time</span></div>
+    </div>
+
+    <div class="def-section">
+      <div class="def-heading">BET MARKETS</div>
+      <div class="def-row"><span class="def-term">ML</span><span class="def-desc">Moneyline — straight win/loss bet. No spread. Model uses a 35% model / 65% Vegas blend since our sim only models pitching</span></div>
+      <div class="def-row"><span class="def-term">RL</span><span class="def-desc">Run Line — home team -1.5 spread. Home team must win by 2+ runs to cover. Primary model bet</span></div>
+      <div class="def-row"><span class="def-term">O/U</span><span class="def-desc">Over/Under — total combined runs scored. Model picks the better edge direction (OVER or UNDER)</span></div>
+      <div class="def-row"><span class="def-term">K prop</span><span class="def-desc">Strikeout prop for the starting pitcher. Line = posted K total. P(O) = model's probability of going over that line. Edge = P(O) minus market implied</span></div>
+    </div>
+
+    <div class="def-section">
+      <div class="def-heading">THREE-PART LOCK GATES</div>
+      <div class="def-row"><span class="def-term">Gate 1: Sanity</span><span class="def-desc">|Model − Pinnacle| must be ≤ 4%. If the model disagrees with the sharp market by more than 4 points, something is wrong — skip the game</span></div>
+      <div class="def-row"><span class="def-term">Gate 2: Odds Floor</span><span class="def-desc">Retail ML must be better than −225. Avoids heavy favorites where you risk too much to win too little</span></div>
+      <div class="def-row"><span class="def-term">Gate 3: Edge</span><span class="def-desc">Model must beat the retail implied probability by ≥ 1.0%. This is the actual closing line value (CLV) edge you're betting on</span></div>
+      <div class="def-row"><span class="def-term">TIER 1</span><span class="def-desc">Edge ≥ 3.0% — strong signal. Quarter-Kelly sizing</span></div>
+      <div class="def-row"><span class="def-term">TIER 2</span><span class="def-desc">Edge ≥ 1.0% — medium signal. Eighth-Kelly sizing</span></div>
+    </div>
+
+    <div class="def-section">
+      <div class="def-heading">STARTER FLAGS</div>
+      <div class="def-row"><span class="def-term" style="color:#d29922">VOLATILE</span><span class="def-desc">Pitcher's recent velocity is trending down — higher variance, less reliable projection</span></div>
+      <div class="def-row"><span class="def-term" style="color:#3fb950">GAINER</span><span class="def-desc">Pitcher's velocity is trending up — potentially outperforming their season stats</span></div>
+      <div class="def-row"><span class="def-term">xwOBA</span><span class="def-desc">Expected weighted on-base average allowed. Measures pitcher quality based on contact quality, not outcomes. Lower = better pitcher. League avg ≈ 0.315</span></div>
+      <div class="def-row"><span class="def-term">✓ confirmed</span><span class="def-desc">Official lineup confirmed by the team</span></div>
+      <div class="def-row"><span class="def-term">~ projected</span><span class="def-desc">Probable starter based on rotation — not yet officially confirmed</span></div>
+    </div>
+
+    <div class="def-section">
+      <div class="def-heading">HOW IT WORKS</div>
+      <div class="def-row"><span class="def-term">Level 1</span><span class="def-desc">XGBoost + LightGBM + CatBoost ensemble predicts the probability each team covers the run-line from both perspectives independently — not just 1 minus the other side</span></div>
+      <div class="def-row"><span class="def-term">Level 2</span><span class="def-desc">Bayesian hierarchical stacker adjusts raw probability based on pitcher matchup type (LHP vs RHP), lineup quality, bullpen strength, umpire K/BB tendencies, and how much the model agrees with the Pinnacle sharp market</span></div>
+      <div class="def-row"><span class="def-term">Key inputs</span><span class="def-desc">Pitcher xwOBA/K%, bullpen ERA/WHIP, batting matchup quality vs LHP/RHP, park factors, circadian travel edge, umpire tendencies, Vegas line. Trained on 2023–2025 MLB games (~7,300 games)</span></div>
+    </div>
+
+    <div class="def-section">
+      <div class="def-heading">WHEN TO BET</div>
+      <div class="def-row"><span class="def-term" style="color:#d2a8ff">TIER 1 (≥3%)</span><span class="def-desc">Strong signal — quarter-Kelly stake. All three lock gates passed with a meaningful edge over the retail market</span></div>
+      <div class="def-row"><span class="def-term" style="color:#79c0ff">TIER 2 (≥1%)</span><span class="def-desc">Medium signal — eighth-Kelly stake. All three gates passed but edge is smaller; size accordingly</span></div>
+      <div class="def-row"><span class="def-term" style="color:#f85149">DO NOT BET</span><span class="def-desc">"No Pinnacle" games (no sharp market sanity check) or games marked "Sanity fail" (model disagrees with Pinnacle by &gt;4 points)</span></div>
+      <div class="def-row"><span class="def-term">2025 Record</span><span class="def-desc">Model ≥ 0.580 → 58.3% win rate (+11.4% ROI) · Model ≥ 0.600 → 62.5% win rate (+19.3% ROI) across 2,398 games. Best months: Apr, May, Aug, Sep</span></div>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>

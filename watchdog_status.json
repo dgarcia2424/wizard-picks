@@ -1,0 +1,19 @@
+{
+  "last_run": "2026-04-19T09:17:02",
+  "elapsed_s": 0.6,
+  "total_checks": 35,
+  "ok": 34,
+  "warn": 1,
+  "fail": 0,
+  "repaired": 1,
+  "overall": "warn",
+  "issues": [
+    {
+      "name": "lineup_quality",
+      "status": "warn",
+      "message": "STALE: 9.8h old (limit 5h) \u2014 data/statcast/lineup_quality_today.parquet | REPAIRED via build_lineup_quality.py",
+      "repaired": true,
+      "repair_cmd": "build_lineup_quality.py"
+    }
+  ]
+}

@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wizard Report — 2026-04-14</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+         background: #0f1117; color: #e2e8f0; padding: 20px; font-size: 13px; }
+
+  /* Header */
+  .header { background: #1a2035; border-radius: 10px; padding: 20px 24px;
+             margin-bottom: 20px; border-left: 4px solid #3a8fc7; }
+  .header h1 { font-size: 22px; font-weight: 700; color: #fff; letter-spacing: 0.3px; }
+  .header .date { color: #94a3b8; font-size: 13px; margin-top: 3px; }
+  .header .sub  { margin-top: 8px; font-size: 14px; font-weight: 600; }
+  .header-none .sub  { color: #64748b; }
+  .header-locks .sub { color: #2eab6a; }
+  .header .gen  { color: #475569; font-size: 11px; margin-top: 6px; }
+  .header .rules { color: #475569; font-size: 11px; margin-top: 4px; }
+
+  /* Lock cards */
+  .locks-section { margin-bottom: 24px; }
+  .lock-card { border-radius: 8px; padding: 16px 20px; margin-bottom: 12px; }
+  .lock-t1 { background: #0d2b1a; border: 1px solid #2eab6a; }
+  .lock-t2 { background: #2a1f0a; border: 1px solid #d4804a; }
+  .lock-header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+                  margin-bottom: 8px; }
+  .lock-tier-badge { font-size: 10px; font-weight: 800; letter-spacing: 0.8px;
+                      padding: 3px 8px; border-radius: 4px; }
+  .lock-t1 .lock-tier-badge { background: #2eab6a; color: #fff; }
+  .lock-t2 .lock-tier-badge { background: #d4804a; color: #fff; }
+  .lock-game { font-size: 17px; font-weight: 700; color: #fff; }
+  .lock-odds { color: #94a3b8; font-size: 13px; }
+  .lock-stake { margin-left: auto; font-size: 18px; font-weight: 800; color: #fff; }
+  .lock-bet  { font-size: 14px; font-weight: 700; color: #cbd5e1; margin-bottom: 6px; }
+  .lock-probs { font-size: 13px; color: #94a3b8; margin-bottom: 5px; }
+  .lock-probs strong { color: #2eab6a; }
+  .lock-t2 .lock-probs strong { color: #d4804a; }
+  .lock-why  { font-size: 11px; color: #64748b; margin-bottom: 5px; }
+  .lock-sps  { font-size: 11px; color: #64748b; }
+
+  /* Table */
+  .table-wrap { background: #1a2035; border-radius: 10px; overflow: hidden; }
+  .table-title { padding: 14px 20px 10px; font-size: 11px; font-weight: 700;
+                  color: #64748b; letter-spacing: 0.8px; text-transform: uppercase;
+                  border-bottom: 1px solid #243055; }
+  table { width: 100%; border-collapse: collapse; }
+  th { background: #141d30; color: #64748b; font-size: 10px; font-weight: 700;
+        text-transform: uppercase; letter-spacing: 0.6px;
+        padding: 9px 14px; text-align: left; border-bottom: 1px solid #243055; }
+  td { padding: 11px 14px; border-bottom: 1px solid #1e2a42; vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+
+  /* Row tints */
+  .row-tier1 td  { background: #0d2b1a; }
+  .row-tier2 td  { background: #2a1f0a; }
+  .row-nearmiss td { background: #1a1f10; }
+
+  /* Matchup cell */
+  .teams { font-size: 14px; font-weight: 700; color: #e2e8f0; }
+  .conf-badge { font-size: 10px; color: #475569; }
+  .gtime { font-size: 10px; color: #475569; }
+  .odds-line { font-size: 11px; color: #64748b; margin-top: 2px; display: block; }
+
+  /* Starters */
+  .sp-label { color: #475569; font-size: 10px; }
+  .xwoba { color: #64748b; font-size: 11px; }
+  .sp-flag { font-size: 9px; font-weight: 700; color: #d4804a;
+              border: 1px solid #d4804a; border-radius: 3px; padding: 1px 4px; }
+
+  /* Probs */
+  .td-probs { font-size: 12px; white-space: nowrap; }
+  .prob-model { color: #e2e8f0; font-weight: 600; }
+  .prob-pin   { color: #3a8fc7; }
+  .prob-ret   { color: #94a3b8; }
+  .prob-sep   { color: #334155; font-size: 10px; }
+
+  /* Gate badges */
+  .badge { display: inline-block; font-size: 10px; font-weight: 700;
+            letter-spacing: 0.4px; padding: 3px 7px; border-radius: 4px; }
+  .badge-green  { background: #0d3320; color: #2eab6a; border: 1px solid #2eab6a; }
+  .badge-amber  { background: #2a1800; color: #d4804a; border: 1px solid #d4804a; }
+  .badge-yellow { background: #2a2500; color: #d4b84a; border: 1px solid #d4b84a; }
+  .badge-orange { background: #2a1500; color: #d47a4a; border: 1px solid #d47a4a; }
+  .badge-red    { background: #2a0d0d; color: #e05555; border: 1px solid #e05555; }
+  .badge-gray   { background: #1a2035; color: #475569; border: 1px solid #334155; }
+  .edge-pct { font-size: 12px; font-weight: 600; color: #94a3b8; }
+  .stake    { font-size: 13px; font-weight: 700; color: #e2e8f0; }
+
+  /* Column widths */
+  .td-matchup  { width: 22%; min-width: 130px; }
+  .td-starters { width: 30%; }
+  .td-probs    { width: 26%; }
+  .td-gate     { width: 22%; }
+</style>
+</head>
+<body>
+
+<div class="header header-none">
+  <h1>THE WIZARD REPORT</h1>
+  <div class="date">2026-04-14</div>
+  <div class="sub">0 Actionable Edges — No game passed all three gates</div>
+  <div class="gen">Generated 22:59 ET</div>
+  <div class="rules">Three-Part Lock: |P_model − P_Pinnacle| ≤ 4% &nbsp;·&nbsp; odds ≥ −225 &nbsp;·&nbsp; edge ≥ 1.0% vs retail</div>
+</div>
+
+
+
+<div class="table-wrap">
+  <div class="table-title">All Games — 2026-04-14 (15 games)</div>
+  <table>
+    <thead>
+      <tr>
+        <th>Game</th>
+        <th>Starters</th>
+        <th>P<sub>model</sub> / P<sub>Pinnacle</sub> / P<sub>retail</sub></th>
+        <th>Gate</th>
+      </tr>
+    </thead>
+    <tbody>
+  <tr class="">
+    <td class="td-matchup"><span class="teams">AZ&nbsp;@&nbsp;BAL</span>&nbsp;<span class="conf-badge">~</span>&nbsp;<span class="gtime">6:35 pm ET</span><br><span class="odds-line">—</span></td>
+    <td class="td-starters"><span class="sp-label">BAL:</span> Trevor Rogers <span class="xwoba">0.288</span><br><span class="sp-label">AZ:</span> Merrill Kelly <span class="xwoba">0.326</span></td>
+    <td class="td-probs"><span class="prob-model">0.376</span>&nbsp;<span class="prob-sep">blend</span></td>
+    <td class="td-gate"><span class="badge badge-gray">No Pinnacle</span></td>
+  </tr>
+  <tr class="">
+    <td class="td-matchup"><span class="teams">KC&nbsp;@&nbsp;DET</span>&nbsp;<span class="conf-badge">~</span>&nbsp;<span class="gtime">6:40 pm ET</span><br><span class="odds-line">ML -122 · RL -189</span></td>
+    <td class="td-starters"><span class="sp-label">DET:</span> Framber Valdez <span class="xwoba">0.327</span><br><span class="sp-label">KC:</span> Cole Ragans <span class="xwoba">0.301</span></td>
+    <td class="td-probs"><span class="prob-model">0.369</span>&nbsp;<span class="prob-sep">/</span>&nbsp;<span class="prob-pin">0.342</span>&nbsp;<span class="prob-sep">/</span>&nbsp;<span class="prob-ret">0.625</span></td>
+    <td class="td-gate"><span class="badge badge-gray">Edge -25.6%</span></td>
+  </tr>
+  <tr class="">
+    <td class="td-matchup"><span class="teams">WSH&nbsp;@&nbsp;PIT</span>&nbsp;<span class="conf-badge">~</span>&nbsp;<span class="gtime">6:40 pm ET</span><br><span class="odds-line">ML -186 · RL +109</span></td>
+    <td class="td-starters"><span class="sp-label">PIT:</span> Mitch Keller <span class="xwoba">0.294</span><br><span class="sp-label">WSH:</span> Miles Mikolas <span class="xwoba">0.368</span></td>
+    <td class="td-probs"><span class="prob-model">0.256</span>&nbsp;<span class="prob-sep">/</span>&nbsp;<span class="prob-pin">0.458</span>&nbsp;<span class="prob-sep">/</span>&nbsp;<span class="prob-ret">0.458</span></td>
+    <td class="td-gate"><span class="badge badge-red">Sanity +20.3%</span></td>
+  </tr>
+  <tr class="">
+    <td class="td-matchup"><span class="teams">SF&nbsp;@&nbsp;CIN</span>&nbsp;<span class="conf-badge">~</span>&nbsp;<span class="gtime">6:40 pm ET</span><br><span class="odds-line">ML -115 · RL -177</span></td>
+    <td class="td-starters"><span class="sp-label">CIN:</span> Brady Singer <span class="xwoba">0.387</span><br><span class="sp-label">SF:</span> Robbie Ray <span class="xwoba">0.301</span></td>
+    <td class="td-probs"><span class="prob-model">0.324</span>&nbsp;<span class="prob-sep">/</span>&nbsp;<span class="prob-pin">0.347</span>&nbsp;<span class="prob-sep">/</span>&nbsp;<span class="prob-ret">0.611</span></td>
+    <td class="td-gate"><span class="badge badge-gray">Edge -28.7%</span></td>
+  </tr>
+  <tr class="">
+    <td class="td-matchup"><span class="teams">CHC&nbsp;@&nbsp;PHI</span>&nbsp;<span class="conf-badge">~</span>&nbsp;<span class="gtime">6:40 pm ET</span><br><span class="odds-line">ML -143 · RL +144</span></td>
+    <td class="td-starters"><span class="sp-label">PHI:</span> Aaron Nola <span class="xwoba">0.321</span><br><span class="sp-label">CHC:</span> Riley Martin <span class="xwoba">0.318</span></td>
+    <td class="td-probs"><span class="prob-model">0.309</span>&nbsp;<span class="prob-sep">/</span>&nbsp;<span class="prob-pin">0.395</span>&nbsp;<span class="prob-sep">/</span>&nbsp;<span class="prob-ret">0.392</span></td>
+    <td class="td-gate"><span class="badge badge-red">Sanity +8.5%</span></td>
+  </tr>
+  <tr class="">
+    <td class="td-matchup"><span class="teams">LAA&nbsp;@&nbsp;NYY</span>&nbsp;<span class="conf-badge">~</span>&nbsp;<span class="gtime">7:05 pm ET</span><br><span class="odds-line">ML -186 · RL +113</span></td>
+    <td class="td-starters"><span class="sp-label">NYY:</span> Ryan Weathers <span class="xwoba">0.344</span><br><span class="sp-label">LAA:</span> Reid Detmers <span class="sp-flag">VOLATILE</span> <span class="xwoba">0.269</span></td>
+    <td class="td-probs"><span class="prob-model">0.376</span>&nbsp;<span class="prob-sep">/</span>&nbsp;<span class="prob-pin">0.447</span>&nbsp;<span class="prob-sep">/</span>&nbsp;<span class="prob-ret">0.449</span></td>
+    <td class="td-gate"><span class="badge badge-red">Sanity +7.2%</span></td>
+  </tr>
+  <tr class="">
+    <td class="td-matchup"><span class="teams">MIA&nbsp;@&nbsp;ATL</span>&nbsp;<span class="conf-badge">~</span>&nbsp;<span class="gtime">7:15 pm ET</span><br><span class="odds-line">ML -163 · RL +129</span></td>
+    <td class="td-starters"><span class="sp-label">ATL:</span> Reynaldo López <span class="xwoba">0.296</span><br><span class="sp-label">MIA:</span> Max Meyer <span class="xwoba">0.327</span></td>
+    <td class="td-probs"><span class="prob-model">0.411</span>&nbsp;<span class="prob-sep">/</span>&nbsp;<span class="prob-pin">0.415</span>&nbsp;<span class="prob-sep">/</span>&nbsp;<span class="prob-ret">0.417</span></td>
+    <td class="td-gate"><span class="badge badge-orange">Edge -0.7%</span></td>
+  </tr>
+  <tr class="">
+    <td class="td-matchup"><span class="teams">BOS&nbsp;@&nbsp;MIN</span>&nbsp;<span class="conf-badge">~</span>&nbsp;<span class="gtime">7:40 pm ET</span><br><span class="odds-line">ML +113 · RL -149</span></td>
+    <td class="td-starters"><span class="sp-label">MIN:</span> Mick Abel <span class="xwoba">0.405</span><br><span class="sp-label">BOS:</span> Sonny Gray <span class="xwoba">0.301</span></td>
+    <td class="td-probs"><span class="prob-model">0.168</span>&nbsp;<span class="prob-sep">/</span>&nbsp;<span class="prob-pin">0.579</span>&nbsp;<span class="prob-sep">/</span>&nbsp;<span class="prob-ret">0.572</span></td>
+    <td class="td-gate"><span class="badge badge-red">Sanity +41.1%</span></td>
+  </tr>
+  <tr class="">
+    <td class="td-matchup"><span class="teams">TB&nbsp;@&nbsp;CWS</span>&nbsp;<span class="conf-badge">~</span>&nbsp;<span class="gtime">7:40 pm ET</span><br><span class="odds-line">ML +119 · RL -149</span></td>
+    <td class="td-starters"><span class="sp-label">CWS:</span> Noah Schultz <span class="xwoba">0.311</span><br><span class="sp-label">TB:</span> Shane Mcclanahan <span class="xwoba">0.294</span></td>
+    <td class="td-probs"><span class="prob-model">0.187</span>&nbsp;<span class="prob-sep">/</span>&nbsp;<span class="prob-pin">0.573</span>&nbsp;<span class="prob-sep">/</span>&nbsp;<span class="prob-ret">0.572</span></td>
+    <td class="td-gate"><span class="badge badge-red">Sanity +38.6%</span></td>
+  </tr>
+  <tr class="">
+    <td class="td-matchup"><span class="teams">TOR&nbsp;@&nbsp;MIL</span>&nbsp;<span class="conf-badge">~</span>&nbsp;<span class="gtime">7:40 pm ET</span><br><span class="odds-line">ML -131 · RL +169</span></td>
+    <td class="td-starters"><span class="sp-label">MIL:</span> Jacob Misiorowski <span class="xwoba">0.281</span><br><span class="sp-label">TOR:</span> Kevin Gausman <span class="xwoba">0.266</span></td>
+    <td class="td-probs"><span class="prob-model">0.283</span>&nbsp;<span class="prob-sep">/</span>&nbsp;<span class="prob-pin">0.343</span>&nbsp;<span class="prob-sep">/</span>&nbsp;<span class="prob-ret">0.355</span></td>
+    <td class="td-gate"><span class="badge badge-red">Sanity +6.0%</span></td>
+  </tr>
+  <tr class="">
+    <td class="td-matchup"><span class="teams">CLE&nbsp;@&nbsp;STL</span>&nbsp;<span class="conf-badge">~</span>&nbsp;<span class="gtime">7:45 pm ET</span><br><span class="odds-line">ML +100 · RL -168</span></td>
+    <td class="td-starters"><span class="sp-label">STL:</span> Michael Mcgreevy <span class="sp-flag">VOLATILE</span> <span class="xwoba">0.366</span><br><span class="sp-label">CLE:</span> Joey Cantillo <span class="xwoba">0.278</span></td>
+    <td class="td-probs"><span class="prob-model">0.214</span>&nbsp;<span class="prob-sep">/</span>&nbsp;<span class="prob-pin">0.604</span>&nbsp;<span class="prob-sep">/</span>&nbsp;<span class="prob-ret">0.600</span></td>
+    <td class="td-gate"><span class="badge badge-red">Sanity +39.0%</span></td>
+  </tr>
+  <tr class="">
+    <td class="td-matchup"><span class="teams">COL&nbsp;@&nbsp;HOU</span>&nbsp;<span class="conf-badge">~</span>&nbsp;<span class="gtime">8:10 pm ET</span><br><span class="odds-line">—</span></td>
+    <td class="td-starters"><span class="sp-label">HOU:</span> Colton Gordon <span class="xwoba">—</span><br><span class="sp-label">COL:</span> Tbd <span class="xwoba">—</span></td>
+    <td class="td-probs"><span class="prob-model">—</span>&nbsp;<span class="prob-sep">blend</span></td>
+    <td class="td-gate"><span class="badge badge-gray">TBD Starters</span></td>
+  </tr>
+  <tr class="">
+    <td class="td-matchup"><span class="teams">SEA&nbsp;@&nbsp;SD</span>&nbsp;<span class="conf-badge">~</span>&nbsp;<span class="gtime">9:40 pm ET</span><br><span class="odds-line">—</span></td>
+    <td class="td-starters"><span class="sp-label">SD:</span> Michael King <span class="xwoba">0.306</span><br><span class="sp-label">SEA:</span> Bryan Woo <span class="xwoba">0.243</span></td>
+    <td class="td-probs"><span class="prob-model">0.205</span>&nbsp;<span class="prob-sep">blend</span></td>
+    <td class="td-gate"><span class="badge badge-gray">No Pinnacle</span></td>
+  </tr>
+  <tr class="">
+    <td class="td-matchup"><span class="teams">TEX&nbsp;@&nbsp;ATH</span>&nbsp;<span class="conf-badge">~</span>&nbsp;<span class="gtime">9:40 pm ET</span><br><span class="odds-line">—</span></td>
+    <td class="td-starters"><span class="sp-label">ATH:</span> Jeffrey Springs <span class="xwoba">0.274</span><br><span class="sp-label">TEX:</span> Mackenzie Gore <span class="xwoba">0.272</span></td>
+    <td class="td-probs"><span class="prob-model">0.303</span>&nbsp;<span class="prob-sep">blend</span></td>
+    <td class="td-gate"><span class="badge badge-gray">No Pinnacle</span></td>
+  </tr>
+  <tr class="">
+    <td class="td-matchup"><span class="teams">NYM&nbsp;@&nbsp;LAD</span>&nbsp;<span class="conf-badge">~</span>&nbsp;<span class="gtime">10:10 pm ET</span><br><span class="odds-line">—</span></td>
+    <td class="td-starters"><span class="sp-label">LAD:</span> Yoshinobu Yamamoto <span class="xwoba">0.289</span><br><span class="sp-label">NYM:</span> Nolan Mclean <span class="xwoba">0.223</span></td>
+    <td class="td-probs"><span class="prob-model">0.289</span>&nbsp;<span class="prob-sep">blend</span></td>
+    <td class="td-gate"><span class="badge badge-gray">No Pinnacle</span></td>
+  </tr>
+    </tbody>
+  </table>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,918 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wizard Report — 2025-09-15</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  background: #0d1117; color: #c9d1d9; padding: 16px; font-size: 13px;
+}
+
+/* ── Header ─────────────────────────────────────── */
+.hdr {
+  background: #161b22; border: 1px solid #21262d;
+  border-left: 4px solid #388bfd;
+  border-radius: 8px; padding: 18px 22px; margin-bottom: 16px;
+}
+.hdr h1 { font-size: 20px; font-weight: 800; color: #ffffff; letter-spacing: .5px; }
+.hdr .date { color: #8b949e; font-size: 12px; margin-top: 2px; }
+.hdr .sub  { font-size: 15px; font-weight: 700; margin-top: 8px; }
+.hdr-none .sub { color: #6e7681; }
+.hdr-lock .sub { color: #3fb950; }
+.hdr .meta { color: #6e7681; font-size: 11px; margin-top: 6px; }
+
+/* ── Game cards ──────────────────────────────────── */
+.gc {
+  background: #161b22; border: 1px solid #21262d;
+  border-radius: 8px; margin-bottom: 12px; overflow: hidden;
+}
+.card-t1   { border-left: 3px solid #3fb950; }
+.card-t2   { border-left: 3px solid #d29922; }
+.card-near { border-left: 3px solid #388bfd; }
+.card-npin { border-left: 3px solid #30363d; }
+
+/* Card header */
+.gc-head {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 8px;
+  padding: 10px 16px; background: #1c2128; border-bottom: 1px solid #21262d;
+}
+.gc-head-left  { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.gc-head-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.gc-teams { font-size: 16px; font-weight: 800; color: #ffffff; }
+.gc-time  { font-size: 11px; color: #8b949e; }
+.gc-conf  { font-size: 10px; color: #6e7681; }
+.gc-odds  { font-size: 12px; color: #8b949e; }
+
+/* Score prediction row */
+.gc-score {
+  padding: 6px 16px; background: #0d1117;
+  font-size: 12px; color: #8b949e;
+  border-bottom: 1px solid #21262d;
+}
+.score-val { color: #ffffff; font-weight: 700; }
+.score-lbl { color: #6e7681; font-size: 11px; }
+.score-sep { color: #30363d; }
+.ou-line   { color: #6e7681; font-size: 11px; }
+.band      { color: #6e7681; font-size: 11px; }
+
+/* Body: starters + markets side by side */
+.gc-body {
+  display: flex; gap: 0;
+}
+.gc-starters {
+  padding: 12px 16px; min-width: 220px; max-width: 280px;
+  border-right: 1px solid #21262d; flex-shrink: 0;
+}
+.gc-sp { margin-bottom: 10px; line-height: 1.5; }
+.gc-sp:last-of-type { margin-bottom: 0; }
+.sp-team { color: #6e7681; font-size: 10px; font-weight: 700;
+            text-transform: uppercase; letter-spacing: .5px; }
+.sp-name { color: #ffffff; font-weight: 600; font-size: 13px; }
+.xwoba   { color: #8b949e; font-size: 11px; margin-left: 4px; }
+.sp-flag { font-size: 9px; font-weight: 700; color: #d29922;
+            border: 1px solid #d29922; border-radius: 3px; padding: 1px 4px; margin-left: 4px; }
+.k-props { font-size: 11px; }
+.k-line  { color: #6e7681; }
+.k-pover { color: #8b949e; }
+.k-edge  { font-weight: 600; }
+.tbd-notice { font-size: 11px; color: #d29922; margin-top: 6px; }
+
+/* Market grid */
+.gc-markets {
+  display: flex; flex: 1; flex-wrap: wrap;
+}
+.mkt {
+  flex: 1; min-width: 160px;
+  padding: 12px 14px;
+  border-right: 1px solid #21262d;
+}
+.mkt:last-child { border-right: none; }
+.mkt-label {
+  font-size: 10px; font-weight: 800; color: #8b949e;
+  text-transform: uppercase; letter-spacing: .6px;
+  margin-bottom: 8px;
+}
+.mkt-tbl { border-collapse: collapse; width: 100%; }
+.mkt-tbl .ml {
+  color: #6e7681; font-size: 11px; padding: 2px 0; width: 55%;
+}
+.mkt-tbl .mv {
+  font-size: 13px; font-weight: 600; padding: 2px 0; text-align: right;
+}
+.mkt-badge { margin-top: 8px; }
+
+/* Value colours */
+.bright    { color: #ffffff; }
+.pin       { color: #58a6ff; }
+.ret       { color: #8b949e; }
+.val-green { color: #3fb950; }
+.val-yellow{ color: #d29922; }
+.val-red   { color: #f85149; }
+.val-dim   { color: #6e7681; }
+
+/* Shadow ensemble range colours */
+.shadow-agree { color: #3fb950; font-size: 12px; }
+.shadow-warn  { color: #d29922; font-size: 12px; }
+.shadow-split { color: #f85149; font-size: 12px; }
+.spread-pill  {
+  display: inline-block; font-size: 10px; font-weight: 700;
+  background: rgba(255,255,255,0.08); border-radius: 3px;
+  padding: 0 4px; margin-left: 3px; vertical-align: middle;
+}
+
+/* Quantile band colours (total Q10–Q90 range) */
+.qband-tight { color: #3fb950; font-size: 12px; }   /* spread < 4.0 — narrow, confident */
+.qband-mid   { color: #d29922; font-size: 12px; }   /* spread 4–6   — moderate */
+.qband-wide  { color: #f85149; font-size: 12px; }   /* spread > 6.0 — high variance */
+
+/* Badges */
+.badge {
+  display: inline-block; font-size: 10px; font-weight: 700;
+  letter-spacing: .4px; padding: 2px 7px; border-radius: 4px;
+}
+.badge-green  { background: #0f2d1a; color: #3fb950; border: 1px solid #3fb950; }
+.badge-amber  { background: #2d1b00; color: #d29922; border: 1px solid #d29922; }
+.badge-yellow { background: #2d2800; color: #e3b341; border: 1px solid #e3b341; }
+.badge-orange { background: #2d1600; color: #db6d28; border: 1px solid #db6d28; }
+.badge-red    { background: #2d0d0d; color: #f85149; border: 1px solid #f85149; }
+.badge-gray   { background: #161b22; color: #6e7681; border: 1px solid #30363d; }
+.stake { color: #3fb950; font-weight: 800; margin-left: 4px; }
+
+/* Glossary */
+.defs {
+  margin-top: 16px;
+  background: #161b22; border: 1px solid #21262d; border-radius: 8px;
+  padding: 16px 20px;
+}
+.defs-title {
+  font-size: 11px; font-weight: 700; color: #6e7681;
+  letter-spacing: .8px; text-transform: uppercase; margin-bottom: 14px;
+}
+.defs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 20px;
+}
+.def-section { }
+.def-heading {
+  font-size: 10px; font-weight: 700; color: #388bfd;
+  letter-spacing: .6px; text-transform: uppercase;
+  margin-bottom: 8px; padding-bottom: 4px;
+  border-bottom: 1px solid #21262d;
+}
+.def-row {
+  display: flex; gap: 8px; margin-bottom: 6px; align-items: baseline;
+}
+.def-term {
+  font-size: 11px; font-weight: 700; color: #c9d1d9;
+  white-space: nowrap; min-width: 90px; flex-shrink: 0;
+}
+.def-desc {
+  font-size: 11px; color: #6e7681; line-height: 1.4;
+}
+
+@media (max-width: 700px) {
+  .gc-body { flex-direction: column; }
+  .gc-starters { max-width: 100%; border-right: none;
+                  border-bottom: 1px solid #21262d; }
+  .mkt { min-width: 130px; }
+}
+
+/* ── Parlay suggestions ────────────────────────────── */
+.pl-section {
+  background: #161b22; border: 1px solid #21262d;
+  border-left: 4px solid #8957e5;
+  border-radius: 8px; padding: 16px 20px; margin-bottom: 16px;
+}
+.pl-title {
+  font-size: 14px; font-weight: 800; color: #d2a8ff;
+  letter-spacing: .3px; margin-bottom: 4px;
+}
+.pl-note {
+  font-size: 11px; color: #6e7681; margin-bottom: 12px; line-height: 1.5;
+}
+.pl-combos { display: flex; flex-direction: column; gap: 12px; }
+.pl-combo {
+  background: #0d1117; border: 1px solid #21262d;
+  border-radius: 6px; overflow: hidden;
+}
+.pl-combo-head {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+  padding: 8px 14px; background: #1c2128; border-bottom: 1px solid #21262d;
+}
+.pl-n {
+  font-size: 10px; font-weight: 800; color: #6e7681;
+  letter-spacing: 1px; text-transform: uppercase;
+}
+.pl-sgp {
+  font-size: 9px; font-weight: 700; color: #d29922;
+  background: #2d2a1f; border: 1px solid #d29922;
+  border-radius: 3px; padding: 1px 5px; letter-spacing: .5px;
+}
+.pl-price {
+  font-size: 18px; font-weight: 800; color: #d2a8ff;
+}
+.pl-stats {
+  font-size: 11px; color: #8b949e; margin-left: auto;
+}
+.pl-tbl {
+  width: 100%; border-collapse: collapse; font-size: 12px;
+}
+.pl-tbl th {
+  padding: 5px 14px; text-align: left;
+  font-size: 10px; font-weight: 700; color: #6e7681;
+  letter-spacing: .5px; text-transform: uppercase;
+  border-bottom: 1px solid #21262d;
+}
+.pl-tbl td {
+  padding: 6px 14px; border-bottom: 1px solid #161b22;
+  vertical-align: middle;
+}
+.pl-tbl tr:last-child td { border-bottom: none; }
+.pl-game  { color: #8b949e; font-size: 11px; white-space: nowrap; }
+.pl-leg   { color: #c9d1d9; font-weight: 600; }
+.pl-odds  { color: #ffffff; font-weight: 700; white-space: nowrap; }
+.pl-prob  { color: #8b949e; }
+.pl-corr  { font-size: 10px; color: #d29922; font-style: italic; }
+.edge-pos { color: #3fb950; font-weight: 700; }
+.edge-med { color: #d29922; font-weight: 700; }
+.edge-neg { color: #f85149; font-weight: 700; }
+.pl-empty {
+  font-size: 12px; color: #6e7681; font-style: italic; padding: 8px 0;
+}
+</style>
+</head>
+<body>
+
+<div class="hdr hdr-none">
+  <h1>THE WIZARD REPORT</h1>
+  <div class="date">2025-09-15</div>
+  <div class="sub">0 Actionable Edges — No game passed all three gates today</div>
+  <div class="meta">Generated 04:32 ET &nbsp;·&nbsp;
+    Three-Part Lock: |P_model − P_Pinnacle| ≤ 4% &nbsp;·&nbsp; odds ≥ −225 &nbsp;·&nbsp; edge ≥ 1.0% vs retail
+  </div>
+</div>
+
+<div class="gc card-npin">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">CHC @ PIT</span>
+      <span class="gc-time">6:40 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds"></span>
+      
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">PIT</span>&nbsp;<span class="score-val">4.2</span> <span class="band">(2–6)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">CHC</span>&nbsp;<span class="score-val">3.9</span> <span class="band">(2–5)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">8.1</span> <span class="band">(5–10)</span></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">PIT</span> <span class="sp-name">Braxton Ashcraft</span> <span class="xwoba">0.241</span></div>
+      <div class="gc-sp"><span class="sp-team">CHC</span> <span class="sp-name">Jameson Taillon</span> <span class="xwoba">0.302</span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · PIT WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.494</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · PIT -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.397</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-warn">47%–59% <span class="spread-pill">±12%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · CHC +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.603</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE —</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">8.1 <span class="band">(5–10)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">5.2–15.6 <span class="spread-pill">±10.4</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">—</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc card-npin">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">ATL @ WSH</span>
+      <span class="gc-time">6:45 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds"></span>
+      
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">WSH</span>&nbsp;<span class="score-val">3.8</span> <span class="band">(2–5)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">ATL</span>&nbsp;<span class="score-val">4.9</span> <span class="band">(2–7)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">8.6</span> <span class="band">(5–11)</span></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">WSH</span> <span class="sp-name">Mitchell Parker</span> <span class="xwoba">0.291</span></div>
+      <div class="gc-sp"><span class="sp-team">ATL</span> <span class="sp-name">Spencer Strider</span> <span class="xwoba">0.307</span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · WSH WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.350</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · WSH -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.301</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-agree">44%–51% <span class="spread-pill">±7%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · ATL +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.699</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE —</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">8.6 <span class="band">(5–11)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">5.3–16.5 <span class="spread-pill">±11.1</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">—</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc card-npin">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">TOR @ TB</span>
+      <span class="gc-time">7:35 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds"></span>
+      
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">TB</span>&nbsp;<span class="score-val">4.6</span> <span class="band">(2–6)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">TOR</span>&nbsp;<span class="score-val">5.5</span> <span class="band">(3–7)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">10.1</span> <span class="band">(6–13)</span></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">TB</span> <span class="sp-name">Joe Boyle</span> <span class="xwoba">0.317</span></div>
+      <div class="gc-sp"><span class="sp-team">TOR</span> <span class="sp-name">Trey Yesavage</span> <span class="xwoba">0.307</span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · TB WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.379</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · TB -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.358</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-split">34%–55% <span class="spread-pill">±21%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · TOR +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.642</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE —</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">10.1 <span class="band">(6–13)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">5.1–16.3 <span class="spread-pill">±11.2</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">—</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc card-npin">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">BAL @ CWS</span>
+      <span class="gc-time">7:40 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds"></span>
+      
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">CWS</span>&nbsp;<span class="score-val">4.4</span> <span class="band">(2–6)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">BAL</span>&nbsp;<span class="score-val">4.0</span> <span class="band">(2–5)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">8.4</span> <span class="band">(5–11)</span></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">CWS</span> <span class="sp-name">Tyler Gilbert</span> <span class="xwoba">0.259</span></div>
+      <div class="gc-sp"><span class="sp-team">BAL</span> <span class="sp-name">Kyle Bradish</span> <span class="xwoba">0.312</span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · CWS WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.468</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · CWS -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.360</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-split">29%–53% <span class="spread-pill">±24%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · BAL +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.640</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE —</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">8.4 <span class="band">(5–11)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">5.1–15.3 <span class="spread-pill">±10.2</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">—</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc card-npin">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">NYY @ MIN</span>
+      <span class="gc-time">7:40 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds"></span>
+      
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">MIN</span>&nbsp;<span class="score-val">4.4</span> <span class="band">(2–6)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">NYY</span>&nbsp;<span class="score-val">6.1</span> <span class="band">(3–8)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">10.5</span> <span class="band">(7–13)</span></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">MIN</span> <span class="sp-name">Simeon Woods Richardson</span> <span class="xwoba">0.341</span></div>
+      <div class="gc-sp"><span class="sp-team">NYY</span> <span class="sp-name">Carlos Rodón</span> <span class="xwoba">0.307</span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · MIN WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.328</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · MIN -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.341</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-warn">37%–52% <span class="spread-pill">±15%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · NYY +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.659</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE —</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">10.5 <span class="band">(7–13)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">5.6–16.8 <span class="spread-pill">±11.2</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">—</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc card-npin">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">CIN @ STL</span>
+      <span class="gc-time">7:45 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds"></span>
+      
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">STL</span>&nbsp;<span class="score-val">4.8</span> <span class="band">(2–7)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">CIN</span>&nbsp;<span class="score-val">5.0</span> <span class="band">(3–7)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">9.8</span> <span class="band">(6–13)</span></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">STL</span> <span class="sp-name">Matthew Liberatore</span> <span class="xwoba">0.316</span></div>
+      <div class="gc-sp"><span class="sp-team">CIN</span> <span class="sp-name">Zack Littell</span> <span class="xwoba">0.340</span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · STL WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.429</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · STL -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.334</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-warn">41%–53% <span class="spread-pill">±12%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · CIN +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.666</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE —</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">9.8 <span class="band">(6–13)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">5.9–16.9 <span class="spread-pill">±10.9</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">—</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc card-npin">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">TEX @ HOU</span>
+      <span class="gc-time">8:10 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds"></span>
+      
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">HOU</span>&nbsp;<span class="score-val">3.9</span> <span class="band">(2–5)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">TEX</span>&nbsp;<span class="score-val">5.0</span> <span class="band">(2–7)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">8.9</span> <span class="band">(5–12)</span></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">HOU</span> <span class="sp-name">Jason Alexander</span> <span class="xwoba">0.307</span></div>
+      <div class="gc-sp"><span class="sp-team">TEX</span> <span class="sp-name">Jack Leiter</span> <span class="xwoba">0.283</span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · HOU WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.343</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · HOU -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.305</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-split">30%–53% <span class="spread-pill">±22%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · TEX +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.695</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE —</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">8.9 <span class="band">(5–12)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">5.5–15.1 <span class="spread-pill">±9.6</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">—</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc card-npin">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">SF @ AZ</span>
+      <span class="gc-time">9:40 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds"></span>
+      
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">AZ</span>&nbsp;<span class="score-val">4.9</span> <span class="band">(2–7)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">SF</span>&nbsp;<span class="score-val">5.2</span> <span class="band">(2–7)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">10.1</span> <span class="band">(6–13)</span></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">AZ</span> <span class="sp-name">Zac Gallen</span> <span class="xwoba">0.320</span></div>
+      <div class="gc-sp"><span class="sp-team">SF</span> <span class="sp-name">Kai-Wei Teng</span> <span class="sp-flag">GAINER</span> <span class="xwoba">0.300</span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · AZ WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.430</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · AZ -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.360</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-agree">50%–59% <span class="spread-pill">±9%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · SF +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.640</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE —</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">10.1 <span class="band">(6–13)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">5.5–16.1 <span class="spread-pill">±10.5</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">—</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+    </div>
+  </div>
+</div>
+<div class="gc card-npin">
+  <div class="gc-head">
+    <div class="gc-head-left">
+      <span class="gc-teams">PHI @ LAD</span>
+      <span class="gc-time">10:10 pm ET</span>
+      <span class="gc-conf">✓ confirmed</span>
+    </div>
+    <div class="gc-head-right">
+      <span class="gc-odds"></span>
+      
+    </div>
+  </div>
+  <div class="gc-score"><span class="score-lbl">LAD</span>&nbsp;<span class="score-val">4.4</span> <span class="band">(2–6)</span>&nbsp;&nbsp;<span class="score-sep">·</span>&nbsp;&nbsp;<span class="score-lbl">PHI</span>&nbsp;<span class="score-val">4.7</span> <span class="band">(2–7)</span>&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;<span class="score-lbl">Total</span>&nbsp;<span class="score-val">9.1</span> <span class="band">(5–12)</span></div>
+  <div class="gc-body">
+    <div class="gc-starters">
+      <div class="gc-sp"><span class="sp-team">LAD</span> <span class="sp-name">Anthony Banda</span> <span class="sp-flag">VOLATILE</span> <span class="xwoba">0.312</span></div>
+      <div class="gc-sp"><span class="sp-team">PHI</span> <span class="sp-name">Ranger Suarez</span> <span class="xwoba">0.301</span></div>
+      
+    </div>
+    <div class="gc-markets">
+      <div class="mkt">
+  <div class="mkt-label">ML · LAD WIN</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.444</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · LAD -1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.356</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Shadow</td><td class="mv"><span class="shadow-warn">45%–56% <span class="spread-pill">±11%</span></span></td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">RL · PHI +1.5</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Model</td><td class="mv bright">0.644</td></tr>
+    <tr><td class="ml">Pinnacle</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Retail</td><td class="mv ret">—</td></tr>
+    
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+      <div class="mkt">
+  <div class="mkt-label">O/U · LINE —</div>
+  <table class="mkt-tbl">
+    <tr><td class="ml">Pred Total</td><td class="mv bright">9.1 <span class="band">(5–12)</span></td></tr>
+    <tr><td class="ml">Q10–Q90</td><td class="mv"><span class="qband-wide">5.1–14.3 <span class="spread-pill">±9.2</span></span></td></tr>
+    <tr><td class="ml">P(OVER)</td><td class="mv bright">—</td></tr>
+    <tr><td class="ml">Pin P(OVER)</td><td class="mv pin">—</td></tr>
+    <tr><td class="ml">Ret P(OVER)</td><td class="mv ret">—</td></tr>
+    <tr><td class="ml">Edge</td><td class="mv val-dim">—</td></tr>
+  </table>
+  <div class="mkt-badge"><span class="badge badge-gray">No Pinnacle</span></div>
+</div>
+    </div>
+  </div>
+</div>
+
+<div class="pl-section"><div class="pl-title">🎯 Correlated Parlay Suggestions</div><div class="pl-note">No combinations with positive combined edge found in the +280–+450 range today.</div></div>
+
+<div class="defs">
+  <div class="defs-title">&#9432; GLOSSARY</div>
+  <div class="defs-grid">
+
+    <div class="def-section">
+      <div class="def-heading">PROBABILITIES</div>
+      <div class="def-row"><span class="def-term" style="color:#ffffff">Model</span><span class="def-desc">Our simulation's estimated win/cover/over probability for this game</span></div>
+      <div class="def-row"><span class="def-term" style="color:#58a6ff">Pinnacle</span><span class="def-desc">Sharp offshore book — de-vigged implied probability. Best market signal available. Used as the sanity check</span></div>
+      <div class="def-row"><span class="def-term" style="color:#8b949e">Retail</span><span class="def-desc">US sportsbook (DraftKings / FanDuel / BetMGM) — de-vigged implied probability. This is what you actually bet into</span></div>
+      <div class="def-row"><span class="def-term">Edge</span><span class="def-desc">Model prob minus Retail implied prob. Positive = model likes this side more than the market does</span></div>
+      <div class="def-row"><span class="def-term">Band (3–7)</span><span class="def-desc">25th–75th percentile range from the simulation. The game lands inside this range 50% of the time</span></div>
+    </div>
+
+    <div class="def-section">
+      <div class="def-heading">BET MARKETS</div>
+      <div class="def-row"><span class="def-term">ML</span><span class="def-desc">Moneyline — straight win/loss bet. No spread. Model uses a 35% model / 65% Vegas blend since our sim only models pitching</span></div>
+      <div class="def-row"><span class="def-term">RL</span><span class="def-desc">Run Line — home team -1.5 spread. Home team must win by 2+ runs to cover. Primary model bet</span></div>
+      <div class="def-row"><span class="def-term">O/U</span><span class="def-desc">Over/Under — total combined runs scored. Model picks the better edge direction (OVER or UNDER)</span></div>
+      <div class="def-row"><span class="def-term">K prop</span><span class="def-desc">Strikeout prop for the starting pitcher. Line = posted K total. P(O) = model's probability of going over that line. Edge = P(O) minus market implied</span></div>
+    </div>
+
+    <div class="def-section">
+      <div class="def-heading">THREE-PART LOCK GATES</div>
+      <div class="def-row"><span class="def-term">Gate 1: Sanity</span><span class="def-desc">|Model − Pinnacle| must be ≤ 4%. If the model disagrees with the sharp market by more than 4 points, something is wrong — skip the game</span></div>
+      <div class="def-row"><span class="def-term">Gate 2: Odds Floor</span><span class="def-desc">Retail ML must be better than −225. Avoids heavy favorites where you risk too much to win too little</span></div>
+      <div class="def-row"><span class="def-term">Gate 3: Edge</span><span class="def-desc">Model must beat the retail implied probability by ≥ 1.0%. This is the actual closing line value (CLV) edge you're betting on</span></div>
+      <div class="def-row"><span class="def-term">TIER 1</span><span class="def-desc">Edge ≥ 3.0% — strong signal. Quarter-Kelly sizing</span></div>
+      <div class="def-row"><span class="def-term">TIER 2</span><span class="def-desc">Edge ≥ 1.0% — medium signal. Eighth-Kelly sizing</span></div>
+    </div>
+
+    <div class="def-section">
+      <div class="def-heading">STARTER FLAGS</div>
+      <div class="def-row"><span class="def-term" style="color:#d29922">VOLATILE</span><span class="def-desc">Pitcher's recent velocity is trending down — higher variance, less reliable projection</span></div>
+      <div class="def-row"><span class="def-term" style="color:#3fb950">GAINER</span><span class="def-desc">Pitcher's velocity is trending up — potentially outperforming their season stats</span></div>
+      <div class="def-row"><span class="def-term">xwOBA</span><span class="def-desc">Expected weighted on-base average allowed. Measures pitcher quality based on contact quality, not outcomes. Lower = better pitcher. League avg ≈ 0.315</span></div>
+      <div class="def-row"><span class="def-term">✓ confirmed</span><span class="def-desc">Official lineup confirmed by the team</span></div>
+      <div class="def-row"><span class="def-term">~ projected</span><span class="def-desc">Probable starter based on rotation — not yet officially confirmed</span></div>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>

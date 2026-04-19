@@ -1,0 +1,18 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Wizard Bet Tracker",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["tracker_server.py"],
+      "env": { "TRACKER_SERVER_PORT": "5151" },
+      "port": 5151
+    },
+    {
+      "name": "Standalone Bet Tracker (Legacy)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["../tracker_server.py", "--port", "5152"],
+      "port": 5152
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+streamlit
+supabase
+pandas
+plotly
