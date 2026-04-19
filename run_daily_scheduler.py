@@ -204,6 +204,10 @@ def run_all() -> None:
         # ── Step 8b: K prop tracker — log yesterday's K predictions vs actuals
         run_step("kprop_tracker.py", "kprop_tracker")
 
+        # ── Step 8c: Supplemental data + backtest rebuild (daily at 10 AM) ──
+        run_step("supplemental_pull.py --force-year 2026", "supplemental")
+        run_step("build_backtest.py --year 2026", "backtest")
+
         # ── Step 9: Pipeline health snapshot ──────────────────────────────
         run_step("pipeline_health.py --upload", "health")
 
