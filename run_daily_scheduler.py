@@ -209,8 +209,9 @@ def run_all() -> None:
         run_step("supplemental_pull.py --force-year 2026", "supplemental")
         run_step("build_backtest.py --year 2026", "backtest")
 
-        # ── Step 8d: Rolling blend-weight tracker ─────────────────────────
+        # ── Step 8d: Rolling trackers ──────────────────────────────────────
         run_step("blend_tracker.py --update", "blend_tracker")
+        run_step("optimize_locks.py --phase 2 --save", "lock_optimizer")
 
         # ── Step 9: Pipeline health snapshot ──────────────────────────────
         run_step("pipeline_health.py --upload", "health")
