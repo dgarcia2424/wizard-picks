@@ -2228,8 +2228,12 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
             xw  = r.get(xw_key); oxw = r.get(oxw_key)
             osp = str(r.get(osp_key,"TBD")).title()
             temp = r.get("temp_f")
-            f5_score = (f"{float(f5_lo):.1f}–{float(f5_hi):.1f}"
-                        if not _is_missing(f5_lo) and not _is_missing(f5_hi) else "—")
+            hr = r.get("mc_f5_home_runs"); ar = r.get("mc_f5_away_runs")
+            if not _is_missing(hr) and not _is_missing(ar):
+                f5_score = (f"{float(hr):.1f}–{float(ar):.1f}" if side == "HOME"
+                            else f"{float(ar):.1f}–{float(hr):.1f}")
+            else:
+                f5_score = "—"
             wp_score = f"{win_prob:.0%}/{f5_score}"
             f5_rows.append((win_prob, team, side, sp,
                             f"{float(xw):.3f}" if not _is_missing(xw) else "—",
@@ -3192,8 +3196,12 @@ def write_html_card(results: list[dict], date_str: str,
                 osp = str(r.get(osp_key, "TBD")).title()
                 oxw = r.get(oxw_key)
                 temp = r.get("temp_f")
-                f5_score_str = (f"{float(f5_lo):.1f}–{float(f5_hi):.1f}"
-                                if not _is_missing(f5_lo) and not _is_missing(f5_hi) else "—")
+                hr = r.get("mc_f5_home_runs"); ar = r.get("mc_f5_away_runs")
+                if not _is_missing(hr) and not _is_missing(ar):
+                    f5_score_str = (f"{float(hr):.1f}–{float(ar):.1f}" if side == "HOME"
+                                    else f"{float(ar):.1f}–{float(hr):.1f}")
+                else:
+                    f5_score_str = "—"
                 rows.append({
                     "team": team, "side": side, "sp": sp,
                     "xw":  float(xw)  if not _is_missing(xw)  else None,
