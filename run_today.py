@@ -2204,7 +2204,7 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
     # ── F5 Rankings table ──────────────────────────────
     lines.append("\nF5 +0.5 RANKINGS")
     lines.append("-" * 80)
-    lines.append(f"{'#':<3} {'Team':<5} {'Side':<5} {'SP':<22} {'xwOBA':<7} {'Opp SP':<22} {'xwOBA':<7} {'Temp':<6} {'F5 Win%':<9} {'Mdl/Pin%'}")
+    lines.append(f"{'#':<3} {'Team':<5} {'Side':<5} {'SP':<22} {'xwOBA':<7} {'Opp SP':<22} {'xwOBA':<7} {'Temp':<6} {'F5 Win%/Score':<16} {'Mdl/Pin%'}")
     lines.append("-" * 85)
     f5_rows = []
     for r in results:
@@ -2228,17 +2228,20 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
             xw  = r.get(xw_key); oxw = r.get(oxw_key)
             osp = str(r.get(osp_key,"TBD")).title()
             temp = r.get("temp_f")
+            f5_score = (f"{float(f5_lo):.1f}–{float(f5_hi):.1f}"
+                        if not _is_missing(f5_lo) and not _is_missing(f5_hi) else "—")
+            wp_score = f"{win_prob:.0%}/{f5_score}"
             f5_rows.append((win_prob, team, side, sp,
                             f"{float(xw):.3f}" if not _is_missing(xw) else "—",
                             osp,
                             f"{float(oxw):.3f}" if not _is_missing(oxw) else "—",
                             f"{float(temp):.0f}°" if not _is_missing(temp) else "—",
-                            f"{win_prob:.0%}", ml_str, pin_str, f5_range))
+                            wp_score, ml_str, pin_str, f5_range))
     f5_rows.sort(key=lambda x: -x[0])
     f5_email_rows = [r for r in f5_rows if r[0] > 0.55]
     for i, row in enumerate(f5_email_rows, 1):
         combo = f"{row[9]}/{row[10]}"
-        lines.append(f"{i:<3} {row[1]:<5} {row[2]:<5} {row[3]:<22} {row[4]:<7} {row[5]:<22} {row[6]:<7} {row[7]:<6} {row[8]:<9} {combo}")
+        lines.append(f"{i:<3} {row[1]:<5} {row[2]:<5} {row[3]:<22} {row[4]:<7} {row[5]:<22} {row[6]:<7} {row[7]:<6} {row[8]:<16} {combo}")
     if not f5_email_rows:
         lines.append("  (no teams with F5 Win% > 55% today)")
 
@@ -3189,6 +3192,8 @@ def write_html_card(results: list[dict], date_str: str,
                 osp = str(r.get(osp_key, "TBD")).title()
                 oxw = r.get(oxw_key)
                 temp = r.get("temp_f")
+                f5_score_str = (f"{float(f5_lo):.1f}–{float(f5_hi):.1f}"
+                                if not _is_missing(f5_lo) and not _is_missing(f5_hi) else "—")
                 rows.append({
                     "team": team, "side": side, "sp": sp,
                     "xw":  float(xw)  if not _is_missing(xw)  else None,
@@ -3197,7 +3202,7 @@ def write_html_card(results: list[dict], date_str: str,
                     "temp": float(temp) if not _is_missing(temp) else None,
                     "win_prob": win_prob, "ml_str": ml_str,
                     "pin_str": pin_str, "pin_val": pin_val,
-                    "f5_range": f5_range,
+                    "f5_range": f5_range, "f5_score_str": f5_score_str,
                 })
         rows.sort(key=lambda x: -x["win_prob"])
         if min_prob > 0:
@@ -3227,7 +3232,7 @@ def write_html_card(results: list[dict], date_str: str,
                 f'<td class="rt-sp">{x["osp"]}</td>'
                 f'<td class="rt-xw {xw_cls(x["oxw"])}">{oxw_str}</td>'
                 f'<td class="rt-temp">{tmp_str}</td>'
-                f'<td class="rt-prob {wp_cls}">{x["win_prob"]:.0%}</td>'
+                f'<td class="rt-prob {wp_cls}">{x["win_prob"]:.0%} / {x["f5_score_str"]}</td>'
                 f'<td class="rt-pin">{x["ml_str"]} / {x["pin_str"]}</td>'
                 f'</tr>'
             )
@@ -3239,7 +3244,7 @@ def write_html_card(results: list[dict], date_str: str,
   <th>#</th><th>Team</th><th>Side</th>
   <th>Their SP</th><th>xwOBA</th>
   <th>Opp SP</th><th>xwOBA</th>
-  <th>Temp</th><th>F5 Win%</th><th>Model% / Pin%</th>
+  <th>Temp</th><th>F5 Win% / Est. Score</th><th>Model% / Pin%</th>
 </tr></thead>
 <tbody>{trs}</tbody>
 </table></div>"""
