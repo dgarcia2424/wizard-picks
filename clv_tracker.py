@@ -257,7 +257,7 @@ def compute_clv(picks: pd.DataFrame) -> pd.DataFrame:
                 elif bet == "ML_HOME":
                     home_won = float(a["home_score_final"]) > float(a["away_score_final"]) \
                                if pd.notna(a["home_score_final"]) else np.nan
-                    row["won"] = float(home_won) if home_won is not np.nan else np.nan
+                    row["won"] = float(home_won) if pd.notna(home_won) else np.nan
                 elif bet in ("OU_OVER", "OU_UNDER"):
                     total = a.get("actual_total")
                     posted = pick.get("ou_line", np.nan)

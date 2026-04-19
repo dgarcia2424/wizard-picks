@@ -1308,8 +1308,10 @@ def _load_ump_k(date_str: str) -> dict:
         if asgn.empty:
             return {}
 
-        # Use 2025 features as the best historical baseline for ump tendencies
-        feat_path = DATA_DIR / "ump_features_2025.parquet"
+        # Prefer current-year ump features; fall back to 2025 historical baseline
+        feat_path = DATA_DIR / f"ump_features_{year}.parquet"
+        if not feat_path.exists():
+            feat_path = DATA_DIR / "ump_features_2025.parquet"
         if not feat_path.exists():
             return {}
         feats = (pd.read_parquet(feat_path)
