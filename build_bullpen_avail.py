@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 
 DATA_DIR = Path("./data/statcast")
-YEARS    = [2023, 2024, 2025]
+YEARS    = [2023, 2024, 2025, 2026]
 
 
 # ---------------------------------------------------------------------------

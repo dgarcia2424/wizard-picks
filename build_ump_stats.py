@@ -132,7 +132,9 @@ def build_ump_features(years: list[int], verbose: bool = True) -> None:
             game_stats["total_runs"] = np.nan
 
         # ── Join umpire to game stats ────────────────────────────────────
-        ump_games = asgn.merge(game_stats, on="game_pk", how="inner")
+        # Drop game_date from assignments if present (game_stats provides it)
+        asgn_join = asgn.drop(columns=["game_date"], errors="ignore")
+        ump_games = asgn_join.merge(game_stats, on="game_pk", how="inner")
         ump_games = ump_games.sort_values(["ump_hp_id", "game_date"]).reset_index(drop=True)
 
         if len(ump_games) == 0:

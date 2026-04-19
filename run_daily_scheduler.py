@@ -169,7 +169,8 @@ def run_all() -> None:
 
         # ── Step 2b: Umpire assignments + tendencies ──────────────────────
         run_step("ump_pull.py", "ump_pull")
-        run_step("build_ump_stats.py", "ump_stats")
+        run_step("build_ump_stats.py --years 2026", "ump_stats")
+        run_step("build_bullpen_avail.py", "bullpen_avail")
 
         # ── Step 3: Refresh raw data (Savant + MLB Stats API) ────────────
         run_step("refresh_raw_data.py", "raw_data")
