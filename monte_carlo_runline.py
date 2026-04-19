@@ -677,6 +677,7 @@ def simulate_k_prop_nb(
 def build_xgb_row(home_prof: pd.Series, away_prof: pd.Series,
                   home_team: str, away_team: str,
                   temp_f: float, feature_cols: list,
+                  wind_mph: float = 8.0,
                   home_team_stats: pd.Series | None = None,
                   away_team_stats: pd.Series | None = None,
                   pitcher_10d: dict | None = None,
@@ -1250,6 +1251,7 @@ def predict_game(
     if rl_model is not None:
         xgb_row = build_xgb_row(
             home_prof, away_prof, home_team, away_team, temp_f, feat_cols,
+            wind_mph=wind_mph,
             home_team_stats=home_team_stats,
             away_team_stats=away_team_stats,
             pitcher_10d=pitcher_10d,
