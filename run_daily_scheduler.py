@@ -212,6 +212,7 @@ def run_all() -> None:
         # ── Step 8d: Rolling trackers ──────────────────────────────────────
         run_step("blend_tracker.py --update", "blend_tracker")
         run_step("optimize_locks.py --phase 2 --save", "lock_optimizer")
+        run_step("clv_tracker.py --update", "clv_tracker")
 
         # ── Step 9: Pipeline health snapshot ──────────────────────────────
         run_step("pipeline_health.py --upload", "health")

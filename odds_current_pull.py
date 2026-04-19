@@ -1488,6 +1488,20 @@ def pull_odds_for_date(target_date: str, force: bool = False) -> None:
     log.info("Saved %s — shape: %s", output_path.name, df.shape)
     print(f"Saved {output_path.name} — shape: {df.shape}")
 
+    # ── Step 5b: Append snapshot to history file (for CLV tracking) ──────────
+    # Each run appends a timestamped copy so we can compare morning vs closing odds.
+    history_path = OUTPUT_DIR / f"odds_history_{target_date.replace('-', '_')}.parquet"
+    snap = df.copy()
+    snap["snapshot_time"] = datetime.utcnow()
+    if history_path.exists():
+        try:
+            prev = pd.read_parquet(history_path, engine="pyarrow")
+            snap = pd.concat([prev, snap], ignore_index=True)
+        except Exception:
+            pass
+    snap.to_parquet(history_path, engine="pyarrow", index=False)
+    log.info("Odds history snapshot appended → %s (%d total rows)", history_path.name, len(snap))
+
     # Summary
     with_retail   = df[df["close_ml_home"].notna()]
     with_pinnacle = df[df["P_true_home"].notna()]
