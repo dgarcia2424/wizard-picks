@@ -1,0 +1,2 @@
+run_date,n_games,date_min,date_max,covers_rate,optimal_xgb_weight,optimal_brier,current_brier_40pct,improvement_pct
+2026-04-18,77,2026-04-12,2026-04-17,0.3117,0.3,0.2135,0.21361,0.053
