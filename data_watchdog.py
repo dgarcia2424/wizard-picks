@@ -262,7 +262,7 @@ def run_all_checks() -> list[dict]:
     results.append(check_staleness(
         "odds_current", odds_path,
         max_age_hours=_stale_limit(5),
-        repair_cmd="odds_current_pull.py",
+        repair_cmd="odds_current_pull.py --force",
     ))
 
     # ── K PROPS ─────────────────────────────────────────────────────────────
