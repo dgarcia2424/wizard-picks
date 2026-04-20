@@ -37,6 +37,19 @@ from pybaseball import (
     statcast_sprint_speed,
     statcast_pitcher_pitch_arsenal,
     statcast_pitcher_spin_dir_comp,  # renamed from statcast_pitcher_active_spin in newer pybaseball
+    # ── Phase 2 additions ────────────────────────────────────────────────────
+    statcast_batter_bat_tracking,          # bat speed, swing length, squared-up (2023+)
+    statcast_pitcher_bat_tracking,         # bat tracking metrics allowed per pitcher
+    statcast_batter_pitch_arsenal,         # per-batter × per-pitch-type outcomes
+    statcast_pitcher_arsenal_stats,        # per-pitch-type run value, whiff%, put-away%
+    statcast_pitcher_pitch_movement,       # horizontal/vertical movement by pitch type (SSW source)
+    statcast_pitcher_run_value,            # swing/take run value breakdown (pitcher side)
+    statcast_batter_run_value,             # swing/take run value breakdown (batter side)
+    statcast_outs_above_average,           # OAA by fielding position
+    statcast_catcher_poptime,              # pop time on steal attempts (2B/3B)
+    statcast_fielding_run_value,           # total Fielding Run Value by position
+    statcast_outfielder_jump,              # first-step quality on difficult plays
+    statcast_running_splits,               # 90-ft sprint times at 5-ft intervals
 )
 
 # ── CONFIG ───────────────────────────────────────────────────────────────────
@@ -865,6 +878,265 @@ def main() -> None:
             except Exception as e:
                 print(f"[{year}] ERROR pulling park factors: {e}")
 
+    # ─── STATCAST BAT TRACKING (2023+) ───────────────────────────────────────────
+    # bat_speed, swing_length, squared_up_pct, blast_rate
+    # Only available from 2023 (Hawk-Eye bat-sensor data rollout).
+    # bat_speed vs fastball >97mph is a key matchup feature.
+    print()
+    print("=" * 65)
+    print("SECTION: Statcast Bat Tracking [batter + pitcher-against, 2023+]")
+    print("=" * 65)
+    _BAT_TRACK_MIN = 2023
+    for year in YEARS:
+        if year < _BAT_TRACK_MIN:
+            print(f"[{year}] bat tracking not available pre-{_BAT_TRACK_MIN} — skipping")
+            continue
+        for func, label in [
+            (statcast_batter_bat_tracking,  "batter_bat_tracking"),
+            (statcast_pitcher_bat_tracking, "pitcher_bat_tracking"),
+        ]:
+            out_path = OUTPUT_DIR / f"{label}_{year}.parquet"
+            if out_path.exists():
+                print(f"[{year}] {label} already exists (skipping)")
+                continue
+            try:
+                df = func(year)
+                if df is None or df.empty:
+                    print(f"[{year}] WARNING: No {label} data returned.")
+                    continue
+                _save(df, out_path, label)
+                print(f"[{year}] {label} done.")
+            except Exception as e:
+                print(f"[{year}] ERROR pulling {label}: {e}")
+        time.sleep(1)
+
+    # ─── STATCAST BATTER PITCH ARSENAL ───────────────────────────────────────────
+    # Per-batter × per-pitch-type: BA, SLG, wOBA, xwOBA, whiff%, put_away%
+    # Enables the "pitch-type specific xwOBA" matchup feature directly.
+    print()
+    print("=" * 65)
+    print("SECTION: Statcast Batter Pitch Arsenal (per-pitch-type outcomes per batter)")
+    print("=" * 65)
+    for year in YEARS:
+        out_path = OUTPUT_DIR / f"batter_pitch_arsenal_{year}.parquet"
+        if out_path.exists():
+            print(f"[{year}] Already exists → {out_path} (skipping)")
+            continue
+        try:
+            df = statcast_batter_pitch_arsenal(year, minPA=25)
+            if df is None or df.empty:
+                print(f"[{year}] WARNING: No batter pitch arsenal data returned.")
+                continue
+            _save(df, out_path, "batter_pitch_arsenal")
+            print(f"[{year}] Done.")
+        except Exception as e:
+            print(f"[{year}] ERROR pulling batter_pitch_arsenal: {e}")
+
+    # ─── STATCAST PITCHER ARSENAL STATS ──────────────────────────────────────────
+    # Per-pitcher × per-pitch-type: run_value, whiff%, put_away%, BA/SLG/wOBA against
+    # Richer than pitch_arsenal (velocity/usage only); provides per-pitch quality signal.
+    print()
+    print("=" * 65)
+    print("SECTION: Statcast Pitcher Arsenal Stats (run_value, whiff%, put-away%)")
+    print("=" * 65)
+    for year in YEARS:
+        out_path = OUTPUT_DIR / f"pitcher_arsenal_stats_{year}.parquet"
+        if out_path.exists():
+            print(f"[{year}] Already exists → {out_path} (skipping)")
+            continue
+        try:
+            df = statcast_pitcher_arsenal_stats(year, minPA=25)
+            if df is None or df.empty:
+                print(f"[{year}] WARNING: No pitcher arsenal stats returned.")
+                continue
+            _save(df, out_path, "pitcher_arsenal_stats")
+            print(f"[{year}] Done.")
+        except Exception as e:
+            print(f"[{year}] ERROR pulling pitcher_arsenal_stats: {e}")
+
+    # ─── STATCAST PITCHER PITCH MOVEMENT ─────────────────────────────────────────
+    # Per-pitcher × per-pitch-type: horizontal/vertical movement in inches.
+    # Primary source for SSW proxy: compare actual pfx vs. expected Magnus movement.
+    print()
+    print("=" * 65)
+    print("SECTION: Statcast Pitcher Pitch Movement (h/v movement by pitch type)")
+    print("=" * 65)
+    _PITCH_TYPES = ["FF", "SI", "FC", "SL", "CU", "CH", "FS", "ST", "SV", "KC"]
+    for year in YEARS:
+        out_path = OUTPUT_DIR / f"pitcher_pitch_movement_{year}.parquet"
+        if out_path.exists():
+            print(f"[{year}] Already exists → {out_path} (skipping)")
+            continue
+        frames = []
+        for pt in _PITCH_TYPES:
+            try:
+                df_pt = statcast_pitcher_pitch_movement(year, minP=25, pitch_type=pt)
+                if df_pt is not None and not df_pt.empty:
+                    df_pt["pitch_type_pulled"] = pt
+                    frames.append(df_pt)
+                time.sleep(0.4)
+            except Exception:
+                pass
+        if not frames:
+            print(f"[{year}] WARNING: No pitch movement data returned.")
+            continue
+        df = pd.concat(frames, ignore_index=True)
+        _save(df, out_path, "pitcher_pitch_movement")
+        print(f"[{year}] Done — {len(frames)} pitch types pulled.")
+
+    # ─── STATCAST RUN VALUES (SWING/TAKE DECISIONS) ───────────────────────────────
+    # Breaks down value into four quadrants: swing/take × ball/strike.
+    # Separates chase-rate quality from swing-path quality for both pitcher and batter.
+    print()
+    print("=" * 65)
+    print("SECTION: Statcast Run Values — Pitcher & Batter (swing/take quality)")
+    print("=" * 65)
+    for year in YEARS:
+        for func, label in [
+            (statcast_pitcher_run_value, "pitcher_run_value"),
+            (statcast_batter_run_value,  "batter_run_value"),
+        ]:
+            out_path = OUTPUT_DIR / f"{label}_{year}.parquet"
+            if out_path.exists():
+                print(f"[{year}] {label} already exists (skipping)")
+                continue
+            try:
+                df = func(year)
+                if df is None or df.empty:
+                    print(f"[{year}] WARNING: No {label} data returned.")
+                    continue
+                _save(df, out_path, label)
+                print(f"[{year}] {label} done.")
+            except Exception as e:
+                print(f"[{year}] ERROR pulling {label}: {e}")
+        time.sleep(1)
+
+    # ─── STATCAST OUTS ABOVE AVERAGE (OAA) ───────────────────────────────────────
+    # Fielding quality for positions 3-9 (1B through RF), combined per year.
+    # Feeds defensive_efficiency_consistency and team defense features.
+    print()
+    print("=" * 65)
+    print("SECTION: Statcast Outs Above Average — positions 3-9 (1B through RF)")
+    print("=" * 65)
+    _OAA_POSITIONS = [3, 4, 5, 6, 7, 8, 9]   # 1B, 2B, 3B, SS, LF, CF, RF
+    for year in YEARS:
+        out_path = OUTPUT_DIR / f"oaa_{year}.parquet"
+        if out_path.exists():
+            print(f"[{year}] Already exists → {out_path} (skipping)")
+            continue
+        frames = []
+        for pos in _OAA_POSITIONS:
+            try:
+                df_pos = statcast_outs_above_average(year, pos)
+                if df_pos is not None and not df_pos.empty:
+                    df_pos["pos"] = pos
+                    frames.append(df_pos)
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"[{year}] pos={pos} OAA error: {e}")
+        if not frames:
+            print(f"[{year}] WARNING: No OAA data returned for any position.")
+            continue
+        df = pd.concat(frames, ignore_index=True)
+        _save(df, out_path, "oaa")
+        print(f"[{year}] Done — {len(df)} player-position rows across {len(frames)} positions.")
+
+    # ─── STATCAST CATCHER POP TIME ────────────────────────────────────────────────
+    # Time (seconds) from pitch receipt to base on steal attempts.
+    # Feeds catcher_fatigue_decay and battery dynamics features.
+    print()
+    print("=" * 65)
+    print("SECTION: Statcast Catcher Pop Time (steal-attempt response time)")
+    print("=" * 65)
+    for year in YEARS:
+        out_path = OUTPUT_DIR / f"catcher_poptime_{year}.parquet"
+        if out_path.exists():
+            print(f"[{year}] Already exists → {out_path} (skipping)")
+            continue
+        try:
+            df = statcast_catcher_poptime(year, min_2b_att=5, min_3b_att=0)
+            if df is None or df.empty:
+                print(f"[{year}] WARNING: No catcher pop time data returned.")
+                continue
+            _save(df, out_path, "catcher_poptime")
+            print(f"[{year}] Done.")
+        except Exception as e:
+            print(f"[{year}] ERROR pulling catcher_poptime: {e}")
+
+    # ─── STATCAST FIELDING RUN VALUE (FRV) ────────────────────────────────────────
+    # Total Fielding Run Value per player per position (min 50 inn).
+    # More comprehensive than OAA alone; includes arm, range, errors.
+    print()
+    print("=" * 65)
+    print("SECTION: Statcast Fielding Run Value — positions 2-9 (C through RF)")
+    print("=" * 65)
+    _FRV_POSITIONS = [2, 3, 4, 5, 6, 7, 8, 9]   # C, 1B, 2B, 3B, SS, LF, CF, RF
+    for year in YEARS:
+        out_path = OUTPUT_DIR / f"fielding_run_value_{year}.parquet"
+        if out_path.exists():
+            print(f"[{year}] Already exists → {out_path} (skipping)")
+            continue
+        frames = []
+        for pos in _FRV_POSITIONS:
+            try:
+                df_pos = statcast_fielding_run_value(year, pos, min_inn=50)
+                if df_pos is not None and not df_pos.empty:
+                    df_pos["pos"] = pos
+                    frames.append(df_pos)
+                time.sleep(0.3)
+            except Exception as e:
+                print(f"[{year}] pos={pos} FRV error: {e}")
+        if not frames:
+            print(f"[{year}] WARNING: No FRV data returned.")
+            continue
+        df = pd.concat(frames, ignore_index=True)
+        _save(df, out_path, "fielding_run_value")
+        print(f"[{year}] Done — {len(df)} player-position rows.")
+
+    # ─── STATCAST OUTFIELDER JUMP ─────────────────────────────────────────────────
+    # First-step quality on plays with <90% catch probability.
+    # Isolates "reads the ball well" from "has elite speed" in outfield defense.
+    print()
+    print("=" * 65)
+    print("SECTION: Statcast Outfielder Jump (first-step quality on difficult plays)")
+    print("=" * 65)
+    for year in YEARS:
+        out_path = OUTPUT_DIR / f"outfielder_jump_{year}.parquet"
+        if out_path.exists():
+            print(f"[{year}] Already exists → {out_path} (skipping)")
+            continue
+        try:
+            df = statcast_outfielder_jump(year)
+            if df is None or df.empty:
+                print(f"[{year}] WARNING: No outfielder jump data returned.")
+                continue
+            _save(df, out_path, "outfielder_jump")
+            print(f"[{year}] Done.")
+        except Exception as e:
+            print(f"[{year}] ERROR pulling outfielder_jump: {e}")
+
+    # ─── STATCAST RUNNING SPLITS ──────────────────────────────────────────────────
+    # Per-player sprint times at 5-foot intervals along the 90-ft baseline.
+    # More granular than sprint_speed; captures acceleration vs. top-end speed.
+    print()
+    print("=" * 65)
+    print("SECTION: Statcast Running Splits (90-ft sprint at 5-ft intervals)")
+    print("=" * 65)
+    for year in YEARS:
+        out_path = OUTPUT_DIR / f"running_splits_{year}.parquet"
+        if out_path.exists():
+            print(f"[{year}] Already exists → {out_path} (skipping)")
+            continue
+        try:
+            df = statcast_running_splits(year, min_opp=5, raw_splits=True)
+            if df is None or df.empty:
+                print(f"[{year}] WARNING: No running splits data returned.")
+                continue
+            _save(df, out_path, "running_splits")
+            print(f"[{year}] Done.")
+        except Exception as e:
+            print(f"[{year}] ERROR pulling running_splits: {e}")
+
     # ─── DONE ─────────────────────────────────────────────────────────────────
     print()
     print("=" * 65)
@@ -877,26 +1149,42 @@ def main() -> None:
     print("    df = pd.read_parquet('./statcast_data/batting_fg_2024.parquet')")
     print()
     print("Key output files:")
-    print("  batting_fg_{year}.parquet         — FG batting stats (qual=50)")
-    print("  pitching_fg_{year}.parquet        — FG pitching stats (qual=50)")
-    print("  pitching_fg_full_{year}.parquet   — FG pitching stats (qual=1, all)")
-    print("  bullpen_fg_{year}.parquet         — RP filtered from full pitching")
-    print("  batter_xstats_{year}.parquet      — Statcast batter xBA/xSLG/xwOBA")
-    print("  pitcher_xstats_{year}.parquet     — Statcast pitcher expected stats")
-    print("  batter_exitvelo_{year}.parquet    — Batter exit velo & barrels")
-    print("  pitcher_exitvelo_{year}.parquet   — Pitcher exit velo allowed")
-    print("  batter_percentiles_{year}.parquet — Statcast batter percentile ranks")
-    print("  pitcher_percentiles_{year}.parquet— Statcast pitcher percentile ranks")
-    print("  sprint_speed_{year}.parquet       — Sprint speed leaderboard")
-    print("  pitch_arsenal_{year}.parquet      — Pitcher pitch arsenal")
-    print("  pitcher_active_spin_{year}.parquet— Pitcher active spin rates")
-    print("  schedule_{TEAM}_{year}.parquet    — Per-team schedule & record")
-    print("  schedule_all_{year}.parquet       — All 30 teams combined")
-    print("  standings_{year}.parquet          — Division standings w/ label col")
-    print("  mlb_schedule_{year}.parquet       — MLB Stats API game schedule")
-    print("  pitcher_handedness.parquet        — MLBAM pitcher throw hand (all-time)")
-    print("  park_factors_{year}.parquet       — FanGraphs park factors")
-    print("  mlb_venues.parquet                — MLB venue metadata")
+    print()
+    print("  ── ORIGINAL PULLS ──────────────────────────────────────────────────")
+    print("  batting_fg_{year}.parquet              — MLB API batting stats (qual=50 PA)")
+    print("  pitching_fg_{year}.parquet             — MLB API pitching stats (qual=50 IP)")
+    print("  pitching_fg_full_{year}.parquet        — All pitchers (no IP floor)")
+    print("  bullpen_fg_{year}.parquet              — Relievers filtered from full")
+    print("  batter_xstats_{year}.parquet           — Statcast batter xBA/xSLG/xwOBA")
+    print("  pitcher_xstats_{year}.parquet          — Statcast pitcher expected stats")
+    print("  batter_exitvelo_{year}.parquet         — Batter exit velo & barrel%")
+    print("  pitcher_exitvelo_{year}.parquet        — Pitcher exit velo allowed")
+    print("  batter_percentiles_{year}.parquet      — Statcast batter percentile ranks")
+    print("  pitcher_percentiles_{year}.parquet     — Statcast pitcher percentile ranks")
+    print("  sprint_speed_{year}.parquet            — Sprint speed leaderboard (ft/sec)")
+    print("  pitch_arsenal_{year}.parquet           — Pitcher pitch arsenal (velo/spin/usage)")
+    print("  pitcher_active_spin_{year}.parquet     — Active spin % by pitch type")
+    print("  schedule_{TEAM}_{year}.parquet         — Per-team schedule & record")
+    print("  schedule_all_{year}.parquet            — All 30 teams combined")
+    print("  standings_{year}.parquet               — Division standings")
+    print("  mlb_schedule_{year}.parquet            — MLB Stats API game schedule")
+    print("  pitcher_handedness.parquet             — MLBAM pitcher throw hand (all-time)")
+    print("  park_factors_{year}.parquet            — FanGraphs park factors")
+    print("  mlb_venues.parquet                     — MLB venue metadata")
+    print()
+    print("  ── PHASE 2 ADDITIONS ───────────────────────────────────────────────")
+    print("  batter_bat_tracking_{year}.parquet     — Bat speed, swing length, squared-up% [2023+]")
+    print("  pitcher_bat_tracking_{year}.parquet    — Bat tracking metrics allowed per pitcher [2023+]")
+    print("  batter_pitch_arsenal_{year}.parquet    — Per-batter × per-pitch-type: xwOBA, whiff%, BA")
+    print("  pitcher_arsenal_stats_{year}.parquet   — Per-pitch-type: run_value, whiff%, put-away%")
+    print("  pitcher_pitch_movement_{year}.parquet  — H/V movement by pitch type (SSW proxy source)")
+    print("  pitcher_run_value_{year}.parquet       — Swing/take run value breakdown (pitcher)")
+    print("  batter_run_value_{year}.parquet        — Swing/take run value breakdown (batter)")
+    print("  oaa_{year}.parquet                     — Outs Above Average, positions 3-9")
+    print("  catcher_poptime_{year}.parquet         — Pop time on steal attempts (2B/3B)")
+    print("  fielding_run_value_{year}.parquet      — Total FRV by position (C through RF)")
+    print("  outfielder_jump_{year}.parquet         — First-step quality on difficult plays")
+    print("  running_splits_{year}.parquet          — 90-ft sprint times at 5-ft intervals")
 
 
 if __name__ == "__main__":

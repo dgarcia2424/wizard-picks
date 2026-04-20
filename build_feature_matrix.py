@@ -375,6 +375,63 @@ def _normalize_name(name: str) -> str:
     return name.upper()
 
 
+# Columns that must NOT be winsorized — flags, IDs, categoricals, labels
+_WINSORIZE_SKIP = frozenset({
+    "game_pk", "game_pk_num", "game_date", "season", "year", "split",
+    "home_team", "away_team", "home_starter_name", "away_starter_name",
+    "home_score", "away_score", "home_margin", "total_runs",
+    "actual_home_win", "home_covers_rl", "away_covers_rl",
+    "game_month", "game_day_of_week",
+    "home_sp_p_throws_R", "away_sp_p_throws_R",
+    "home_sp_il_return_flag", "away_sp_il_return_flag",
+    "home_sp_starts_since_il", "away_sp_starts_since_il",
+    "home_off_cluster", "away_off_cluster",
+    "home_bp_cluster", "away_bp_cluster",
+    "is_day_game", "mc_expected_runs",
+    "ump_k_above_avg", "ump_bb_above_avg", "ump_rpg_above_avg",
+})
+
+def _winsorize_features(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
+    """
+    Clip continuous feature columns at the 1st / 99th percentile computed
+    from training rows (split == 'train') only, then applied to all rows.
+
+    Winsorizing is useful for GBDTs because extreme outlier values can waste
+    tree splits that will never generalize (e.g. one pitcher with xrv=9.0
+    from a spring-training outing that slipped through).
+
+    Percentile anchors are computed on train rows to prevent val leakage.
+    For ratio/interaction columns the same anchors apply.
+    """
+    df = df.copy()
+
+    # Only clip float64 / float32 columns not in the skip set
+    float_cols = [
+        c for c in df.columns
+        if c not in _WINSORIZE_SKIP
+        and pd.api.types.is_float_dtype(df[c])
+    ]
+
+    # Compute percentile bounds from training data
+    train_mask = df.get("split", pd.Series("train", index=df.index)) == "train"
+    train_df   = df.loc[train_mask, float_cols] if train_mask.any() else df[float_cols]
+
+    clipped = 0
+    for col in float_cols:
+        lo = float(np.nanpercentile(train_df[col].dropna(), 1))
+        hi = float(np.nanpercentile(train_df[col].dropna(), 99))
+        if lo >= hi:          # degenerate range (constant column) — skip
+            continue
+        before = df[col].isna().sum()
+        df[col] = df[col].clip(lower=lo, upper=hi)
+        clipped += 1
+
+    if verbose:
+        print(f"      Winsorized {clipped} continuous columns at [1st, 99th] pct "
+              f"(train-anchored)")
+    return df
+
+
 # ---------------------------------------------------------------------------
 # SECTION 1 — GAME LIST (starters + game_pk + scores)
 # ---------------------------------------------------------------------------
@@ -494,6 +551,7 @@ def build_pitcher_ewma_stats(years: list[int], verbose: bool = True) -> pd.DataF
         "estimated_woba_using_speedangle",
         "delta_pitcher_run_exp",
         "woba_denom",
+        "release_speed", "inning",
     ]
 
     all_game_frames = []
@@ -510,6 +568,10 @@ def build_pitcher_ewma_stats(years: list[int], verbose: bool = True) -> pd.DataF
         df["bb"]          = (df["events"] == "walk").astype(float)
         df["is_gb"]       = (df["bb_type"] == "ground_ball").astype(float)
         df["is_bip"]      = df["bb_type"].notna().astype(float)
+        df["h_on_bip"]    = df["events"].isin(
+            ["single", "double", "triple"]).astype(float)
+        df["rs"]          = _to_num(df["release_speed"]) if "release_speed" in df.columns else np.nan
+        df["inn"]         = _to_num(df["inning"])        if "inning"         in df.columns else np.nan
 
         # Aggregate pitch-level data up to one row per (pitcher, game)
         game_agg = df.groupby(["pitcher", "game_pk", "game_date"]).agg(
@@ -518,6 +580,7 @@ def build_pitcher_ewma_stats(years: list[int], verbose: bool = True) -> pd.DataF
             bb            = ("bb",           "sum"),
             gb            = ("is_gb",        "sum"),
             bip           = ("is_bip",       "sum"),
+            h_on_bip      = ("h_on_bip",     "sum"),
             xwoba_against = ("xwoba",        "mean"),
             xrv_total     = ("xrv",          "sum"),
             n_pitches     = ("xrv",          "count"),
@@ -537,6 +600,34 @@ def build_pitcher_ewma_stats(years: list[int], verbose: bool = True) -> pd.DataF
         game_agg["p_throws_R"]    = (game_agg["p_throws"] == "R").astype(int)
         game_agg["pitcher_name_normalized"] = game_agg["player_name"].apply(_normalize_name)
         game_agg["year"] = year
+
+        # BABIP per game (regression-to-mean luck indicator; NaN if < 3 BIP)
+        game_agg["babip_game"] = np.where(
+            game_agg["bip"] >= 3,
+            game_agg["h_on_bip"] / game_agg["bip"].clip(lower=1),
+            np.nan,
+        )
+
+        # Velocity decay: mean velo in early innings (<=2) vs late innings (>=5)
+        # Negative decay = pitcher losing velo as game progresses (fatigue proxy)
+        if df["rs"].notna().any():
+            _early = (
+                df[df["inn"] <= 2].groupby(["pitcher", "game_pk"])["rs"]
+                .mean().rename("_velo_early")
+            )
+            _late = (
+                df[df["inn"] >= 5].groupby(["pitcher", "game_pk"])["rs"]
+                .mean().rename("_velo_late")
+            )
+            _vd = (
+                pd.concat([_early, _late], axis=1)
+                .reset_index()
+                .assign(velo_decay=lambda x: x["_velo_early"] - x["_velo_late"])
+                [["pitcher", "game_pk", "velo_decay"]]
+            )
+            game_agg = game_agg.merge(_vd, on=["pitcher", "game_pk"], how="left")
+        else:
+            game_agg["velo_decay"] = np.nan
 
         # ── Spring training filter ────────────────────────────────────────
         # Spring training pitches have woba_denom=0 (not official PAs) but
@@ -586,6 +677,108 @@ def build_pitcher_ewma_stats(years: list[int], verbose: bool = True) -> pd.DataF
             for c in ["whiff_pctl", "fb_spin_pctl", "fb_velo_pctl", "xera_pctl"]:
                 game_agg[c] = np.nan
 
+        # --- Arsenal stats: usage-weighted run value + primary pitch quality -
+        # Source: pitcher_arsenal_stats_{year}.parquet (Phase 2 pull)
+        # arsenal_weighted_rv  — usage-weighted run value/100 across all pitch types
+        # primary_whiff_pct    — whiff% on pitcher's most-thrown pitch
+        # primary_putaway_pct  — put-away% on pitcher's most-thrown pitch
+        ars_stats_path = DATA_DIR / f"pitcher_arsenal_stats_{year}.parquet"
+        _ars_new_cols = ["arsenal_weighted_rv", "primary_whiff_pct", "primary_putaway_pct"]
+        try:
+            ars_s = pd.read_parquet(ars_stats_path, engine="pyarrow")
+            ars_s.columns = [c.lower().replace(" ", "_") for c in ars_s.columns]
+            pid_c   = next((c for c in ars_s.columns if c == "pitcher"), None)
+            use_c   = next((c for c in ars_s.columns if "pitch_percent" in c or ("usage" in c and "pct" in c)), None)
+            rv_c    = next((c for c in ars_s.columns if "run_value_per_100" in c or "run_value_per100" in c), None)
+            whiff_c = next((c for c in ars_s.columns if "whiff" in c), None)
+            put_c   = next((c for c in ars_s.columns if "put_away" in c or "putaway" in c), None)
+            if pid_c and use_c and rv_c:
+                ars_s[rv_c]  = _to_num(ars_s[rv_c])
+                ars_s[use_c] = _to_num(ars_s[use_c])
+
+                def _ars_agg(g):
+                    w     = g[use_c].fillna(0)
+                    total = w.sum()
+                    rv    = (g[rv_c] * w).sum() / total if total > 0 else np.nan
+                    if total > 0 and w.max() > 0:
+                        prim  = g.loc[w.idxmax()]
+                        whiff = _to_num(pd.Series([prim.get(whiff_c, np.nan)]))[0] if whiff_c else np.nan
+                        put   = _to_num(pd.Series([prim.get(put_c,   np.nan)]))[0] if put_c   else np.nan
+                    else:
+                        whiff = put = np.nan
+                    return pd.Series({"arsenal_weighted_rv":  rv,
+                                      "primary_whiff_pct":   whiff,
+                                      "primary_putaway_pct": put})
+
+                ars_agg = ars_s.groupby(pid_c).apply(_ars_agg, include_groups=False).reset_index()
+                ars_agg = ars_agg.rename(columns={pid_c: "pitcher"})
+                ars_agg["pitcher"] = _to_num(ars_agg["pitcher"])
+                game_agg = game_agg.merge(ars_agg, on="pitcher", how="left")
+            else:
+                for c in _ars_new_cols:
+                    game_agg[c] = np.nan
+        except FileNotFoundError:
+            for c in _ars_new_cols:
+                game_agg[c] = np.nan
+
+        # --- Pitcher run value: swing/take decision quality (seasonal) ------
+        # swing_rv_per100  — run value per 100 pitches on batter swings
+        # take_rv_per100   — run value per 100 pitches on batter takes
+        rv_path = DATA_DIR / f"pitcher_run_value_{year}.parquet"
+        _rv_new_cols = ["swing_rv_per100", "take_rv_per100"]
+        try:
+            prv = pd.read_parquet(rv_path, engine="pyarrow")
+            prv.columns = [c.lower().replace(" ", "_") for c in prv.columns]
+            pid_c    = next((c for c in prv.columns if c == "pitcher"), None)
+            swing_c  = next((c for c in prv.columns if "swing" in c and ("run_value" in c or "rv" in c)), None)
+            take_c   = next((c for c in prv.columns if "take"  in c and ("run_value" in c or "rv" in c)), None)
+            if pid_c and swing_c and take_c:
+                prv_sub = prv[[pid_c, swing_c, take_c]].rename(columns={
+                    pid_c:   "pitcher",
+                    swing_c: "swing_rv_per100",
+                    take_c:  "take_rv_per100",
+                })
+                prv_sub["pitcher"]         = _to_num(prv_sub["pitcher"])
+                prv_sub["swing_rv_per100"] = _to_num(prv_sub["swing_rv_per100"])
+                prv_sub["take_rv_per100"]  = _to_num(prv_sub["take_rv_per100"])
+                game_agg = game_agg.merge(prv_sub, on="pitcher", how="left")
+            else:
+                for c in _rv_new_cols:
+                    game_agg[c] = np.nan
+        except FileNotFoundError:
+            for c in _rv_new_cols:
+                game_agg[c] = np.nan
+
+        # --- Pitch movement: FF horizontal/vertical break (seasonal) --------
+        # ff_h_break_inch  — 4-seam fastball arm-side horizontal break (inches)
+        # ff_v_break_inch  — 4-seam fastball induced vertical break (inches)
+        mov_path = DATA_DIR / f"pitcher_pitch_movement_{year}.parquet"
+        _mov_new_cols = ["ff_h_break_inch", "ff_v_break_inch"]
+        try:
+            mov = pd.read_parquet(mov_path, engine="pyarrow")
+            mov.columns = [c.lower().replace(" ", "_") for c in mov.columns]
+            pid_c = next((c for c in mov.columns if c == "pitcher"), None)
+            pt_c  = next((c for c in mov.columns if "pitch_type" in c), None)
+            hb_c  = next((c for c in mov.columns if "x_break" in c or "h_break" in c or "pfx_x" in c), None)
+            vb_c  = next((c for c in mov.columns if "z_break_ind" in c or "induced" in c
+                          or ("pfx_z" in c) or ("z_break" in c and "spin" not in c)), None)
+            if pid_c and pt_c and hb_c and vb_c:
+                ff_rows = mov[mov[pt_c].isin(["FF", "FA"])][[pid_c, hb_c, vb_c]].copy()
+                ff_rows[hb_c] = _to_num(ff_rows[hb_c])
+                ff_rows[vb_c] = _to_num(ff_rows[vb_c])
+                ff_agg = (ff_rows.groupby(pid_c)[[hb_c, vb_c]].mean()
+                          .rename(columns={hb_c: "ff_h_break_inch", vb_c: "ff_v_break_inch"})
+                          .reset_index()
+                          .rename(columns={pid_c: "pitcher"}))
+                ff_agg["pitcher"] = _to_num(ff_agg["pitcher"])
+                game_agg = game_agg.merge(ff_agg, on="pitcher", how="left")
+            else:
+                for c in _mov_new_cols:
+                    game_agg[c] = np.nan
+        except FileNotFoundError:
+            for c in _mov_new_cols:
+                game_agg[c] = np.nan
+
         # Append AFTER all enrichment merges so ff_velo and percentile cols are included
         all_game_frames.append(game_agg)
 
@@ -599,7 +792,8 @@ def build_pitcher_ewma_stats(years: list[int], verbose: bool = True) -> pd.DataF
     # shift(1) by position ensures the feature at game N uses only games 1…N-1.
     # Time-based decay naturally handles IL gaps — no separate special-casing.
     ewma_targets = ["k_pct", "bb_pct", "xwoba_against", "gb_pct",
-                    "xrv_per_pitch", "k_minus_bb"]
+                    "xrv_per_pitch", "k_minus_bb",
+                    "babip_game", "velo_decay"]
 
     # Save raw per-game values before overwriting with EWMA.
     # These are used below for the trailing 10-day short-window stats.
@@ -922,15 +1116,205 @@ def build_bullpen_stats(years: list[int], verbose: bool = True) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# SECTION 4b — TEAM BAT TRACKING  (Phase 2 — 2023+)
+# ---------------------------------------------------------------------------
+
+def build_team_bat_tracking(years: list[int], verbose: bool = True) -> pd.DataFrame:
+    """
+    Team-level bat tracking metrics aggregated from per-batter seasonal leaderboard.
+    Available 2023+; returns empty DataFrame (NaN fill) for earlier years.
+
+    Columns returned:
+      bat_speed_weighted   — usage-weighted mean bat speed (mph)
+      blast_rate           — blast rate (squared-up + hard-hit combo %)
+      squared_up_pct       — % of contact attempts that are squared-up
+      bat_swing_rv         — team mean batter run value on swings (discipline)
+      bat_take_rv          — team mean batter run value on takes (patience)
+
+    Returns one row per (team abbreviation, season).
+    """
+    if verbose:
+        print("  [3.7/4] Building team bat tracking + batter run values (2023+) ...")
+
+    frames = []
+    for year in years:
+        row_parts = {}
+
+        # ── Bat tracking (bat speed, blast, squared-up) ───────────────────
+        bt_path = DATA_DIR / f"batter_bat_tracking_{year}.parquet"
+        if bt_path.exists():
+            try:
+                bt = pd.read_parquet(bt_path, engine="pyarrow")
+                bt.columns = [c.lower().replace(" ", "_") for c in bt.columns]
+                team_c  = next((c for c in bt.columns if c in ("team", "team_name", "team_abbreviation")), None)
+                spd_c   = next((c for c in bt.columns if "bat_speed" in c or "batspeed" in c), None)
+                blast_c = next((c for c in bt.columns if "blast" in c), None)
+                sq_c    = next((c for c in bt.columns if "squared_up" in c), None)
+                n_c     = next((c for c in bt.columns if c in ("n_bip_pa", "attempts", "swings", "n")), None)
+
+                if team_c and spd_c:
+                    bt[spd_c] = _to_num(bt[spd_c])
+                    w_vals    = _to_num(bt[n_c]) if n_c else pd.Series(np.ones(len(bt)))
+
+                    def _bt_wavg(g):
+                        w     = w_vals.loc[g.index].fillna(1)
+                        total = w.sum()
+                        if total == 0:
+                            return pd.Series(dtype=float)
+                        out = {"bat_speed_weighted": (_to_num(g[spd_c]) * w).sum() / total}
+                        if blast_c:
+                            out["blast_rate"]      = (_to_num(g[blast_c]).fillna(0) * w).sum() / total
+                        if sq_c:
+                            out["squared_up_pct"]  = (_to_num(g[sq_c]).fillna(0)   * w).sum() / total
+                        return pd.Series(out)
+
+                    bt_agg = bt.groupby(team_c).apply(_bt_wavg, include_groups=False).reset_index()
+                    bt_agg = bt_agg.rename(columns={team_c: "team"})
+                    row_parts["bat_track"] = bt_agg
+            except Exception as e:
+                if verbose:
+                    print(f"      [{year}] bat_tracking error: {e}")
+
+        # ── Batter run values (swing/take quality) ────────────────────────
+        brv_path = DATA_DIR / f"batter_run_value_{year}.parquet"
+        if brv_path.exists():
+            try:
+                brv = pd.read_parquet(brv_path, engine="pyarrow")
+                brv.columns = [c.lower().replace(" ", "_") for c in brv.columns]
+                team_c  = next((c for c in brv.columns if c in ("team", "team_name", "team_abbreviation")), None)
+                pid_c   = next((c for c in brv.columns if c in ("batter", "player_id")), None)
+                swing_c = next((c for c in brv.columns if "swing" in c and ("run_value" in c or "rv" in c)), None)
+                take_c  = next((c for c in brv.columns if "take"  in c and ("run_value" in c or "rv" in c)), None)
+
+                if team_c and swing_c and take_c:
+                    brv[swing_c] = _to_num(brv[swing_c])
+                    brv[take_c]  = _to_num(brv[take_c])
+                    brv_agg = (brv.groupby(team_c)[[swing_c, take_c]].mean()
+                               .rename(columns={swing_c: "bat_swing_rv", take_c: "bat_take_rv"})
+                               .reset_index()
+                               .rename(columns={team_c: "team"}))
+                    row_parts["bat_rv"] = brv_agg
+            except Exception as e:
+                if verbose:
+                    print(f"      [{year}] batter_run_value error: {e}")
+
+        # ── Merge both parts ──────────────────────────────────────────────
+        if row_parts:
+            merged = None
+            for df_part in row_parts.values():
+                merged = df_part if merged is None else merged.merge(df_part, on="team", how="outer")
+            merged["season"] = year
+            frames.append(merged)
+
+    if not frames:
+        if verbose:
+            print("      No bat tracking / batter run value files found.")
+        return pd.DataFrame()
+
+    out = pd.concat(frames, ignore_index=True)
+    if verbose:
+        n_rows = len(out)
+        n_yrs  = out["season"].nunique()
+        print(f"      {n_rows} team-season rows | {n_yrs} years | "
+              f"cols: {[c for c in out.columns if c not in ('team','season')]}")
+    return out
+
+
+# ---------------------------------------------------------------------------
+# SECTION 4c — TEAM DEFENSE  (Phase 2 — OAA + FRV)
+# ---------------------------------------------------------------------------
+
+def build_team_defense(years: list[int], verbose: bool = True) -> pd.DataFrame:
+    """
+    Team-level Outs Above Average (OAA) and Fielding Run Value (FRV)
+    summed across all fielding positions per season.
+
+    Columns returned:
+      team_oaa   — total OAA for all fielders on the roster
+      team_frv   — total Fielding Run Value for all fielders on the roster
+
+    Returns one row per (team abbreviation, season).
+    """
+    if verbose:
+        print("  [3.8/4] Building team defense (OAA + FRV) ...")
+
+    frames = []
+    for year in years:
+        row_parts = {}
+
+        # ── OAA ───────────────────────────────────────────────────────────
+        oaa_path = DATA_DIR / f"oaa_{year}.parquet"
+        if oaa_path.exists():
+            try:
+                oaa = pd.read_parquet(oaa_path, engine="pyarrow")
+                oaa.columns = [c.lower().replace(" ", "_") for c in oaa.columns]
+                team_c = next((c for c in oaa.columns
+                               if c in ("team", "team_name", "team_abbreviation")), None)
+                oaa_c  = next((c for c in oaa.columns
+                               if "outs_above_average" in c or c == "oaa"), None)
+                if team_c and oaa_c:
+                    oaa[oaa_c] = _to_num(oaa[oaa_c])
+                    t_oaa = (oaa.groupby(team_c)[oaa_c].sum()
+                             .reset_index()
+                             .rename(columns={team_c: "team", oaa_c: "team_oaa"}))
+                    row_parts["oaa"] = t_oaa
+            except Exception as e:
+                if verbose:
+                    print(f"      [{year}] OAA error: {e}")
+
+        # ── FRV ───────────────────────────────────────────────────────────
+        frv_path = DATA_DIR / f"fielding_run_value_{year}.parquet"
+        if frv_path.exists():
+            try:
+                frv = pd.read_parquet(frv_path, engine="pyarrow")
+                frv.columns = [c.lower().replace(" ", "_") for c in frv.columns]
+                team_c = next((c for c in frv.columns
+                               if c in ("team", "team_name", "team_abbreviation")), None)
+                frv_c  = next((c for c in frv.columns
+                               if "fielding_run_value" in c or c == "frv"
+                               or ("run_value" in c and "swing" not in c and "take" not in c)), None)
+                if team_c and frv_c:
+                    frv[frv_c] = _to_num(frv[frv_c])
+                    t_frv = (frv.groupby(team_c)[frv_c].sum()
+                             .reset_index()
+                             .rename(columns={team_c: "team", frv_c: "team_frv"}))
+                    row_parts["frv"] = t_frv
+            except Exception as e:
+                if verbose:
+                    print(f"      [{year}] FRV error: {e}")
+
+        if row_parts:
+            merged = None
+            for df_part in row_parts.values():
+                merged = df_part if merged is None else merged.merge(df_part, on="team", how="outer")
+            merged["season"] = year
+            frames.append(merged)
+
+    if not frames:
+        if verbose:
+            print("      No OAA / FRV files found.")
+        return pd.DataFrame()
+
+    out = pd.concat(frames, ignore_index=True)
+    if verbose:
+        n_rows = len(out)
+        print(f"      {n_rows} team-season rows | "
+              f"cols: {[c for c in out.columns if c not in ('team','season')]}")
+    return out
+
+
+# ---------------------------------------------------------------------------
 # SECTION 5 — ASSEMBLE FEATURE MATRIX
 # ---------------------------------------------------------------------------
 
 def assemble_matrix(
-    games:    pd.DataFrame,
-    pitchers: pd.DataFrame,
-    batting:  pd.DataFrame,
-    bullpen:  pd.DataFrame,
-    verbose:  bool = True,
+    games:       pd.DataFrame,
+    pitchers:    pd.DataFrame,
+    batting:     pd.DataFrame,
+    bullpen:     pd.DataFrame,
+    bat_tracking: pd.DataFrame | None = None,
+    defense:      pd.DataFrame | None = None,
+    verbose:      bool = True,
 ) -> pd.DataFrame:
     """
     Merge all feature tables onto the game-level dataframe.
@@ -939,6 +1323,10 @@ def assemble_matrix(
     the Monte Carlo engine already encodes the scoring environment.
     mc_expected_runs is added as a NaN placeholder; it will be populated
     at inference time before XGBoost scoring.
+
+    Phase 2 additions (graceful NaN if tables not provided):
+      bat_tracking  — team bat speed, blast rate, batter run values
+      defense       — team OAA, Fielding Run Value
     """
     if verbose:
         print("  [4/4] Assembling feature matrix ...")
@@ -946,6 +1334,24 @@ def assemble_matrix(
     df = games.copy()
     df["game_date"] = pd.to_datetime(df["game_date"])
     df["year"]      = df["season"].astype(int)
+
+    # ── Series game number ────────────────────────────────────────────────
+    # 1 = first game of a series, 2/3/4 = subsequent games.
+    # A new series starts when the same team pair hasn't played in > 5 days.
+    df = df.sort_values("game_date").reset_index(drop=True)
+    df["_team_pair"]       = [tuple(sorted([h, a]))
+                               for h, a in zip(df["home_team"], df["away_team"])]
+    df["_prev_pair_date"]  = df.groupby("_team_pair")["game_date"].shift(1)
+    df["_days_since_pair"] = (df["game_date"] - df["_prev_pair_date"]).dt.days
+    df["_new_series"]      = (
+        df["_days_since_pair"].isna() | (df["_days_since_pair"] > 5)
+    ).astype(int)
+    df["_series_id"]       = df.groupby("_team_pair")["_new_series"].cumsum()
+    df["series_game_number"] = (
+        df.groupby(["_team_pair", "_series_id"]).cumcount() + 1
+    )
+    df = df.drop(columns=["_team_pair", "_prev_pair_date",
+                           "_days_since_pair", "_new_series", "_series_id"])
 
     # Calendar features
     df["game_month"]       = df["game_date"].dt.month
@@ -961,8 +1367,16 @@ def assemble_matrix(
             "k_minus_bb", "ff_velo", "age_pit", "arm_angle", "p_throws_R",
             "whiff_pctl", "fb_spin_pctl", "fb_velo_pctl", "xera_pctl",
             "il_return_flag", "starts_since_il",
-            # Trailing 10-day recency stats (Roadmap #2)
+            # Trailing 10-day recency stats
             "k_pct_10d", "bb_pct_10d", "xwoba_10d",
+            # Phase 2: arsenal quality (usage-weighted run value + primary pitch)
+            "arsenal_weighted_rv", "primary_whiff_pct", "primary_putaway_pct",
+            # Phase 2: swing/take decision quality
+            "swing_rv_per100", "take_rv_per100",
+            # Phase 2: fastball movement (SSW proxy inputs)
+            "ff_h_break_inch", "ff_v_break_inch",
+            # Quick Win: BABIP luck + velocity decay trend
+            "babip_game", "velo_decay",
         ]
         try:
             row = pit_lookup.loc[(name, game_pk)]
@@ -993,14 +1407,56 @@ def assemble_matrix(
     df["sp_age_diff"]      = df["home_sp_age_pit"]        - df["away_sp_age_pit"]
     df["sp_kminusbb_diff"] = df["home_sp_k_minus_bb"]     - df["away_sp_k_minus_bb"]
 
-    # Trailing 10-day SP diffs — recency signal (Roadmap #2)
-    # Columns are home_sp_k_pct_10d / away_sp_k_pct_10d etc.
+    # Trailing 10-day SP diffs — recency signal
     df["sp_k_pct_10d_diff"]  = (df["home_sp_k_pct_10d"]
                                 - df["away_sp_k_pct_10d"])
     df["sp_xwoba_10d_diff"]  = (df["away_sp_xwoba_10d"]
                                 - df["home_sp_xwoba_10d"])   # flipped: lower home xwOBA = better
     df["sp_bb_pct_10d_diff"] = (df["home_sp_bb_pct_10d"]
                                 - df["away_sp_bb_pct_10d"])
+
+    # Phase 2: arsenal quality diffs (positive = home pitcher advantage)
+    df["sp_arsenal_rv_diff"]     = (df["home_sp_arsenal_weighted_rv"]
+                                    - df["away_sp_arsenal_weighted_rv"])
+    df["sp_primary_whiff_diff"]  = (df["home_sp_primary_whiff_pct"]
+                                    - df["away_sp_primary_whiff_pct"])
+    df["sp_primary_putaway_diff"]= (df["home_sp_primary_putaway_pct"]
+                                    - df["away_sp_primary_putaway_pct"])
+    # Phase 2: swing/take run value diffs
+    df["sp_swing_rv_diff"]  = (df["home_sp_swing_rv_per100"]
+                               - df["away_sp_swing_rv_per100"])
+    df["sp_take_rv_diff"]   = (df["home_sp_take_rv_per100"]
+                               - df["away_sp_take_rv_per100"])
+    # Phase 2: FF movement diffs (raw values useful; diff captures deception asymmetry)
+    df["sp_ff_h_break_diff"] = (df["home_sp_ff_h_break_inch"]
+                                - df["away_sp_ff_h_break_inch"])
+    df["sp_ff_v_break_diff"] = (df["home_sp_ff_v_break_inch"]
+                                - df["away_sp_ff_v_break_inch"])
+
+    # Quick Win: form/talent ratio (recent xwOBA vs season-EWMA baseline)
+    # > 1 = pitcher allowing more xwOBA recently than usual (regression candidate)
+    _eps = 0.01
+    df["home_sp_form_talent_ratio"] = (
+        df["home_sp_xwoba_10d"] / (df["home_sp_xwoba_against"] + _eps)
+    )
+    df["away_sp_form_talent_ratio"] = (
+        df["away_sp_xwoba_10d"] / (df["away_sp_xwoba_against"] + _eps)
+    )
+    df["sp_form_talent_ratio_diff"] = (
+        df["home_sp_form_talent_ratio"] - df["away_sp_form_talent_ratio"]
+    )
+
+    # Quick Win: BABIP luck gap (EWMA BABIP vs .295 league avg pitcher BABIP)
+    # Positive = pitching through bad luck on BIP (regression-toward-mean signal)
+    if "home_sp_babip_game" in df.columns:
+        _babip_avg = 0.295
+        df["home_sp_babip_luck"] = df["home_sp_babip_game"] - _babip_avg
+        df["away_sp_babip_luck"] = df["away_sp_babip_game"] - _babip_avg
+        df["sp_babip_luck_diff"] = df["home_sp_babip_luck"] - df["away_sp_babip_luck"]
+
+    # Quick Win: velocity decay diff (positive = home SP loses less velo late)
+    if "home_sp_velo_decay" in df.columns:
+        df["sp_velo_decay_diff"] = df["home_sp_velo_decay"] - df["away_sp_velo_decay"]
 
     # ── Team batting EWMA lookup: join via (team, game_pk) ───────────────
     bat_lookup = batting.set_index(["batting_team", "game_pk"])
@@ -1059,6 +1515,49 @@ def assemble_matrix(
     df["batting_matchup_edge_10d"] = (df["home_bat_vs_away_sp_10d"]
                                       - df["away_bat_vs_home_sp_10d"])
 
+    # ── Rolling home/away win% (last 10 home or away games per team) ──────
+    # Captures venue-specific form: how a team performs at home vs on the road
+    # recently, independent of overall record.  shift(1) prevents leakage.
+    if "home_score" in df.columns and "away_score" in df.columns:
+        _df_srt = (df[["game_pk", "game_date", "home_team", "away_team",
+                        "home_score", "away_score"]]
+                   .sort_values("game_date").copy())
+
+        _home_agg = _df_srt.assign(
+            team=_df_srt["home_team"],
+            win=(_df_srt["home_score"] > _df_srt["away_score"]).astype(float),
+        )
+        _home_agg.loc[_home_agg["home_score"].isna(), "win"] = np.nan
+        _home_agg = _home_agg.sort_values(["team", "game_date"])
+        _home_agg["home_wp10"] = (
+            _home_agg.groupby("team")["win"]
+            .transform(lambda s: s.shift(1).rolling(10, min_periods=3).mean())
+        )
+
+        _away_agg = _df_srt.assign(
+            team=_df_srt["away_team"],
+            win=(_df_srt["away_score"] > _df_srt["home_score"]).astype(float),
+        )
+        _away_agg.loc[_away_agg["home_score"].isna(), "win"] = np.nan
+        _away_agg = _away_agg.sort_values(["team", "game_date"])
+        _away_agg["away_wp10"] = (
+            _away_agg.groupby("team")["win"]
+            .transform(lambda s: s.shift(1).rolling(10, min_periods=3).mean())
+        )
+
+        df = (df
+              .merge(
+                  _home_agg[["team", "game_pk", "home_wp10"]].rename(
+                      columns={"team": "home_team", "home_wp10": "home_team_home_wp10"}),
+                  on=["home_team", "game_pk"], how="left")
+              .merge(
+                  _away_agg[["team", "game_pk", "away_wp10"]].rename(
+                      columns={"team": "away_team", "away_wp10": "away_team_away_wp10"}),
+                  on=["away_team", "game_pk"], how="left"))
+        df["win_pct_venue_edge"] = (
+            df["home_team_home_wp10"] - df["away_team_away_wp10"]
+        )
+
     # ── Bullpen quality (season-level, IP-weighted) ───────────────────────
     if not bullpen.empty:
         bp_lookup = bullpen.set_index(["team", "season"])
@@ -1086,6 +1585,75 @@ def assemble_matrix(
         df["bp_era_diff"]  = df["home_bp_era"]  - df["away_bp_era"]
         df["bp_k9_diff"]   = df["home_bp_k9"]   - df["away_bp_k9"]
         df["bp_whip_diff"] = df["home_bp_whip"]  - df["away_bp_whip"]
+
+    # ── Phase 2: Team bat tracking + batter run values ────────────────────
+    # Seasonal aggregate (team, season) joined like bullpen data.
+    # bat_speed_weighted, blast_rate, squared_up_pct  (2023+; NaN earlier)
+    # bat_swing_rv, bat_take_rv  (batter swing/take discipline)
+    if bat_tracking is not None and not bat_tracking.empty:
+        bt_lookup = bat_tracking.set_index(["team", "season"])
+        bt_cols   = [c for c in bat_tracking.columns if c not in ("team", "season")]
+
+        def get_bat_tracking(team: str, season: int, prefix: str) -> dict:
+            try:
+                row = bt_lookup.loc[(team, season)]
+                if isinstance(row, pd.DataFrame):
+                    row = row.iloc[0]
+            except KeyError:
+                row = pd.Series(dtype=float)
+            return {f"{prefix}_{c}": row.get(c, np.nan) for c in bt_cols}
+
+        home_bt = df.apply(
+            lambda r: get_bat_tracking(r["home_team"], r["year"], "home"), axis=1
+        ).apply(pd.Series)
+        away_bt = df.apply(
+            lambda r: get_bat_tracking(r["away_team"], r["year"], "away"), axis=1
+        ).apply(pd.Series)
+        df = pd.concat([df, home_bt, away_bt], axis=1)
+        for col in bt_cols:
+            h_col, a_col = f"home_{col}", f"away_{col}"
+            if h_col in df.columns and a_col in df.columns:
+                df[f"{col}_diff"] = df[h_col] - df[a_col]
+        if verbose:
+            sample_col = f"home_{bt_cols[0]}" if bt_cols else None
+            n_bt = df[sample_col].notna().sum() if sample_col and sample_col in df.columns else 0
+            print(f"      Bat tracking joined: {n_bt}/{len(df)} rows have data")
+    else:
+        if verbose:
+            print("      Bat tracking: no data provided — columns omitted")
+
+    # ── Phase 2: Team defense (OAA + FRV) ────────────────────────────────
+    if defense is not None and not defense.empty:
+        def_lookup = defense.set_index(["team", "season"])
+        def_cols   = [c for c in defense.columns if c not in ("team", "season")]
+
+        def get_defense(team: str, season: int, prefix: str) -> dict:
+            try:
+                row = def_lookup.loc[(team, season)]
+                if isinstance(row, pd.DataFrame):
+                    row = row.iloc[0]
+            except KeyError:
+                row = pd.Series(dtype=float)
+            return {f"{prefix}_{c}": row.get(c, np.nan) for c in def_cols}
+
+        home_def = df.apply(
+            lambda r: get_defense(r["home_team"], r["year"], "home"), axis=1
+        ).apply(pd.Series)
+        away_def = df.apply(
+            lambda r: get_defense(r["away_team"], r["year"], "away"), axis=1
+        ).apply(pd.Series)
+        df = pd.concat([df, home_def, away_def], axis=1)
+        for col in def_cols:
+            h_col, a_col = f"home_{col}", f"away_{col}"
+            if h_col in df.columns and a_col in df.columns:
+                df[f"{col}_diff"] = df[h_col] - df[a_col]
+        if verbose:
+            sample_col = f"home_{def_cols[0]}" if def_cols else None
+            n_def = df[sample_col].notna().sum() if sample_col and sample_col in df.columns else 0
+            print(f"      Defense features joined: {n_def}/{len(df)} rows have data")
+    else:
+        if verbose:
+            print("      Defense: no data provided — columns omitted")
 
     # ── Team archetype clustering ─────────────────────────────────────────
     # Now includes bat_gb_pct, bat_fb_pct (statcast bb_type), bp_gb_pct
@@ -1182,6 +1750,206 @@ def assemble_matrix(
         if verbose:
             print(f"      Circadian features: {n_hour}/{len(df)} rows have game_hour_et "
                   f"({100*n_hour/len(df):.1f}%)")
+
+    # =========================================================================
+    # PHASE 2 — ENGINEERED INTERACTIONS & RATIO FEATURES
+    # =========================================================================
+    # GBDTs learn interactions implicitly through tree depth, but explicit
+    # encoding is worthwhile when:
+    #   (a) domain logic is genuinely multiplicative (trees approximate A×B
+    #       as a staircase, requiring many splits and overfitting risk), or
+    #   (b) cross-table interactions that the model can't discover without
+    #       them being in the same column.
+    # With ~4,500 labeled games, each explicit interaction saves ~3-5 splits
+    # of data budget, meaningfully improving out-of-sample generalisation.
+    # -------------------------------------------------------------------------
+
+    # ── TIER 1A: K/BB ratio (command quality compressed into one number) ──
+    # K% and BB% are already in the matrix; K/BB as a ratio captures the
+    # non-linear "elite command" region more efficiently than the raw pair.
+    _eps = 0.01   # prevent division by zero
+    df["home_sp_k_bb_ratio"] = df["home_sp_k_pct"] / (df["home_sp_bb_pct"] + _eps)
+    df["away_sp_k_bb_ratio"] = df["away_sp_k_pct"] / (df["away_sp_bb_pct"] + _eps)
+    df["sp_k_bb_ratio_diff"] = df["home_sp_k_bb_ratio"] - df["away_sp_k_bb_ratio"]
+
+    # Trailing 10-day K/BB ratio (recent form)
+    df["home_sp_k_bb_ratio_10d"] = df["home_sp_k_pct_10d"] / (df["home_sp_bb_pct_10d"] + _eps)
+    df["away_sp_k_bb_ratio_10d"] = df["away_sp_k_pct_10d"] / (df["away_sp_bb_pct_10d"] + _eps)
+    df["sp_k_bb_ratio_10d_diff"] = df["home_sp_k_bb_ratio_10d"] - df["away_sp_k_bb_ratio_10d"]
+
+    # ── TIER 1B: Pitcher quality × opposing lineup quality interaction ─────
+    # The model already sees pitcher xwoba_against and lineup xwoba separately.
+    # Their product captures the compounding effect: an elite pitcher facing a
+    # weak lineup is a much stronger signal than either feature alone.
+    df["home_sp_vs_lineup_quality"] = (
+        df["home_sp_xwoba_against"] * df["away_bat_vs_home_sp"]
+    )
+    df["away_sp_vs_lineup_quality"] = (
+        df["away_sp_xwoba_against"] * df["home_bat_vs_away_sp"]
+    )
+    df["sp_lineup_quality_diff"] = (
+        df["home_sp_vs_lineup_quality"] - df["away_sp_vs_lineup_quality"]
+    )
+
+    # 10-day version — recent form × recent opponent quality
+    if "home_sp_xwoba_10d" in df.columns and "home_bat_vs_away_sp_10d" in df.columns:
+        df["home_sp_vs_lineup_10d"] = (
+            df["home_sp_xwoba_10d"] * df["away_bat_vs_home_sp_10d"]
+        )
+        df["away_sp_vs_lineup_10d"] = (
+            df["away_sp_xwoba_10d"] * df["home_bat_vs_away_sp_10d"]
+        )
+        df["sp_lineup_quality_10d_diff"] = (
+            df["home_sp_vs_lineup_10d"] - df["away_sp_vs_lineup_10d"]
+        )
+
+    # ── TIER 1C: Fatigue × velocity signal ────────────────────────────────
+    # IL return flag indicates first 1-3 starts after a long absence — pitchers
+    # are often stronger early but can also be rusty. Multiplying by velo
+    # gives the model a fused "is this a weakened start?" signal.
+    _il_penalty = 0.015   # 1.5% velo discount per IL return
+    df["home_sp_fatigue_signal"] = (
+        df["home_sp_ff_velo"] * (1.0 - _il_penalty * df["home_sp_il_return_flag"].fillna(0))
+    )
+    df["away_sp_fatigue_signal"] = (
+        df["away_sp_ff_velo"] * (1.0 - _il_penalty * df["away_sp_il_return_flag"].fillna(0))
+    )
+    df["sp_fatigue_diff"] = df["home_sp_fatigue_signal"] - df["away_sp_fatigue_signal"]
+
+    # ── TIER 1D: Umpire × command interaction ─────────────────────────────
+    # A tight umpire (large strike zone) amplifies the value of a command
+    # pitcher (high K-BB%). Captures the asymmetric umpire effect between
+    # the two starters when one has a significant command edge.
+    if "ump_k_above_avg" in df.columns:
+        df["ump_command_edge_home"] = (
+            df["ump_k_above_avg"] * df["home_sp_k_minus_bb"]
+        )
+        df["ump_command_edge_away"] = (
+            df["ump_k_above_avg"] * df["away_sp_k_minus_bb"]
+        )
+        df["ump_command_net_edge"] = (
+            df["ump_command_edge_home"] - df["ump_command_edge_away"]
+        )
+
+    # ── TIER 1E: Arsenal put-away quality ratio ────────────────────────────
+    # Ratio of weighted arsenal run value to primary whiff%. Separates pitchers
+    # who get whiffs on their best pitch (dominant) from those whose run value
+    # comes from contact management (crafty). Different predictive profile.
+    if "home_sp_arsenal_weighted_rv" in df.columns and "home_sp_primary_whiff_pct" in df.columns:
+        df["home_sp_arsenal_quality_ratio"] = (
+            df["home_sp_arsenal_weighted_rv"] / (df["home_sp_primary_whiff_pct"] + _eps)
+        )
+        df["away_sp_arsenal_quality_ratio"] = (
+            df["away_sp_arsenal_weighted_rv"] / (df["away_sp_primary_whiff_pct"] + _eps)
+        )
+        df["sp_arsenal_quality_ratio_diff"] = (
+            df["home_sp_arsenal_quality_ratio"] - df["away_sp_arsenal_quality_ratio"]
+        )
+
+    # ── TIER 2A: Swing/take discipline mismatch ───────────────────────────
+    # A pitcher who generates high run value on takes (commands the zone)
+    # facing a patient lineup (high bat_take_rv) is a specific matchup tension
+    # the model would need many splits to discover independently.
+    if "home_sp_take_rv_per100" in df.columns and "away_bat_take_rv" in df.columns:
+        df["home_take_mismatch"] = (
+            df["home_sp_take_rv_per100"] * df["away_bat_take_rv"]
+        )
+        df["away_take_mismatch"] = (
+            df["away_sp_take_rv_per100"] * df["home_bat_take_rv"]
+        )
+        df["take_mismatch_diff"] = df["home_take_mismatch"] - df["away_take_mismatch"]
+
+    if "home_sp_swing_rv_per100" in df.columns and "away_bat_swing_rv" in df.columns:
+        df["home_swing_mismatch"] = (
+            df["home_sp_swing_rv_per100"] * df["away_bat_swing_rv"]
+        )
+        df["away_swing_mismatch"] = (
+            df["away_sp_swing_rv_per100"] * df["home_bat_swing_rv"]
+        )
+        df["swing_mismatch_diff"] = df["home_swing_mismatch"] - df["away_swing_mismatch"]
+
+    # ── TIER 2B: Put-away pitch × opposing bat speed ───────────────────────
+    # A pitcher's put-away pitch is more effective against lineups with slower
+    # bat speed. Encodes the physics: late-breaking pitches need reaction time
+    # that bat speed determines. Key for K-prop and strikeout total models.
+    if "home_sp_primary_putaway_pct" in df.columns and "away_bat_speed_weighted" in df.columns:
+        df["home_putaway_vs_bat_speed"] = (
+            df["home_sp_primary_putaway_pct"] * (1.0 / (df["away_bat_speed_weighted"] + 1.0))
+        )
+        df["away_putaway_vs_bat_speed"] = (
+            df["away_sp_primary_putaway_pct"] * (1.0 / (df["home_bat_speed_weighted"] + 1.0))
+        )
+        df["putaway_bat_speed_diff"] = (
+            df["home_putaway_vs_bat_speed"] - df["away_putaway_vs_bat_speed"]
+        )
+
+    # ── TIER 2C: Ground-ball pitcher × infield defense quality ────────────
+    # A high-GB pitcher is worth more behind a good infield (high OAA).
+    # The interaction captures that GB% alone understates value for pitchers
+    # with elite defense behind them, and overstates it with poor defense.
+    if "home_team_oaa" in df.columns:
+        df["home_gb_defense_synergy"] = (
+            df["home_sp_gb_pct"] * df["home_team_oaa"].clip(lower=0)
+        )
+        df["away_gb_defense_synergy"] = (
+            df["away_sp_gb_pct"] * df["away_team_oaa"].clip(lower=0)
+        )
+        df["gb_defense_synergy_diff"] = (
+            df["home_gb_defense_synergy"] - df["away_gb_defense_synergy"]
+        )
+
+    # ── TIER 2D: Blast rate × arsenal run value (power vs. stuff matchup) ─
+    # A powerful lineup (high blast_rate) facing a dominant arsenal (high
+    # arsenal_weighted_rv) is a key over/under signal. Encoding the product
+    # compresses the "can they square it up?" question into one feature.
+    if "home_bat_blast_rate" in df.columns and "away_sp_arsenal_weighted_rv" in df.columns:
+        df["home_power_vs_stuff"] = (
+            df["home_bat_blast_rate"] * df["away_sp_arsenal_weighted_rv"]
+        )
+        df["away_power_vs_stuff"] = (
+            df["away_bat_blast_rate"] * df["home_sp_arsenal_weighted_rv"]
+        )
+        df["power_vs_stuff_diff"] = df["home_power_vs_stuff"] - df["away_power_vs_stuff"]
+
+    # ── TIER 2E: Bullpen vulnerability × game state (late leverage) ───────
+    # High-ERA bullpen × team run production variance: volatile teams facing
+    # a bad bullpen have higher upside late. Useful for full-game totals.
+    if "home_bp_era" in df.columns:
+        df["home_bullpen_vulnerability"] = (
+            df["home_bp_era"] * df["away_bat_xwoba_vs_rhp"]
+        )
+        df["away_bullpen_vulnerability"] = (
+            df["away_bp_era"] * df["home_bat_xwoba_vs_rhp"]
+        )
+        df["bullpen_vulnerability_diff"] = (
+            df["home_bullpen_vulnerability"] - df["away_bullpen_vulnerability"]
+        )
+
+    # ── TIER 2F: Circadian edge × aging pitcher ────────────────────────────
+    # Older pitchers (age > 32) are more affected by time-zone travel fatigue.
+    # Encodes the non-linear age × circadian interaction from the feature list.
+    if "circadian_edge" in df.columns and "home_sp_age_pit" in df.columns:
+        _age_scale = 32.0   # reference age; above this, circadian impact grows
+        df["home_sp_circadian_age_adj"] = (
+            df["circadian_edge"] * np.maximum(df["home_sp_age_pit"] - _age_scale, 0)
+        )
+        df["away_sp_circadian_age_adj"] = (
+            -df["circadian_edge"] * np.maximum(df["away_sp_age_pit"] - _age_scale, 0)
+        )
+        df["circadian_age_net"] = (
+            df["home_sp_circadian_age_adj"] - df["away_sp_circadian_age_adj"]
+        )
+
+    # ── WINSORIZE all continuous features at [1st, 99th] percentile ───────
+    # Must happen AFTER train/val split column exists (used to anchor bounds).
+    # The split column is added below in the labels section; to avoid a
+    # circular dependency we add a temporary indicator here.
+    _has_split = "split" in df.columns
+    if not _has_split:
+        df["split"] = np.where(df["year"].isin([2023, 2024]), "train", "val")
+    df = _winsorize_features(df, verbose=verbose)
+    if not _has_split:
+        df = df.drop(columns=["split"])
 
     # ── Monte Carlo residual placeholder ──────────────────────────────────
     # Populated at inference time by run_today.py before XGBoost scoring.
@@ -1429,13 +2197,16 @@ def main():
           f"|  Trailing: {TRAILING_DAYS}d")
     print("=" * 60)
 
-    games    = build_game_list(years)
-    pitchers = build_pitcher_ewma_stats(years)
-    batting  = build_team_batting_ewma(years)
-    bullpen  = build_bullpen_stats(years)
+    games       = build_game_list(years)
+    pitchers    = build_pitcher_ewma_stats(years)
+    batting     = build_team_batting_ewma(years)
+    bullpen     = build_bullpen_stats(years)
+    bat_tracking = build_team_bat_tracking(years)
+    defense     = build_team_defense(years)
 
     print()
-    matrix = assemble_matrix(games, pitchers, batting, bullpen)
+    matrix = assemble_matrix(games, pitchers, batting, bullpen,
+                             bat_tracking=bat_tracking, defense=defense)
 
     out_parquet = f"{args.out}.parquet"
     out_csv     = f"{args.out}.csv"
