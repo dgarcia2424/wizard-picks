@@ -3005,17 +3005,14 @@ def write_html_card(results: list[dict], date_str: str,
         score_html = _score_row(r)
 
         # ── F5 section ────────────────────────────────────────────────────────
-        # Action thresholds derived from 2025 historical signal accuracy analysis
-        # (analyze_f5_signals.py): AUC / accuracy per signal at each cut.
-        _F5_MC_COVER_HI   = 0.62   # MC cover% >= this -> HOME call
-        _F5_MC_COVER_LO   = 0.38   # MC cover% <= this -> AWAY call
-        _F5_MC_WIN_HI     = 0.50   # MC win% >= this   -> HOME call (68% hist acc)
-        _F5_XGB_HI        = 0.60   # XGB L1/L2 >= this -> HOME call
-        _F5_XGB_LO        = 0.40   # XGB L1/L2 <= this -> AWAY call
-        _F5_PIN_HI        = 0.60   # Pinnacle est >= this -> HOME call
-        _F5_PIN_LO        = 0.40   # Pinnacle est <= this -> AWAY call
-        _F5_TEAM_LO_HI    = 0.55   # Team log-odds sigmoid >= this -> HOME call
-        _F5_TEAM_LO_LO    = 0.45   # Team log-odds sigmoid <= this -> AWAY call
+        # Half/full vote thresholds (from analyze_f5_signals.py 2025 backtest):
+        #   Full vote (≥65%) → 72.5% hist accuracy   (_V_FULL / mirror 1-_V_FULL)
+        #   Half vote (60-65%) → 68.8% hist accuracy (_V_HALF / mirror 1-_V_HALF)
+        #
+        # XGB L1/L2 and Pinnacle use the standard _V_FULL/_V_HALF thresholds.
+        # MC cover% is calibrated lower (62/38 full, 58/42 half) per signal AUC analysis.
+        # MC win% is a coin-flip signal; full vote ≥55%, half vote 50-55% (AWAY mirror).
+        # Team log-odds sigmoid has a narrower action range (55/45 full, 52/48 half).
 
         def _f5_action(prob, full_hi=_V_FULL, half_hi=_V_HALF, full_lo=None, half_lo=None):
             """
@@ -3066,22 +3063,24 @@ def write_html_card(results: list[dict], date_str: str,
                          if not _is_missing(tlo_) else None)
 
             # ── Action calls per signal ──────────────────────────────────────
-            # Use keyword args so full_lo lands in the right parameter.
-            # half_hi/half_lo default to _V_HALF (0.60) / mirror unless overridden.
-            # MC cover% uses its own calibrated full thresholds; half zone = 0.58–0.62
-            sig_mc_cov  = _f5_action(f5cov,    full_hi=_F5_MC_COVER_HI, half_hi=0.58,
-                                               full_lo=_F5_MC_COVER_LO,  half_lo=0.42)
-            # MC win% is a coin-flip signal; full vote ≥ 55%, half vote 50–55%
+            # All thresholds are symmetric: full_lo = 1 - full_hi, half_lo = 1 - half_hi.
+            # MC cover%: calibrated full=0.62/0.38, half=0.58/0.42
+            sig_mc_cov  = _f5_action(f5cov,    full_hi=0.62, half_hi=0.58,
+                                               full_lo=0.38, half_lo=0.42)
+            # MC win%: coin-flip signal; full ≥55%, half 50-55% (AWAY: ≤45% / 45-50%)
             sig_mc_win  = _f5_action(f5wh,     full_hi=0.55, half_hi=0.50,
                                                full_lo=0.45, half_lo=0.50)
-            sig_l1      = _f5_action(l1,       full_hi=_F5_XGB_HI,  half_hi=_V_HALF,
-                                               full_lo=_F5_XGB_LO,  half_lo=_V_HALF)
-            sig_l2      = _f5_action(l2,       full_hi=_F5_XGB_HI,  half_hi=_V_HALF,
-                                               full_lo=_F5_XGB_LO,  half_lo=_V_HALF)
-            sig_pin     = _f5_action(pin_f5,   full_hi=_F5_PIN_HI,  half_hi=0.55,
-                                               full_lo=_F5_PIN_LO,  half_lo=0.45)
-            sig_team    = _f5_action(team_prob, full_hi=_F5_TEAM_LO_HI, half_hi=0.52,
-                                                full_lo=_F5_TEAM_LO_LO, half_lo=0.48)
+            # XGB L1/L2: user-defined vote thresholds (65% full / 60% half)
+            sig_l1      = _f5_action(l1,       full_hi=_V_FULL, half_hi=_V_HALF,
+                                               full_lo=1 - _V_FULL, half_lo=1 - _V_HALF)
+            sig_l2      = _f5_action(l2,       full_hi=_V_FULL, half_hi=_V_HALF,
+                                               full_lo=1 - _V_FULL, half_lo=1 - _V_HALF)
+            # Pinnacle F5 estimate: full ≥60%, half 55-60%
+            sig_pin     = _f5_action(pin_f5,   full_hi=0.60, half_hi=0.55,
+                                               full_lo=0.40, half_lo=0.45)
+            # Team log-odds sigmoid: narrower action range (55/45 full, 52/48 half)
+            sig_team    = _f5_action(team_prob, full_hi=0.55, half_hi=0.52,
+                                                full_lo=0.45, half_lo=0.48)
 
             # ── Vote tally (half/full per signal) ────────────────────────────
             all_sigs = [sig_mc_cov, sig_mc_win, sig_l1, sig_l2, sig_pin, sig_team]
