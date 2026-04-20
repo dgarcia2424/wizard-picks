@@ -2304,7 +2304,13 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
             else:
                 f5_score = "—"
             combo = f"{win_prob:.0%}/{half_prob:.0%}/{pin_f5_s}"
-            f5_rows.append((win_prob, team, side, sp,
+            l2_prob = r.get("f5_stacker_l2")
+            l2_val  = (float(l2_prob) if side == "HOME" and not _is_missing(l2_prob)
+                       else (1 - float(l2_prob)) if side == "AWAY" and not _is_missing(l2_prob)
+                       else None)
+            _sigs   = [s for s in [win_prob, half_prob, l2_val] if s is not None]
+            avg_sig = sum(_sigs) / len(_sigs) if _sigs else win_prob
+            f5_rows.append((avg_sig, team, side, sp,
                             f"{float(xw):.3f}" if not _is_missing(xw) else "—",
                             osp,
                             f"{float(oxw):.3f}" if not _is_missing(oxw) else "—",
@@ -3474,7 +3480,8 @@ def write_html_card(results: list[dict], date_str: str,
                     ] if p is not None
                 )
 
-                sort_key = l2_p if l2_p is not None else win_p
+                _sigs    = [s for s in [win_p, cov_p, l2_p] if s is not None]
+                sort_key = sum(_sigs) / len(_sigs) if _sigs else win_p
 
                 sp  = str(r.get(sp_key, "TBD")).title()
                 xw  = r.get(xw_key)
