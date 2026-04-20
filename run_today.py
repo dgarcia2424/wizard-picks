@@ -3362,10 +3362,15 @@ def write_html_card(results: list[dict], date_str: str,
             return f'<span class="rt-act-away-half">{p:.0%}</span>'
         return f'<span class="rt-act-na">{p:.0%}</span>'
 
-    def _f5_rank_table(min_vote: float = 0.0) -> str:
+    def _f5_rank_table(min_prob: float = 0.0, min_vote: float = 0.0) -> str:
         """
         Unified F5 +0.5 rankings table.  Columns shown per team:
           MC win% | MC +0.5% | XGB L2% | Pin F5% | Votes | Proj score
+
+        min_prob : only show rows where XGB L2 (sort key) >= this threshold.
+                   Setting 0.60 removes the mirror/loser side automatically since
+                   exactly one of HOME (l2_p) and AWAY (1-l2_p) will be >= 0.60.
+        min_vote : additional filter — also require vote_score >= this value.
 
         Vote scoring (from 2025 back-test, analyze_f5_signals.py):
           Full vote (1.0) : signal >= 65%  →  72.5% historical accuracy
@@ -3449,6 +3454,8 @@ def write_html_card(results: list[dict], date_str: str,
                 })
 
         rows.sort(key=lambda x: -x["sort_key"])
+        if min_prob > 0:
+            rows = [x for x in rows if x["sort_key"] >= min_prob]
         if min_vote > 0:
             rows = [x for x in rows if x["vote_score"] >= min_vote]
 
@@ -3582,9 +3589,9 @@ def write_html_card(results: list[dict], date_str: str,
 <tbody>{trs}</tbody>
 </table></div>"""
 
-    # email filter: only show rows where at least one signal has half-vote conviction
-    _email_min_vote = 1.0 if email_filter else 0.0
-    f5_rank_html   = _f5_rank_table(min_vote=_email_min_vote)
+    # email filter: 60% floor removes mirror/loser side; full card shows all
+    _email_min_prob = 0.60 if email_filter else 0.0
+    f5_rank_html   = _f5_rank_table(min_prob=_email_min_prob)
     runs_rank_html = _runs_rank_table(min_diff=email_min_run_diff)
 
     # ── assemble HTML ─────────────────────────────────────────────────────────
