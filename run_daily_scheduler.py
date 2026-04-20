@@ -164,6 +164,7 @@ def run_all() -> None:
 
         # ── Step 2: Statcast append — yesterday's pitch data + actuals ──────
         run_step("statcast_pull_2026.py", "statcast_pull")
+        run_step("extract_actuals_2026.py", "actuals_2026")   # keeps actuals fresh for F5 rolling features
 
         # ── Step 2b: Umpire assignments + tendencies ──────────────────────
         run_step("ump_pull.py", "ump_pull")
@@ -234,6 +235,7 @@ def run_refresh(label: str, send_email: bool = False) -> None:
 
         # ── Step 0: Statcast append (idempotent — no-op if already current) ──
         run_step("statcast_pull_2026.py", "statcast_pull")
+        run_step("extract_actuals_2026.py", "actuals_2026")
 
         # ── Step 1: Lineups + probable starters (today + tomorrow) ──────────
         run_step("lineup_pull.py --recent", "lineups_today")

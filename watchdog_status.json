@@ -1,11 +1,26 @@
 {
-  "last_run": "2026-04-19T16:30:02",
-  "elapsed_s": 0.1,
+  "last_run": "2026-04-20T03:30:12",
+  "elapsed_s": 8.5,
   "total_checks": 35,
-  "ok": 35,
+  "ok": 33,
   "warn": 0,
-  "fail": 0,
-  "repaired": 0,
-  "overall": "ok",
-  "issues": []
+  "fail": 2,
+  "repaired": 2,
+  "overall": "fail",
+  "issues": [
+    {
+      "name": "odds_current",
+      "status": "fail",
+      "message": "FILE MISSING: data/statcast/odds_current_2026_04_20.parquet | REPAIRED via odds_current_pull.py",
+      "repaired": true,
+      "repair_cmd": "odds_current_pull.py"
+    },
+    {
+      "name": "k_props",
+      "status": "fail",
+      "message": "FILE MISSING: data/statcast/k_props_2026-04-20.parquet | REPAIRED via prizepicks_pull.py",
+      "repaired": true,
+      "repair_cmd": "prizepicks_pull.py"
+    }
+  ]
 }
