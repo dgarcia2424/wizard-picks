@@ -997,17 +997,38 @@ def _build_parlay_legs(r: dict) -> list[dict]:
     return legs
 
 
+def _f5_game_keys(results: list[dict], min_prob: float = 0.60) -> set[str]:
+    """
+    Return the set of game_key strings ('{away}@{home}') for games where at
+    least one side has an F5 XGB-L2 probability >= min_prob (i.e. the game
+    appears in the F5 rank table at the given threshold).
+    """
+    keys: set[str] = set()
+    for r in results:
+        l2 = r.get("f5_stacker_l2")
+        if _is_missing(l2):
+            continue
+        l2 = float(l2)
+        if max(l2, 1.0 - l2) >= min_prob:
+            keys.add(f"{r['away_team']}@{r['home_team']}")
+    return keys
+
+
 def _find_parlay_combos(
     results: list[dict],
     target_min: int = _PARLAY_TARGET_MIN,
     target_max: int = _PARLAY_TARGET_MAX,
     top_n: int = _PARLAY_TOP_N,
+    allowed_game_keys: set[str] | None = None,
 ) -> list[dict]:
     """
     Find 2- and 3-leg combos whose combined American odds fall in
     [target_min, target_max].  Correlation between same-game legs is
     applied to the model joint probability.  Market odds multiply naively
     (sportsbook applies its own SGP haircut for same-game legs).
+
+    allowed_game_keys : if provided, only legs from those games are considered.
+                        Pass _f5_game_keys(results) to restrict to F5-table games.
 
     Returns top_n combos sorted by combined model edge (descending).
     """
@@ -1016,6 +1037,10 @@ def _find_parlay_combos(
     all_legs: list[dict] = []
     for r in results:
         all_legs.extend(_build_parlay_legs(r))
+
+    # ── F5 filter — keep only legs from games in the allowed set ──────────────
+    if allowed_game_keys is not None:
+        all_legs = [lg for lg in all_legs if lg["game_key"] in allowed_game_keys]
 
     if len(all_legs) < 2:
         return []
@@ -2445,8 +2470,8 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
             if parts:
                 lines.append(f"    Prop: #{p['pos']} {p['player']} ({p['team']})  {parts}")
 
-    # Parlay suggestions
-    parlay_combos_email = _find_parlay_combos(results)
+    # Parlay suggestions — restrict to games that appear in the F5 rank table
+    parlay_combos_email = _find_parlay_combos(results, allowed_game_keys=_f5_game_keys(results))
     lines.append("\n" + "=" * 48)
     lines.append(f"CORRELATED PARLAY SUGGESTIONS (+{_PARLAY_TARGET_MIN}–+{_PARLAY_TARGET_MAX})")
     lines.append("=" * 48)
@@ -3698,7 +3723,7 @@ def write_html_card(results: list[dict], date_str: str,
             '</div>'
         )
 
-    parlay_combos  = _find_parlay_combos(results)
+    parlay_combos  = _find_parlay_combos(results, allowed_game_keys=_f5_game_keys(results))
     parlay_section = "" if email_filter else _parlay_html(parlay_combos)
 
     html = f"""<!DOCTYPE html>
