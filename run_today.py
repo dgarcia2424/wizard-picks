@@ -2202,6 +2202,28 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
     lines.append(day_label)
     lines.append("=" * 48)
 
+    # ── XGB F5 Stack Picks (L2 ≥ 65%) ────────────────────────────────────────
+    stk_picks = sorted(
+        [r for r in results if not _is_missing(r.get("f5_stacker_l2"))],
+        key=lambda r: -float(r["f5_stacker_l2"])
+    )
+    top_picks  = [r for r in stk_picks if float(r["f5_stacker_l2"]) >= 0.65]
+    away_picks = [r for r in stk_picks if float(r["f5_stacker_l2"]) <= 0.35]
+    if top_picks or away_picks:
+        lines.append("\nXGB F5 STACK PICKS  (AUC 0.577 OOS · trained 2023–2025)")
+        lines.append("=" * 60)
+        lines.append(f"{'#':<3} {'Matchup':<20} {'Side':<5} {'Home SP':<22} {'Away SP':<22} {'L1%':>5}  {'L2%':>5}")
+        lines.append("-" * 85)
+        all_f5_picks = [(r, "HOME", float(r["f5_stacker_l2"])) for r in top_picks] + \
+                       [(r, "AWAY", 1 - float(r["f5_stacker_l2"])) for r in away_picks]
+        all_f5_picks.sort(key=lambda x: -x[2])
+        for i, (r, side, prob) in enumerate(all_f5_picks, 1):
+            matchup = f"{r['away_team']} @ {r['home_team']}"
+            l1 = float(r["f5_xgb_l1"]) if not _is_missing(r.get("f5_xgb_l1")) else None
+            l1_s = f"{l1:.0%}" if l1 is not None else "—"
+            lines.append(f"{i:<3} {matchup:<20} {side:<5} {str(r.get('home_sp','?')).title():<22} {str(r.get('away_sp','?')).title():<22} {l1_s:>5}  {prob:>5.0%}")
+        lines.append("")
+
     # ── F5 Rankings table ──────────────────────────────
     lines.append("\nF5 +0.5 RANKINGS")
     lines.append("-" * 80)
@@ -3000,7 +3022,7 @@ def write_html_card(results: list[dict], date_str: str,
                     if not _is_missing(tlo) and not _is_missing(thi) else "")
             wh_s = f"{float(f5wh):.0%}" if not _is_missing(f5wh) else "—"
             wa_s = f"{float(f5wa):.0%}" if not _is_missing(f5wa) else "—"
-            return (
+            mc_div = (
                 f'<div class="gc-extra-section">'
                 f'<span class="gc-extra-lbl">F5</span>'
                 f'&nbsp;<span class="gc-extra-dim">{away} win</span>&nbsp;'
@@ -3014,6 +3036,27 @@ def write_html_card(results: list[dict], date_str: str,
                 f'<span class="gc-extra-val">{tstr}</span>{band}'
                 f'</div>'
             )
+            # XGB+Stacker badge (appended if predictions available)
+            l1  = r.get("f5_xgb_l1")
+            l2  = r.get("f5_stacker_l2")
+            if not _is_missing(l1) or not _is_missing(l2):
+                l1_s  = f"{float(l1):.0%}"  if not _is_missing(l1) else "—"
+                l2_s  = f"{float(l2):.0%}"  if not _is_missing(l2) else "—"
+                l2_cls = ("val-green" if not _is_missing(l2) and float(l2) >= 0.65
+                          else "val-red" if not _is_missing(l2) and float(l2) <= 0.35
+                          else "")
+                stack_div = (
+                    f'<div class="gc-extra-section">'
+                    f'<span class="gc-extra-lbl">XGB F5</span>'
+                    f'&nbsp;<span class="gc-extra-dim">L1 (XGB+Platt)</span>&nbsp;'
+                    f'<span class="gc-extra-val">{l1_s}</span>'
+                    f'&nbsp;&nbsp;<span class="gc-extra-dim">L2 (Stacker)</span>&nbsp;'
+                    f'<span class="gc-extra-val {l2_cls}">{l2_s}</span>'
+                    f'&nbsp;&nbsp;<span class="gc-extra-dim">home cover +0.5</span>'
+                    f'</div>'
+                )
+                return mc_div + stack_div
+            return mc_div
 
         # ── 1st inning section ────────────────────────────────────────────────
         def _f1_html():
@@ -3342,6 +3385,65 @@ def write_html_card(results: list[dict], date_str: str,
 <tbody>{trs}</tbody>
 </table></div>"""
 
+    # ── XGB F5 stack rank table (L2 ≥ 60%) ────────────────────────────────��─
+    def _xgb_f5_stack_table() -> str:
+        picks = []
+        for r in results:
+            l2 = r.get("f5_stacker_l2")
+            if _is_missing(l2):
+                continue
+            l2f = float(l2)
+            l1  = r.get("f5_xgb_l1")
+            lo  = r.get("f5_team_log_odds")
+            home, away = r["home_team"], r["away_team"]
+            hsp = str(r.get("home_sp", "TBD")).title()
+            asp = str(r.get("away_sp", "TBD")).title()
+            if l2f >= 0.60:
+                picks.append({"team": home, "side": "HOME", "prob": l2f,
+                               "l1": float(l1) if not _is_missing(l1) else None,
+                               "lo": float(lo) if not _is_missing(lo) else None,
+                               "sp": hsp, "osp": asp,
+                               "matchup": f"{away} @ {home}"})
+            elif l2f <= 0.40:
+                picks.append({"team": away, "side": "AWAY", "prob": 1 - l2f,
+                               "l1": (1 - float(l1)) if not _is_missing(l1) else None,
+                               "lo": (-float(lo)) if not _is_missing(lo) else None,
+                               "sp": asp, "osp": hsp,
+                               "matchup": f"{away} @ {home}"})
+        picks.sort(key=lambda x: -x["prob"])
+        if not picks:
+            return ""
+        trs = ""
+        for i, p in enumerate(picks, 1):
+            l1_s  = f"{p['l1']:.0%}"  if p["l1"]  is not None else "—"
+            lo_s  = f"{p['lo']:+.2f}" if p["lo"] is not None else "—"
+            side_cls = "rt-home" if p["side"] == "HOME" else "rt-away"
+            prob_cls = "val-green" if p["prob"] >= 0.65 else ""
+            trs += (
+                f'<tr>'
+                f'<td class="rt-n">{i}</td>'
+                f'<td class="rt-team">{p["matchup"]}</td>'
+                f'<td class="rt-side {side_cls}">{p["side"]}</td>'
+                f'<td class="rt-sp">{p["sp"]}</td>'
+                f'<td class="rt-sp">{p["osp"]}</td>'
+                f'<td class="rt-prob">{l1_s}</td>'
+                f'<td class="rt-prob {prob_cls}"><strong>{p["prob"]:.0%}</strong></td>'
+                f'<td class="rt-score">{lo_s}</td>'
+                f'</tr>'
+            )
+        return f"""<div class="rank-section">
+<div class="rank-title">XGB F5 Stack Picks — L2 ≥ 60%</div>
+<div class="rank-note">Two-level F5 model: XGBoost (115 features) → OOF Platt → Bayesian Stacker · OOS AUC 0.577 · Trained 2023–2025 · ≥65% green</div>
+<table class="rank-tbl">
+<thead><tr>
+  <th>#</th><th>Matchup</th><th>Side</th>
+  <th>Bet SP</th><th>Opp SP</th>
+  <th>L1 (XGB+Platt)</th><th>L2 (Stacker)</th><th>Team LogOdds</th>
+</tr></thead>
+<tbody>{trs}</tbody>
+</table></div>"""
+
+    xgb_f5_stack_html = _xgb_f5_stack_table()
     f5_rank_html   = _f5_rank_table(min_prob=email_min_f5)
     runs_rank_html = _runs_rank_table(min_diff=email_min_run_diff)
 
@@ -3756,6 +3858,8 @@ body {{
   </div>
 </div>
 
+{xgb_f5_stack_html}
+
 {f5_rank_html}
 
 {runs_rank_html}
@@ -3876,6 +3980,23 @@ def main():
     print("=" * 72)
 
     results = run_card(date_str, min_edge=args.min_edge)
+
+    # ── F5 XGBoost + Bayesian Stacker predictions ────────────────────────────
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).parent))
+        from score_f5_today import predict_games as _predict_f5
+        print("\n  Injecting F5 XGBoost+Stacker predictions …")
+        _f5_df = _predict_f5(date_str)
+        _f5_by_home = {row["home_team"]: row for _, row in _f5_df.iterrows()}
+        for _r in results:
+            _f5 = _f5_by_home.get(_r.get("home_team"), {})
+            _r["f5_xgb_l1"]      = _f5.get("xgb_l1")
+            _r["f5_stacker_l2"]  = _f5.get("stacker_l2")
+            _r["f5_team_log_odds"] = _f5.get("team_log_odds")
+        print(f"  F5 stack injected for {sum(1 for r in results if r.get('f5_stacker_l2') is not None)} games")
+    except Exception as _e:
+        print(f"  [F5 stack] skipped: {_e}")
 
     if args.csv and results:
         # Always save date-stamped file so today + tomorrow can coexist
