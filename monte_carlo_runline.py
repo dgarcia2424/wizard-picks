@@ -832,6 +832,29 @@ def build_xgb_row(home_prof: pd.Series, away_prof: pd.Series,
     row["bp_whip_diff"] = safe_diff(row.get("home_bp_whip"), row.get("away_bp_whip"))
     row["bp_k9_diff"]   = safe_diff(row.get("home_bp_k9"),   row.get("away_bp_k9"))
 
+    # Rolling 15-game momentum features (v2 model additions)
+    for prefix, ts in [("home", home_team_stats), ("away", away_team_stats)]:
+        if ts is not None:
+            rd  = ts.get("rolling_rd_15g")
+            pyth = ts.get("pyth_win_pct_15g")
+            if pd.notna(rd)   and f"{prefix}_rolling_rd_15g"   in row:
+                row[f"{prefix}_rolling_rd_15g"]   = float(rd)
+            if pd.notna(pyth) and f"{prefix}_pyth_win_pct_15g" in row:
+                row[f"{prefix}_pyth_win_pct_15g"] = float(pyth)
+    row["rolling_rd_diff"]   = safe_diff(row.get("home_rolling_rd_15g"),   row.get("away_rolling_rd_15g"))
+    row["pyth_win_pct_diff"] = safe_diff(row.get("home_pyth_win_pct_15g"), row.get("away_pyth_win_pct_15g"))
+
+    # Lineup wRC+ as direct ML features (v2 model additions — from today's actual lineup)
+    if home_lineup_wrc is not None and pd.notna(float(home_lineup_wrc)):
+        if "home_lineup_wrc_plus" in row:
+            row["home_lineup_wrc_plus"] = float(home_lineup_wrc)
+    if away_lineup_wrc is not None and pd.notna(float(away_lineup_wrc)):
+        if "away_lineup_wrc_plus" in row:
+            row["away_lineup_wrc_plus"] = float(away_lineup_wrc)
+    if "lineup_wrc_plus_diff" in row:
+        row["lineup_wrc_plus_diff"] = safe_diff(
+            row.get("home_lineup_wrc_plus"), row.get("away_lineup_wrc_plus"))
+
     # Matchup-specific batting edge (home team vs away SP handedness)
     away_sp_rhp = row.get("away_sp_p_throws_R", 1)
     home_sp_rhp = row.get("home_sp_p_throws_R", 1)

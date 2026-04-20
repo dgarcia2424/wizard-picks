@@ -104,11 +104,5 @@
   "away_game_local_hour",
   "home_game_local_hour",
   "circadian_edge",
-  "mc_expected_runs",
-  "home_rolling_rd_15g",
-  "home_pyth_win_pct_15g",
-  "away_rolling_rd_15g",
-  "away_pyth_win_pct_15g",
-  "rolling_rd_diff",
-  "pyth_win_pct_diff"
+  "mc_expected_runs"
 ]

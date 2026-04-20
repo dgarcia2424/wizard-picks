@@ -314,6 +314,56 @@ def build(verbose: bool = True) -> pd.DataFrame:
     bat["bullpen_k9"]         = bat["bullpen_k9"].fillna(8.5)
     bat["bullpen_xwoba"]      = bat["bullpen_xwoba"].fillna(LEAGUE_XWOBA)
 
+    # ── 4. Rolling 15-game run differential + Pythagorean win% ───────────────
+    # Used as features in the XGBoost full-game model (v2 feature set).
+    # Computed from actuals_2026.parquet (game-by-game results).
+    try:
+        act_path = DATA_DIR / "actuals_2026.parquet"
+        act = pd.read_parquet(act_path, engine="pyarrow",
+                              columns=["game_date", "home_team", "away_team",
+                                       "home_score_final", "away_score_final"])
+        act["game_date"] = pd.to_datetime(act["game_date"])
+        act["home_score"] = pd.to_numeric(act["home_score_final"], errors="coerce")
+        act["away_score"] = pd.to_numeric(act["away_score_final"], errors="coerce")
+        act = act.dropna(subset=["home_score", "away_score"])
+
+        # Build per-team per-game frame: team, date, rs (scored), ra (allowed)
+        home_g = act[["game_date", "home_team", "home_score", "away_score"]].rename(
+            columns={"home_team": "team", "home_score": "rs", "away_score": "ra"})
+        away_g = act[["game_date", "away_team", "away_score", "home_score"]].rename(
+            columns={"away_team": "team", "away_score": "rs", "home_score": "ra"})
+        games_long = pd.concat([home_g, away_g], ignore_index=True)
+        games_long = games_long.sort_values(["team", "game_date"])
+
+        rd_rows = []
+        for team, grp in games_long.groupby("team"):
+            grp = grp.set_index("game_date").sort_index()
+            rs = grp["rs"]; ra = grp["ra"]
+            # Rolling 15-game sums (trailing, no leakage — shift(1) excludes today)
+            rs15 = rs.shift(1).rolling(15, min_periods=5).sum()
+            ra15 = ra.shift(1).rolling(15, min_periods=5).sum()
+            rd15 = (rs15 - ra15) / 15  # per-game average
+            # Pythagorean win% = RS^1.83 / (RS^1.83 + RA^1.83)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                rs_p = np.power(rs15.clip(lower=0.001), 1.83)
+                ra_p = np.power(ra15.clip(lower=0.001), 1.83)
+                pyth = rs_p / (rs_p + ra_p)
+            rd_rows.append({"batting_team": team,
+                            "rolling_rd_15g":      float(rd15.iloc[-1]) if not rd15.empty else 0.0,
+                            "pyth_win_pct_15g":    float(pyth.iloc[-1]) if not pyth.empty else 0.5})
+
+        rd_df = pd.DataFrame(rd_rows)
+        bat = bat.merge(rd_df, on="batting_team", how="left")
+        if verbose:
+            present = bat["rolling_rd_15g"].notna().sum()
+            print(f"  Rolling RD/Pyth: {present}/{len(bat)} teams computed from actuals")
+    except Exception as _e:
+        if verbose:
+            print(f"  [WARN] rolling_rd/pyth computation failed: {_e} — using 0/0.5 defaults")
+
+    bat["rolling_rd_15g"]   = bat.get("rolling_rd_15g",   pd.Series([0.0]   * len(bat))).fillna(0.0)
+    bat["pyth_win_pct_15g"] = bat.get("pyth_win_pct_15g", pd.Series([0.5]   * len(bat))).fillna(0.5)
+
     out_path = DATA_DIR / "team_stats_2026.parquet"
     bat.to_parquet(out_path, engine="pyarrow", index=False)
     if verbose:

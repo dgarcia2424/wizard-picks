@@ -1274,6 +1274,9 @@ def main():
     parser.add_argument("--no-early-stop", action="store_true")
     parser.add_argument("--val-year",     type=int, default=2025)
     parser.add_argument("--ncv",          action="store_true")
+    parser.add_argument("--extra-features", type=str, default=None,
+                        help="Comma-separated extra features to add from a v2 matrix. "
+                             "When set, restricts features to models/feature_cols_v1.json + these extras.")
     args       = parser.parse_args()
     early_stop = not args.no_early_stop
 
@@ -1298,6 +1301,24 @@ def main():
         raise ValueError("Feature matrix must contain 'year' or 'season'.")
 
     X_all, feature_cols = prep_features(df)
+
+    # --extra-features: restrict to v1 baseline + whitelisted extras
+    if args.extra_features:
+        extra_list = [f.strip() for f in args.extra_features.split(",") if f.strip()]
+        v1_path = MODELS_DIR / "feature_cols_v1.json"
+        if v1_path.exists():
+            v1_set = set(json.loads(v1_path.read_text()))
+            print(f"\n  --extra-features mode: v1={len(v1_set)} + extra={len(extra_list)}")
+            feature_cols = [c for c in feature_cols if c in v1_set or c in extra_list]
+            present_extra = [c for c in extra_list if c in feature_cols]
+            missing_extra = [c for c in extra_list if c not in feature_cols]
+            print(f"  Extra features present : {present_extra}")
+            if missing_extra:
+                print(f"  [WARN] Extra features not in matrix: {missing_extra}")
+            X_all = X_all[[c for c in feature_cols]] if hasattr(X_all, 'columns') else X_all
+        else:
+            print(f"  [WARN] --extra-features: v1 baseline not found at {v1_path}")
+
     print(f"  Feature columns: {len(feature_cols)}")
     (MODELS_DIR / "feature_cols.json").write_text(json.dumps(feature_cols, indent=2))
 
@@ -1435,8 +1456,12 @@ def main():
                 rows_cmp.append(("LightGBM (raw)",
                                  roc_auc_score(y, oof_lgbm_rl), None, None))
             if oof_cat_rl is not None:
-                rows_cmp.append(("CatBoost (raw)",
-                                 roc_auc_score(y, oof_cat_rl),  None, None))
+                if len(oof_cat_rl) == len(y):
+                    rows_cmp.append(("CatBoost (raw)",
+                                     roc_auc_score(y, oof_cat_rl),  None, None))
+                else:
+                    print(f"  [SKIP CatBoost report] OOF size mismatch "
+                          f"({len(oof_cat_rl)} vs {len(y)})")
             rows_cmp.append(("Bayesian Stacker", auc_stk, ll_stk, acc_stk))
 
             print(f"  {'Model':<24}  {'AUC':>7}  {'LogLoss':>9}  {'Acc@50%':>8}")

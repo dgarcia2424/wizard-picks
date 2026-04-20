@@ -1354,6 +1354,10 @@ def main():
                         help="Also train doubled-dataset team perspective model and compare")
     parser.add_argument("--matrix", type=str, default="feature_matrix.parquet",
                         help="Feature matrix parquet path (default: feature_matrix.parquet)")
+    parser.add_argument("--extra-features", type=str, default=None,
+                        help="Comma-separated list of EXTRA features to allow from a v2 matrix. "
+                             "When set, features are restricted to the v1 baseline list "
+                             "(models/f5_feature_cols_v1.json) plus these extra columns.")
     args = parser.parse_args()
 
     print("=" * 70)
@@ -1366,6 +1370,26 @@ def main():
 
     # Build dataset
     df, feat_cols = build_dataset(include_2026=args.with_2026)
+
+    # If --extra-features is set, restrict features to v1 baseline + whitelisted extras
+    if args.extra_features:
+        extra_list = [f.strip() for f in args.extra_features.split(",") if f.strip()]
+        v1_path = MODELS_DIR / "f5_feature_cols_v1.json"
+        if v1_path.exists():
+            v1_cols = set(json.load(open(v1_path)))
+            print(f"\n  --extra-features mode: v1 baseline={len(v1_cols)} + "
+                  f"extra={len(extra_list)} features")
+            feat_cols = [c for c in feat_cols if c in v1_cols or c in extra_list]
+            # Report which extras are actually in the matrix
+            present_extra = [c for c in extra_list if c in feat_cols]
+            missing_extra = [c for c in extra_list if c not in feat_cols]
+            print(f"  Extra features present: {present_extra}")
+            if missing_extra:
+                print(f"  [WARN] Extra features NOT found in matrix: {missing_extra}")
+        else:
+            print(f"  [WARN] --extra-features: v1 baseline file not found at {v1_path}")
+            print(f"         Snapshot current feat_cols to {v1_path} first.")
+        print(f"  Final feature count: {len(feat_cols)}")
 
     # Save feature column list
     json.dump(feat_cols, open(OUTPUT_FEAT_COLS, "w"), indent=2)

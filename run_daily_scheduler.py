@@ -179,6 +179,9 @@ def run_all() -> None:
         run_step("build_pitcher_profile.py", "pitcher_profiles")
         run_step("build_team_stats_2026.py", "team_stats")
 
+        # ── Step 3c: Rebuild enriched v2 feature matrix ───────────────────
+        run_step("enrich_feature_matrix_v2.py", "enrich_v2")
+
         # ── Step 4: Lineup quality scores (wRC+ per team) ─────────────────
         run_step("build_lineup_quality.py", "lineup_quality")
 
@@ -209,6 +212,7 @@ def run_all() -> None:
 
         # ── Step 8c: Supplemental data + backtest rebuild (daily at 10 AM) ──
         run_step("supplemental_pull.py", "supplemental")
+        run_step("statcast_framing_pull.py", "framing_pull")
         run_step("build_backtest.py --year 2026", "backtest")
 
         # ── Step 8d: Rolling trackers ──────────────────────────────────────
@@ -252,6 +256,9 @@ def run_refresh(label: str, send_email: bool = False) -> None:
         # ── Step 4: Pitcher profiles + team stats ─────────────────────────────
         run_step("build_pitcher_profile.py", "pitcher_profiles")
         run_step("build_team_stats_2026.py", "team_stats")
+
+        # ── Step 4b: Rebuild enriched v2 feature matrix ───────────────────────
+        run_step("enrich_feature_matrix_v2.py", "enrich_v2")
 
         # ── Step 5: Bullpen availability + batter platoon splits ──────────────
         run_step("build_bullpen_avail.py", "bullpen_avail")

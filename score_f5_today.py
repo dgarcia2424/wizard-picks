@@ -48,7 +48,7 @@ from train_f5_model import (
 BASE_DIR        = Path(".")
 DATA_DIR        = BASE_DIR / "data" / "statcast"
 MODELS_DIR      = BASE_DIR / "models"
-FEAT_MATRIX     = BASE_DIR / "feature_matrix_enriched.parquet"
+FEAT_MATRIX     = BASE_DIR / "feature_matrix_enriched_v2.parquet"
 
 FEAT_COLS_PATH  = MODELS_DIR / "f5_feature_cols.json"
 XGB_F5_PATH     = MODELS_DIR / "xgb_f5.json"
