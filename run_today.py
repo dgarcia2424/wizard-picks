@@ -3474,11 +3474,17 @@ def write_html_card(results: list[dict], date_str: str,
             xw_str  = f"{x['xw']:.3f}"  if x["xw"]  is not None else "—"
             oxw_str = f"{x['oxw']:.3f}" if x["oxw"] is not None else "—"
             tmp_str = f"{x['temp']:.0f}°" if x["temp"] is not None else "—"
+            # Opponent label: "vs STL" or "@ MIA" depending on which side we're on
+            away, home = x["matchup"].split(" @ ")
+            opp_label = (f"vs {away}" if x["side"] == "HOME" else f"@ {home}")
+            side_badge = f'<span class="rt-side rt-{x["side"].lower()}">{x["side"][0]}</span>'
+            team_cell  = (f'<span class="rt-team">{x["team"]}</span>'
+                          f'&thinsp;{side_badge}'
+                          f'<br><span class="rt-opp">{opp_label}</span>')
             trs += (
                 f'<tr>'
                 f'<td class="rt-n">{i}</td>'
-                f'<td class="rt-game">{x["matchup"]}</td>'
-                f'<td class="rt-side rt-{x["side"].lower()}">{x["side"]}</td>'
+                f'<td class="rt-teamcol">{team_cell}</td>'
                 f'<td class="rt-sp">{x["sp"]}</td>'
                 f'<td class="rt-xw {xw_cls(x["xw"])}">{xw_str}</td>'
                 f'<td class="rt-sp">{x["osp"]}</td>'
@@ -3497,7 +3503,7 @@ def write_html_card(results: list[dict], date_str: str,
 <div class="rank-note">Sorted by XGB L2 (AUC 0.596 · 2025 OOS). &nbsp;Votes tally 5 signals (MC cover%, XGB L1, XGB L2, Pin F5, Team log-odds): &nbsp;<span class="rt-act-full">green &#9650; = full vote (&#8805;65%, hist 72.5% acc)</span> &nbsp;<span class="rt-act-half">yellow = half vote (60–65%, hist 68.8% acc)</span>. &nbsp;Votes column: <span class="vote-strong">green &#8805;3</span> / <span class="vote-good">yellow 2</span> / <span class="vote-lean">dim 1</span>.</div>
 <table class="rank-tbl">
 <thead><tr>
-  <th>#</th><th>Matchup</th><th>Side</th>
+  <th>#</th><th>Team</th>
   <th>Their SP</th><th>xwOBA</th>
   <th>Opp SP</th><th>xwOBA</th>
   <th>Temp</th>
@@ -3925,12 +3931,14 @@ body {{
 .rank-tbl td {{ padding: 4px 8px; border-bottom: 1px solid #21262d; white-space: nowrap; }}
 .rank-tbl tr:last-child td {{ border-bottom: none; }}
 .rank-tbl tr:hover td {{ background: #1c2128; }}
-.rt-n    {{ color: #6e7681; width: 24px; }}
-.rt-team {{ font-weight: 800; color: #ffffff; }}
-.rt-game {{ color: #c9d1d9; }}
-.rt-side {{ font-size: 10px; font-weight: 700; padding: 2px 5px; border-radius: 3px; }}
-.rt-home {{ background: #1f4d3d; color: #3fb950; }}
-.rt-away {{ background: #2d2a1f; color: #d29922; }}
+.rt-n       {{ color: #6e7681; width: 24px; }}
+.rt-teamcol {{ white-space: nowrap; }}
+.rt-team    {{ font-weight: 800; font-size: 13px; color: #ffffff; }}
+.rt-opp     {{ font-size: 10px; color: #6e7681; }}
+.rt-game    {{ color: #c9d1d9; }}
+.rt-side    {{ font-size: 9px; font-weight: 700; padding: 1px 4px; border-radius: 3px; vertical-align: middle; }}
+.rt-home    {{ background: #1f4d3d; color: #3fb950; }}
+.rt-away    {{ background: #2d2a1f; color: #d29922; }}
 .rt-sp   {{ color: #c9d1d9; }}
 .rt-xw   {{ font-family: monospace; }}
 .rt-temp {{ color: #8b949e; }}

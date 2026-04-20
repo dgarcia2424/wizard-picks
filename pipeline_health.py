@@ -63,7 +63,7 @@ ARTIFACT_DEFS = [
     ("team_stats",       "data/statcast/team_stats_2026.parquet",          36,  True,  "Team batting/bullpen stats (incl 10d)"),
     ("lineup_quality",   "data/statcast/lineup_quality_today.parquet",     4,   False, "Lineup wRC+ scores"),
     ("daily_card",       "daily_card.csv",                                 14,  True,  "Today's model predictions"),
-    ("backtest",         "backtest_2026_results.csv",                      26,  False, "Season backtest tracker"),
+    ("backtest",         "data/raw/backtest_games_2026.csv",               26,  False, "Season backtest tracker"),
     ("statcast_2026",    "data/statcast/statcast_2026.parquet",            50,  False, "2026 Statcast pitch data"),
     ("fangraphs",        "data/raw/fangraphs_batters.csv",                 168, False, "FanGraphs batter wRC+ data"),
 ]
