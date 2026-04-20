@@ -1304,16 +1304,117 @@ def build_team_defense(years: list[int], verbose: bool = True) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# SECTION 4d — BULLPEN FATIGUE  (QW4 — rolling 72-hour relief pitch count)
+# ---------------------------------------------------------------------------
+
+def build_bullpen_fatigue(years: list[int], verbose: bool = True) -> pd.DataFrame:
+    """
+    Per-team rolling count of relief pitcher pitches thrown in the prior 72 hours.
+    High count = fatigued bullpen entering the game.
+
+    Relief identification: any pitcher who does NOT appear in inning 1 for their
+    team in a given game is a reliever.  This correctly handles openers (who
+    appear in inning 1) and bulk pitchers (innings 2+).
+
+    The 72-hour window uses closed='left' on the DatetimeIndex so the current
+    game's pitches are NEVER counted in their own fatigue score (no leakage).
+
+    Returns one row per (team, game_pk) with column bp_pitch_count_72h.
+    """
+    if verbose:
+        print("  [3.9/4] Building bullpen fatigue (rolling 72h relief pitches) ...")
+
+    sc_cols = ["pitcher", "game_pk", "game_date",
+               "home_team", "away_team", "inning", "inning_topbot"]
+
+    frames = []
+    for year in years:
+        try:
+            df = _load_statcast(year, sc_cols)
+        except Exception as e:
+            if verbose:
+                print(f"      {year}: statcast load failed — {e}")
+            continue
+
+        df["game_date"]     = pd.to_datetime(df["game_date"])
+        df["inning"]        = _to_num(df["inning"])
+        df["pitcher"]       = _to_num(df["pitcher"])
+        df["inning_topbot"] = df["inning_topbot"].fillna("Top")
+
+        # Pitching team: Top half = home team pitching; Bottom = away pitching
+        df["pitching_team"] = np.where(
+            df["inning_topbot"] == "Top", df["home_team"], df["away_team"]
+        )
+
+        # Starters = any pitcher appearing in inning 1 for their team in that game.
+        # Handles true starters and openers; bulk pitchers (inn >= 2) are relievers.
+        inning1 = (
+            df[df["inning"] == 1][["game_pk", "pitching_team", "pitcher"]]
+            .drop_duplicates()
+            .assign(is_starter=1)
+        )
+        df = df.merge(inning1, on=["game_pk", "pitching_team", "pitcher"], how="left")
+        df["is_reliever"] = df["is_starter"].isna().astype(int)
+
+        # Relief pitch counts per (team, game, date)
+        rel = (
+            df[df["is_reliever"] == 1]
+            .groupby(["pitching_team", "game_pk", "game_date"])
+            .size()
+            .reset_index(name="rel_pitches")
+        )
+        frames.append(rel)
+
+    if not frames:
+        if verbose:
+            print("      No statcast data found for bullpen fatigue.")
+        return pd.DataFrame()
+
+    all_rel = pd.concat(frames, ignore_index=True)
+    all_rel  = all_rel.sort_values(["pitching_team", "game_date"]).reset_index(drop=True)
+
+    # Rolling 72h sum per team — closed='left' excludes the current game date
+    def _rolling_72h(grp: pd.DataFrame) -> pd.DataFrame:
+        grp = grp.sort_values("game_date").copy()
+        grp = grp.set_index("game_date")
+        grp["bp_pitch_count_72h"] = (
+            grp["rel_pitches"]
+            .rolling("3D", min_periods=0, closed="left")
+            .sum()
+        )
+        return grp.reset_index()
+
+    result = (
+        all_rel
+        .groupby("pitching_team", group_keys=False)
+        .apply(_rolling_72h)
+        .rename(columns={"pitching_team": "team"})
+        [["team", "game_pk", "bp_pitch_count_72h"]]
+        .reset_index(drop=True)
+    )
+
+    if verbose:
+        n_rows   = len(result)
+        n_teams  = result["team"].nunique()
+        med_72h  = result["bp_pitch_count_72h"].median()
+        print(f"      {n_rows} team-game rows | {n_teams} teams | "
+              f"median relief pitches in prior 72h: {med_72h:.0f}")
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # SECTION 5 — ASSEMBLE FEATURE MATRIX
 # ---------------------------------------------------------------------------
 
 def assemble_matrix(
-    games:       pd.DataFrame,
-    pitchers:    pd.DataFrame,
-    batting:     pd.DataFrame,
-    bullpen:     pd.DataFrame,
+    games:        pd.DataFrame,
+    pitchers:     pd.DataFrame,
+    batting:      pd.DataFrame,
+    bullpen:      pd.DataFrame,
     bat_tracking: pd.DataFrame | None = None,
     defense:      pd.DataFrame | None = None,
+    bp_fatigue:   pd.DataFrame | None = None,
     verbose:      bool = True,
 ) -> pd.DataFrame:
     """
@@ -1585,6 +1686,37 @@ def assemble_matrix(
         df["bp_era_diff"]  = df["home_bp_era"]  - df["away_bp_era"]
         df["bp_k9_diff"]   = df["home_bp_k9"]   - df["away_bp_k9"]
         df["bp_whip_diff"] = df["home_bp_whip"]  - df["away_bp_whip"]
+
+    # ── QW4: Bullpen fatigue — rolling 72h relief pitch count ─────────────
+    # Positive bp_fatigue_diff = away bullpen threw more pitches recently
+    # = home team faces fresher arms = home advantage on expected run scoring.
+    if bp_fatigue is not None and not bp_fatigue.empty:
+        fat_lookup = bp_fatigue.set_index(["team", "game_pk"])
+
+        def _get_fatigue(team: str, game_pk) -> float:
+            try:
+                row = fat_lookup.loc[(team, game_pk)]
+                if isinstance(row, pd.DataFrame):
+                    row = row.iloc[0]
+                return float(row.get("bp_pitch_count_72h", np.nan))
+            except KeyError:
+                return np.nan
+
+        df["home_bp_fatigue_72h"] = df.apply(
+            lambda r: _get_fatigue(r["home_team"], r["game_pk"]), axis=1
+        )
+        df["away_bp_fatigue_72h"] = df.apply(
+            lambda r: _get_fatigue(r["away_team"], r["game_pk"]), axis=1
+        )
+        df["bp_fatigue_diff"] = (
+            df["away_bp_fatigue_72h"] - df["home_bp_fatigue_72h"]
+        )
+        n_fat = df["home_bp_fatigue_72h"].notna().sum()
+        if verbose:
+            print(f"      Bullpen fatigue joined: {n_fat}/{len(df)} rows have data")
+    else:
+        if verbose:
+            print("      Bullpen fatigue: no data provided — columns omitted")
 
     # ── Phase 2: Team bat tracking + batter run values ────────────────────
     # Seasonal aggregate (team, season) joined like bullpen data.
@@ -2197,16 +2329,18 @@ def main():
           f"|  Trailing: {TRAILING_DAYS}d")
     print("=" * 60)
 
-    games       = build_game_list(years)
-    pitchers    = build_pitcher_ewma_stats(years)
-    batting     = build_team_batting_ewma(years)
-    bullpen     = build_bullpen_stats(years)
+    games        = build_game_list(years)
+    pitchers     = build_pitcher_ewma_stats(years)
+    batting      = build_team_batting_ewma(years)
+    bullpen      = build_bullpen_stats(years)
     bat_tracking = build_team_bat_tracking(years)
-    defense     = build_team_defense(years)
+    defense      = build_team_defense(years)
+    bp_fatigue   = build_bullpen_fatigue(years)
 
     print()
     matrix = assemble_matrix(games, pitchers, batting, bullpen,
-                             bat_tracking=bat_tracking, defense=defense)
+                             bat_tracking=bat_tracking, defense=defense,
+                             bp_fatigue=bp_fatigue)
 
     out_parquet = f"{args.out}.parquet"
     out_csv     = f"{args.out}.csv"

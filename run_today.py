@@ -3005,58 +3005,131 @@ def write_html_card(results: list[dict], date_str: str,
         score_html = _score_row(r)
 
         # ── F5 section ────────────────────────────────────────────────────────
+        # Action thresholds derived from 2025 historical signal accuracy analysis
+        # (analyze_f5_signals.py): AUC / accuracy per signal at each cut.
+        _F5_MC_COVER_HI   = 0.62   # MC cover% >= this -> HOME call
+        _F5_MC_COVER_LO   = 0.38   # MC cover% <= this -> AWAY call
+        _F5_MC_WIN_HI     = 0.50   # MC win% >= this   -> HOME call (68% hist acc)
+        _F5_XGB_HI        = 0.60   # XGB L1/L2 >= this -> HOME call
+        _F5_XGB_LO        = 0.40   # XGB L1/L2 <= this -> AWAY call
+        _F5_PIN_HI        = 0.60   # Pinnacle est >= this -> HOME call
+        _F5_PIN_LO        = 0.40   # Pinnacle est <= this -> AWAY call
+        _F5_TEAM_LO_HI    = 0.55   # Team log-odds sigmoid >= this -> HOME call
+        _F5_TEAM_LO_LO    = 0.45   # Team log-odds sigmoid <= this -> AWAY call
+
+        def _f5_action(prob, hi, lo=None):
+            """
+            Returns (side, prob_str, css_class) for a single signal.
+            side = 'HOME' | 'AWAY' | None
+            """
+            if _is_missing(prob):
+                return None, "—", ""
+            p = float(prob)
+            if p >= hi:
+                return "HOME", f"{p:.0%}", "f5act-home"
+            if lo is not None and p <= lo:
+                return "AWAY", f"{1-p:.0%}", "f5act-away"
+            return None, f"{p:.0%}", "f5act-pass"
+
         def _f5_html():
-            f5h = r.get("mc_f5_home_runs")
-            f5a = r.get("mc_f5_away_runs")
-            f5t = r.get("mc_f5_total")
+            f5h  = r.get("mc_f5_home_runs")
+            f5a  = r.get("mc_f5_away_runs")
+            f5t  = r.get("mc_f5_total")
             f5wh = r.get("mc_f5_home_win_prob")
-            f5wa = (1 - float(f5wh)) if not _is_missing(f5wh) else None
-            tlo = r.get("mc_f5_total_lo")
-            thi = r.get("mc_f5_total_hi")
-            if _is_missing(f5h) and _is_missing(f5a):
+            f5cov = r.get("mc_f5_home_covers_rl")   # MC cover +0.5 probability
+            tlo  = r.get("mc_f5_total_lo")
+            thi  = r.get("mc_f5_total_hi")
+            l1   = r.get("f5_xgb_l1")
+            l2   = r.get("f5_stacker_l2")
+            tlo_ = r.get("f5_team_log_odds")
+
+            if _is_missing(f5h) and _is_missing(f5a) and _is_missing(l1):
                 return ""
+
+            # Pinnacle F5 estimate: 0.5 + 1.289*(PinML_home - 0.5)
+            _pin_ml = r.get("ml_lock_p_true")
+            pin_f5  = (0.5 + 1.289 * (float(_pin_ml) - 0.5)
+                       if not _is_missing(_pin_ml) else None)
+
+            # Team log-odds -> probability (sigmoid)
+            team_prob = (1.0 / (1.0 + float(np.exp(-float(tlo_))))
+                         if not _is_missing(tlo_) else None)
+
+            # ── Action calls per signal ──────────────────────────────────────
+            sig_mc_cov  = _f5_action(f5cov,   _F5_MC_COVER_HI, _F5_MC_COVER_LO)
+            sig_mc_win  = _f5_action(f5wh,    _F5_MC_WIN_HI,   None)
+            sig_l1      = _f5_action(l1,      _F5_XGB_HI,      _F5_XGB_LO)
+            sig_l2      = _f5_action(l2,      _F5_XGB_HI,      _F5_XGB_LO)
+            sig_pin     = _f5_action(pin_f5,  _F5_PIN_HI,      _F5_PIN_LO)
+            sig_team    = _f5_action(team_prob, _F5_TEAM_LO_HI, _F5_TEAM_LO_LO)
+
+            all_sigs = [sig_mc_cov, sig_mc_win, sig_l1, sig_l2, sig_pin, sig_team]
+            home_votes = sum(1 for s, _, _ in all_sigs if s == "HOME")
+            away_votes = sum(1 for s, _, _ in all_sigs if s == "AWAY")
+            total_votes = home_votes + away_votes
+
+            # ── Consensus label ───────────────────────────────────────────────
+            if home_votes >= 4:
+                con_label = f"STRONG HOME ({home_votes}/{total_votes})"
+                con_cls   = "f5con-strong-home"
+            elif home_votes == 3:
+                con_label = f"HOME ({home_votes}/{total_votes})"
+                con_cls   = "f5con-home"
+            elif home_votes == 2:
+                con_label = f"LEAN HOME ({home_votes}/{total_votes})"
+                con_cls   = "f5con-lean-home"
+            elif away_votes >= 4:
+                con_label = f"STRONG AWAY ({away_votes}/{total_votes})"
+                con_cls   = "f5con-strong-away"
+            elif away_votes == 3:
+                con_label = f"AWAY ({away_votes}/{total_votes})"
+                con_cls   = "f5con-away"
+            elif away_votes == 2:
+                con_label = f"LEAN AWAY ({away_votes}/{total_votes})"
+                con_cls   = "f5con-lean-away"
+            else:
+                con_label = "SPLIT"
+                con_cls   = "f5con-split"
+
+            # ── Signal pill builder ───────────────────────────────────────────
+            def _pill(label, side, pct_str, cls):
+                arrow = " &#9650;" if side == "HOME" else (" &#9660;" if side == "AWAY" else "")
+                return (f'<span class="f5sig">'
+                        f'<span class="f5sig-lbl">{label}</span>'
+                        f'<span class="{cls}">{pct_str}{arrow}</span>'
+                        f'</span>')
+
+            pills = (
+                _pill("MC cov",  *sig_mc_cov) +
+                _pill("MC win",  *sig_mc_win) +
+                _pill("XGB L1",  *sig_l1) +
+                _pill("L2 Stk",  *sig_l2) +
+                _pill("Pin",     *sig_pin) +
+                _pill("Team LO", *sig_team)
+            )
+
+            # ── MC projection (runs + total) ──────────────────────────────────
             hstr = f"{float(f5h):.1f}" if not _is_missing(f5h) else "—"
             astr = f"{float(f5a):.1f}" if not _is_missing(f5a) else "—"
             tstr = f"{float(f5t):.1f}" if not _is_missing(f5t) else "—"
-            band = (f' <span class="band">({tlo}–{thi})</span>'
+            band = (f'<span class="band">({tlo}–{thi})</span>'
                     if not _is_missing(tlo) and not _is_missing(thi) else "")
-            wh_s = f"{float(f5wh):.0%}" if not _is_missing(f5wh) else "—"
-            wa_s = f"{float(f5wa):.0%}" if not _is_missing(f5wa) else "—"
-            mc_div = (
-                f'<div class="gc-extra-section">'
-                f'<span class="gc-extra-lbl">F5</span>'
-                f'&nbsp;<span class="gc-extra-dim">{away} win</span>&nbsp;'
-                f'<span class="gc-extra-val">{wa_s}</span>'
-                f'&nbsp;&nbsp;<span class="gc-extra-dim">{home} win</span>&nbsp;'
-                f'<span class="gc-extra-val">{wh_s}</span>'
-                f'&nbsp;&nbsp;<span class="score-sep">|</span>&nbsp;&nbsp;'
-                f'<span class="gc-extra-dim">Proj</span>&nbsp;'
-                f'<span class="gc-extra-val">{astr}–{hstr}</span>'
-                f'&nbsp;<span class="gc-extra-dim">Total</span>&nbsp;'
-                f'<span class="gc-extra-val">{tstr}</span>{band}'
+            proj_str = (f'<span class="gc-extra-dim">Proj</span>&nbsp;'
+                        f'<span class="gc-extra-val">{astr}&ndash;{hstr}</span>'
+                        f'&nbsp;<span class="gc-extra-dim">Total</span>&nbsp;'
+                        f'<span class="gc-extra-val">{tstr}</span>'
+                        f'&nbsp;{band}')
+
+            return (
+                f'<div class="gc-extra-section gc-f5-block">'
+                f'<div class="f5-top">'
+                f'<span class="gc-extra-lbl">F5 +0.5</span>'
+                f'<span class="f5con {con_cls}">{con_label}</span>'
+                f'&nbsp;&nbsp;{proj_str}'
+                f'</div>'
+                f'<div class="f5-pills">{pills}</div>'
                 f'</div>'
             )
-            # XGB+Stacker badge (appended if predictions available)
-            l1  = r.get("f5_xgb_l1")
-            l2  = r.get("f5_stacker_l2")
-            if not _is_missing(l1) or not _is_missing(l2):
-                l1_s  = f"{float(l1):.0%}"  if not _is_missing(l1) else "—"
-                l2_s  = f"{float(l2):.0%}"  if not _is_missing(l2) else "—"
-                l2_cls = ("val-green" if not _is_missing(l2) and float(l2) >= 0.65
-                          else "val-red" if not _is_missing(l2) and float(l2) <= 0.35
-                          else "")
-                stack_div = (
-                    f'<div class="gc-extra-section">'
-                    f'<span class="gc-extra-lbl">XGB F5</span>'
-                    f'&nbsp;<span class="gc-extra-dim">L1 (XGB+Platt)</span>&nbsp;'
-                    f'<span class="gc-extra-val">{l1_s}</span>'
-                    f'&nbsp;&nbsp;<span class="gc-extra-dim">L2 (Stacker)</span>&nbsp;'
-                    f'<span class="gc-extra-val {l2_cls}">{l2_s}</span>'
-                    f'&nbsp;&nbsp;<span class="gc-extra-dim">home cover +0.5</span>'
-                    f'</div>'
-                )
-                return mc_div + stack_div
-            return mc_div
 
         # ── 1st inning section ────────────────────────────────────────────────
         def _f1_html():
@@ -3222,6 +3295,22 @@ def write_html_card(results: list[dict], date_str: str,
 
     _F5_K = 1.289
 
+    # Action thresholds for ranking table (from analyze_f5_signals.py)
+    _RT_MC_HI   = 0.62;  _RT_MC_LO   = 0.38
+    _RT_XGB_HI  = 0.60;  _RT_XGB_LO  = 0.40
+    _RT_PIN_HI  = 0.60;  _RT_PIN_LO  = 0.40
+    _RT_TEAM_HI = 0.55;  _RT_TEAM_LO = 0.45
+
+    def _act_cell(prob, hi, lo):
+        """Return compact HTML action cell: HOME / AWAY / —"""
+        if prob is None:
+            return '<span class="rt-act-na">—</span>'
+        if prob >= hi:
+            return f'<span class="rt-act-home">H {prob:.0%}</span>'
+        if prob <= lo:
+            return f'<span class="rt-act-away">A {1-prob:.0%}</span>'
+        return f'<span class="rt-act-na">{prob:.0%}</span>'
+
     def _f5_rank_table(min_prob: float = 0.0) -> str:
         rows = []
         for r in results:
@@ -3230,24 +3319,48 @@ def write_html_card(results: list[dict], date_str: str,
             if _is_missing(hw): continue
             f5_lo  = r.get("mc_f5_total_lo"); f5_hi = r.get("mc_f5_total_hi")
             f5_range = (float(f5_hi) - float(f5_lo)) if not _is_missing(f5_lo) and not _is_missing(f5_hi) else 99
-            aw = r.get("mc_f5_away_win_prob")
+            aw  = r.get("mc_f5_away_win_prob")
+            cov = r.get("mc_f5_home_covers_rl")   # MC cover +0.5 probability
+            l1_raw  = r.get("f5_xgb_l1")
+            l2_raw  = r.get("f5_stacker_l2")
+            tlo_raw = r.get("f5_team_log_odds")
+            pin_ml  = r.get("ml_lock_p_true")
+
             for team, side, sp_key, xw_key, osp_key, oxw_key in [
                 (home, "HOME", "home_sp", "home_sp_xwoba", "away_sp", "away_sp_xwoba"),
                 (away, "AWAY", "away_sp", "away_sp_xwoba", "home_sp", "home_sp_xwoba"),
             ]:
-                win_prob = float(hw) if side == "HOME" else 1 - float(hw)
-                half_prob = ((1 - float(aw)) if side == "HOME" and not _is_missing(aw)
-                             else (1 - float(hw)) if side == "AWAY"
+                is_home = (side == "HOME")
+                win_prob = float(hw) if is_home else 1 - float(hw)
+                half_prob = ((1 - float(aw)) if is_home and not _is_missing(aw)
+                             else (1 - float(hw)) if not is_home
                              else win_prob)
-                ml_win = r.get("mc_home_win")
-                ml_prob = (float(ml_win) if side == "HOME" and not _is_missing(ml_win)
-                           else 1 - float(ml_win) if side == "AWAY" and not _is_missing(ml_win)
-                           else None)
-                pin_ml = r.get("ml_lock_p_true")
-                pin_ml_prob = (float(pin_ml) if side == "HOME" and not _is_missing(pin_ml)
-                               else 1 - float(pin_ml) if side == "AWAY" and not _is_missing(pin_ml)
-                               else None)
-                est_pin_f5 = (0.5 + _F5_K * (pin_ml_prob - 0.5)) if pin_ml_prob is not None else None
+
+                # Flip all signals to the team's perspective
+                mc_cov_p = (float(cov) if is_home and not _is_missing(cov)
+                            else (1 - float(cov)) if not is_home and not _is_missing(cov)
+                            else None)
+                l1_p     = (float(l1_raw) if is_home and not _is_missing(l1_raw)
+                            else (1 - float(l1_raw)) if not is_home and not _is_missing(l1_raw)
+                            else None)
+                l2_p     = (float(l2_raw) if is_home and not _is_missing(l2_raw)
+                            else (1 - float(l2_raw)) if not is_home and not _is_missing(l2_raw)
+                            else None)
+                # Team log-odds: positive = home favoured; flip sign for away
+                if not _is_missing(tlo_raw):
+                    tlo_adj = float(tlo_raw) if is_home else -float(tlo_raw)
+                    team_p  = 1.0 / (1.0 + float(np.exp(-tlo_adj)))
+                else:
+                    team_p  = None
+
+                pin_ml_p = (float(pin_ml) if is_home and not _is_missing(pin_ml)
+                            else (1 - float(pin_ml)) if not is_home and not _is_missing(pin_ml)
+                            else None)
+                pin_f5_p = (0.5 + _F5_K * (pin_ml_p - 0.5)) if pin_ml_p is not None else None
+
+                # Sort key: L2 stacker (strongest signal); fall back to win_prob
+                sort_key = l2_p if l2_p is not None else win_prob
+
                 sp  = str(r.get(sp_key, "TBD")).title()
                 xw  = r.get(xw_key)
                 osp = str(r.get(osp_key, "TBD")).title()
@@ -3255,10 +3368,20 @@ def write_html_card(results: list[dict], date_str: str,
                 temp = r.get("temp_f")
                 hr = r.get("mc_f5_home_runs"); ar = r.get("mc_f5_away_runs")
                 if not _is_missing(hr) and not _is_missing(ar):
-                    f5_score_str = (f"{float(hr):.1f}–{float(ar):.1f}" if side == "HOME"
+                    f5_score_str = (f"{float(hr):.1f}–{float(ar):.1f}" if is_home
                                     else f"{float(ar):.1f}–{float(hr):.1f}")
                 else:
                     f5_score_str = "—"
+
+                # Signal vote count for consensus
+                votes_home = sum(1 for p, hi, lo in [
+                    (mc_cov_p, _RT_MC_HI, _RT_MC_LO),
+                    (l1_p,     _RT_XGB_HI, _RT_XGB_LO),
+                    (l2_p,     _RT_XGB_HI, _RT_XGB_LO),
+                    (pin_f5_p, _RT_PIN_HI, _RT_PIN_LO),
+                    (team_p,   _RT_TEAM_HI, _RT_TEAM_LO),
+                ] if p is not None and p >= hi)
+
                 rows.append({
                     "team": team, "side": side, "sp": sp,
                     "xw":  float(xw)  if not _is_missing(xw)  else None,
@@ -3266,12 +3389,15 @@ def write_html_card(results: list[dict], date_str: str,
                     "oxw": float(oxw) if not _is_missing(oxw) else None,
                     "temp": float(temp) if not _is_missing(temp) else None,
                     "win_prob": win_prob, "half_prob": half_prob,
-                    "ml_prob": ml_prob, "est_pin_f5": est_pin_f5,
+                    "mc_cov_p": mc_cov_p, "l1_p": l1_p, "l2_p": l2_p,
+                    "pin_f5_p": pin_f5_p, "team_p": team_p,
+                    "votes_home": votes_home,
                     "f5_range": f5_range, "f5_score_str": f5_score_str,
+                    "sort_key": sort_key,
                 })
-        rows.sort(key=lambda x: -x["win_prob"])
+        rows.sort(key=lambda x: -x["sort_key"])
         if min_prob > 0:
-            rows = [r for r in rows if r["win_prob"] > min_prob]
+            rows = [r for r in rows if r["sort_key"] > min_prob]
 
         def xw_cls(v):
             if v is None: return ""
@@ -3279,16 +3405,15 @@ def write_html_card(results: list[dict], date_str: str,
 
         trs = ""
         for i, x in enumerate(rows, 1):
-            pin_f5 = x["est_pin_f5"]
-            agree = pin_f5 is not None and abs(x["win_prob"] - pin_f5) <= 0.08
-            wp_cls = ("wp-hot" if agree and x["f5_range"] <= 3.5
-                      else "wp-warm" if agree and x["f5_range"] > 3.5
-                      else "")
             xw_str  = f"{x['xw']:.3f}"  if x["xw"]  else "—"
             oxw_str = f"{x['oxw']:.3f}" if x["oxw"] else "—"
             tmp_str = f"{x['temp']:.0f}°" if x["temp"] else "—"
-            ml_s    = f"{x['ml_prob']:.0%}"  if x["ml_prob"]  is not None else "—"
-            pin_f5_s = f"{pin_f5:.0%}"       if pin_f5        is not None else "—"
+            votes   = x["votes_home"]
+            vote_cls = ("vote-strong" if votes >= 4
+                        else "vote-good" if votes == 3
+                        else "vote-lean" if votes == 2
+                        else "")
+            vote_str = f'<span class="{vote_cls}">{votes}/5</span>' if votes > 0 else "—"
             trs += (
                 f'<tr>'
                 f'<td class="rt-n">{i}</td>'
@@ -3299,19 +3424,26 @@ def write_html_card(results: list[dict], date_str: str,
                 f'<td class="rt-sp">{x["osp"]}</td>'
                 f'<td class="rt-xw {xw_cls(x["oxw"])}">{oxw_str}</td>'
                 f'<td class="rt-temp">{tmp_str}</td>'
-                f'<td class="rt-prob {wp_cls}">{x["win_prob"]:.0%} / {x["half_prob"]:.0%} / {pin_f5_s}</td>'
+                f'<td class="rt-act">{_act_cell(x["mc_cov_p"], _RT_MC_HI, _RT_MC_LO)}</td>'
+                f'<td class="rt-act">{_act_cell(x["l1_p"],     _RT_XGB_HI, _RT_XGB_LO)}</td>'
+                f'<td class="rt-act">{_act_cell(x["l2_p"],     _RT_XGB_HI, _RT_XGB_LO)}</td>'
+                f'<td class="rt-act">{_act_cell(x["pin_f5_p"], _RT_PIN_HI, _RT_PIN_LO)}</td>'
+                f'<td class="rt-act">{_act_cell(x["team_p"],   _RT_TEAM_HI, _RT_TEAM_LO)}</td>'
+                f'<td class="rt-votes">{vote_str}</td>'
                 f'<td class="rt-score">{x["f5_score_str"]}</td>'
                 f'</tr>'
             )
         return f"""<div class="rank-section">
 <div class="rank-title">F5 +0.5 Rankings — All Teams</div>
-<div class="rank-note">F5 ML% / +0.5% / Est.Pin F5% &nbsp;·&nbsp; Est.Pin F5 = 0.5 + 1.289*(PinML - 0.5) &nbsp;·&nbsp; <span class="wp-hot">Green</span> = model &amp; Pin agree, tight F5 range &nbsp;·&nbsp; <span class="wp-warm">Yellow</span> = agree but wide range</div>
+<div class="rank-note">Sorted by XGB L2 (strongest signal, AUC 0.596). Action calls use calibrated thresholds from 2025 back-test (analyze_f5_signals.py). Votes = signals agreeing on this side.</div>
 <table class="rank-tbl">
 <thead><tr>
   <th>#</th><th>Team</th><th>Side</th>
   <th>Their SP</th><th>xwOBA</th>
   <th>Opp SP</th><th>xwOBA</th>
-  <th>Temp</th><th>F5 ML% / +0.5% / Pin F5%</th><th>Est. F5 Score</th>
+  <th>Temp</th>
+  <th>MC cov</th><th>XGB L1</th><th>XGB L2</th><th>Pin F5</th><th>Team LO</th>
+  <th>Votes</th><th>Proj</th>
 </tr></thead>
 <tbody>{trs}</tbody>
 </table></div>"""
@@ -3607,6 +3739,34 @@ body {{
 }}
 .gc-extra-dim {{ color: #6e7681; }}
 .gc-extra-val {{ color: #c9d1d9; font-weight: 700; }}
+
+/* F5 action block */
+.gc-f5-block {{ padding: 6px 16px; }}
+.f5-top  {{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 5px; }}
+.f5-pills {{ display: flex; flex-wrap: wrap; gap: 5px 8px; }}
+/* Consensus badge */
+.f5con {{
+  display: inline-block; padding: 2px 8px; border-radius: 4px;
+  font-size: 11px; font-weight: 800; letter-spacing: .5px;
+}}
+.f5con-strong-home {{ background: #1a3a1a; color: #3fb950; border: 1px solid #2ea043; }}
+.f5con-home        {{ background: #162a16; color: #56d364; border: 1px solid #238636; }}
+.f5con-lean-home   {{ background: #0d1f17; color: #7ee787; border: 1px solid #1a4b2a; }}
+.f5con-strong-away {{ background: #3a1a1a; color: #f85149; border: 1px solid #8b1a1a; }}
+.f5con-away        {{ background: #2a1010; color: #ff7b72; border: 1px solid #6e2020; }}
+.f5con-lean-away   {{ background: #1f0d0d; color: #ffa198; border: 1px solid #4b1a1a; }}
+.f5con-split       {{ background: #1c1f24; color: #8b949e; border: 1px solid #30363d; }}
+/* Per-signal pills */
+.f5sig {{
+  display: inline-flex; align-items: center; gap: 3px;
+  background: #161b22; border: 1px solid #30363d;
+  border-radius: 3px; padding: 1px 6px; font-size: 11px;
+}}
+.f5sig-lbl {{ color: #6e7681; font-size: 9px; font-weight: 700;
+              text-transform: uppercase; letter-spacing: .5px; }}
+.f5act-home {{ color: #3fb950; font-weight: 800; }}
+.f5act-away {{ color: #f85149; font-weight: 800; }}
+.f5act-pass {{ color: #6e7681; font-weight: 600; }}
 .gc-props {{ padding-top: 6px; padding-bottom: 6px; }}
 .prop-list  {{ display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 4px; }}
 .prop-row   {{ font-size: 11px; }}
@@ -3778,6 +3938,14 @@ body {{
 .rt-score {{ color: #79c0ff; font-family: monospace; font-size: 11px; }}
 .rt-pin  {{ color: #8b949e; font-family: monospace; }}
 .rt-rng  {{ color: #6e7681; font-family: monospace; font-size: 11px; }}
+.rt-act  {{ text-align: center; font-size: 11px; font-family: monospace; }}
+.rt-votes {{ text-align: center; font-size: 11px; font-weight: 700; }}
+.rt-act-home {{ color: #3fb950; font-weight: 800; }}
+.rt-act-away {{ color: #f85149; font-weight: 800; }}
+.rt-act-na   {{ color: #484f58; }}
+.vote-strong {{ color: #3fb950; }}
+.vote-good   {{ color: #56d364; }}
+.vote-lean   {{ color: #d29922; }}
 .wp-hot  {{ color: #3fb950; }}
 .wp-warm {{ color: #d29922; }}
 .xw-good {{ color: #3fb950; }}
