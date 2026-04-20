@@ -3103,7 +3103,7 @@ def write_html_card(results: list[dict], date_str: str,
             elif home_score >= 3.0:
                 con_label = f"HOME ({_fmt_score(home_score)}/6)"
                 con_cls   = "f5con-home"
-            elif home_score >= 1.5:
+            elif home_score >= 2.0:
                 con_label = f"LEAN HOME ({_fmt_score(home_score)}/6)"
                 con_cls   = "f5con-lean-home"
             elif away_score >= 4.0:
@@ -3112,7 +3112,7 @@ def write_html_card(results: list[dict], date_str: str,
             elif away_score >= 3.0:
                 con_label = f"AWAY ({_fmt_score(away_score)}/6)"
                 con_cls   = "f5con-away"
-            elif away_score >= 1.5:
+            elif away_score >= 2.0:
                 con_label = f"LEAN AWAY ({_fmt_score(away_score)}/6)"
                 con_cls   = "f5con-lean-away"
             else:
