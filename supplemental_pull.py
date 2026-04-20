@@ -37,20 +37,33 @@ from pybaseball import (
     statcast_sprint_speed,
     statcast_pitcher_pitch_arsenal,
     statcast_pitcher_spin_dir_comp,  # renamed from statcast_pitcher_active_spin in newer pybaseball
-    # ── Phase 2 additions ────────────────────────────────────────────────────
-    statcast_batter_bat_tracking,          # bat speed, swing length, squared-up (2023+)
-    statcast_pitcher_bat_tracking,         # bat tracking metrics allowed per pitcher
+    # ── Phase 2 additions (always-available) ─────────────────────────────────
     statcast_batter_pitch_arsenal,         # per-batter × per-pitch-type outcomes
     statcast_pitcher_arsenal_stats,        # per-pitch-type run value, whiff%, put-away%
-    statcast_pitcher_pitch_movement,       # horizontal/vertical movement by pitch type (SSW source)
-    statcast_pitcher_run_value,            # swing/take run value breakdown (pitcher side)
-    statcast_batter_run_value,             # swing/take run value breakdown (batter side)
     statcast_outs_above_average,           # OAA by fielding position
     statcast_catcher_poptime,              # pop time on steal attempts (2B/3B)
-    statcast_fielding_run_value,           # total Fielding Run Value by position
     statcast_outfielder_jump,              # first-step quality on difficult plays
     statcast_running_splits,               # 90-ft sprint times at 5-ft intervals
 )
+
+# ── Optional imports — removed in newer pybaseball versions ──────────────────
+# Fall back gracefully so the rest of the script can still run.
+def _try_import(name):
+    try:
+        import pybaseball as _pb
+        fn = getattr(_pb, name)
+        return fn, True
+    except AttributeError:
+        print(f"[WARN] pybaseball.{name} not available in this version — skipping")
+        return None, False
+
+statcast_batter_bat_tracking,  _HAS_BATTER_BAT_TRACK  = _try_import("statcast_batter_bat_tracking")
+statcast_pitcher_bat_tracking, _HAS_PITCHER_BAT_TRACK = _try_import("statcast_pitcher_bat_tracking")
+statcast_pitcher_pitch_movement, _HAS_PITCH_MOVEMENT   = _try_import("statcast_pitcher_pitch_movement")
+statcast_pitcher_run_value,    _HAS_PITCHER_RV         = _try_import("statcast_pitcher_run_value")
+statcast_batter_run_value,     _HAS_BATTER_RV          = _try_import("statcast_batter_run_value")
+statcast_fielding_run_value,   _HAS_FIELDING_RV        = _try_import("statcast_fielding_run_value")
+_BAT_TRACKING_AVAILABLE = _HAS_BATTER_BAT_TRACK and _HAS_PITCHER_BAT_TRACK
 
 # ── CONFIG ───────────────────────────────────────────────────────────────────
 YEARS = [2023, 2024, 2025, 2026]
@@ -886,8 +899,11 @@ def main() -> None:
     print("=" * 65)
     print("SECTION: Statcast Bat Tracking [batter + pitcher-against, 2023+]")
     print("=" * 65)
-    _BAT_TRACK_MIN = 2023
-    for year in YEARS:
+    if not _BAT_TRACKING_AVAILABLE:
+        print("[SKIP] bat tracking functions not available in this pybaseball version")
+    else:
+      _BAT_TRACK_MIN = 2023
+      for year in YEARS:
         if year < _BAT_TRACK_MIN:
             print(f"[{year}] bat tracking not available pre-{_BAT_TRACK_MIN} — skipping")
             continue
@@ -961,8 +977,11 @@ def main() -> None:
     print("=" * 65)
     print("SECTION: Statcast Pitcher Pitch Movement (h/v movement by pitch type)")
     print("=" * 65)
-    _PITCH_TYPES = ["FF", "SI", "FC", "SL", "CU", "CH", "FS", "ST", "SV", "KC"]
-    for year in YEARS:
+    if not _HAS_PITCH_MOVEMENT:
+        print("[SKIP] statcast_pitcher_pitch_movement not available in this pybaseball version")
+    else:
+     _PITCH_TYPES = ["FF", "SI", "FC", "SL", "CU", "CH", "FS", "ST", "SV", "KC"]
+     for year in YEARS:
         out_path = OUTPUT_DIR / f"pitcher_pitch_movement_{year}.parquet"
         if out_path.exists():
             print(f"[{year}] Already exists → {out_path} (skipping)")
@@ -991,7 +1010,10 @@ def main() -> None:
     print("=" * 65)
     print("SECTION: Statcast Run Values — Pitcher & Batter (swing/take quality)")
     print("=" * 65)
-    for year in YEARS:
+    if not (_HAS_PITCHER_RV and _HAS_BATTER_RV):
+        print("[SKIP] statcast_pitcher/batter_run_value not available in this pybaseball version")
+    else:
+     for year in YEARS:
         for func, label in [
             (statcast_pitcher_run_value, "pitcher_run_value"),
             (statcast_batter_run_value,  "batter_run_value"),
@@ -1070,8 +1092,11 @@ def main() -> None:
     print("=" * 65)
     print("SECTION: Statcast Fielding Run Value — positions 2-9 (C through RF)")
     print("=" * 65)
-    _FRV_POSITIONS = [2, 3, 4, 5, 6, 7, 8, 9]   # C, 1B, 2B, 3B, SS, LF, CF, RF
-    for year in YEARS:
+    if not _HAS_FIELDING_RV:
+        print("[SKIP] statcast_fielding_run_value not available in this pybaseball version")
+    else:
+     _FRV_POSITIONS = [2, 3, 4, 5, 6, 7, 8, 9]   # C, 1B, 2B, 3B, SS, LF, CF, RF
+     for year in YEARS:
         out_path = OUTPUT_DIR / f"fielding_run_value_{year}.parquet"
         if out_path.exists():
             print(f"[{year}] Already exists → {out_path} (skipping)")
