@@ -126,6 +126,28 @@ NON_FEATURE_COLS = {
     "source", "pull_timestamp",
 }
 
+# Pass 1 drops: 100% null (pybaseball unavailable) + collinear + zero-gain universally
+_PASS1_DROP = {
+    # 100% null: pitcher run value / pitch movement (pybaseball unavailable)
+    "home_sp_swing_rv_per100",    "away_sp_swing_rv_per100",    "sp_swing_rv_diff",
+    "home_sp_take_rv_per100",     "away_sp_take_rv_per100",     "sp_take_rv_diff",
+    "home_sp_ff_h_break_inch",    "away_sp_ff_h_break_inch",    "sp_ff_h_break_diff",
+    "home_sp_ff_v_break_inch",    "away_sp_ff_v_break_inch",    "sp_ff_v_break_diff",
+    "home_sp_arsenal_weighted_rv","away_sp_arsenal_weighted_rv","sp_arsenal_rv_diff",
+    "home_sp_primary_whiff_pct",  "away_sp_primary_whiff_pct",  "sp_primary_whiff_diff",
+    "home_sp_primary_putaway_pct","away_sp_primary_putaway_pct","sp_primary_putaway_diff",
+    "home_sp_arsenal_quality_ratio","away_sp_arsenal_quality_ratio","sp_arsenal_quality_ratio_diff",
+    # Collinear: K/BB ratio (redundant with k_pct + bb_pct + k_minus_bb)
+    "home_sp_k_bb_ratio",    "away_sp_k_bb_ratio",    "sp_k_bb_ratio_diff",
+    "home_sp_k_bb_ratio_10d","away_sp_k_bb_ratio_10d","sp_k_bb_ratio_10d_diff",
+    # Collinear: local_hour (redundant with circadian_edge + is_day_game)
+    "home_game_local_hour",  "away_game_local_hour",
+    # Zero gain across all main models in NCV run
+    "away_sp_il_return_flag", "away_sp_starts_since_il", "home_sp_starts_since_il",
+    "is_day_game",
+}
+NON_FEATURE_COLS = NON_FEATURE_COLS | _PASS1_DROP
+
 # Bullpen features excluded — relief accounts for only 5–8% of F5 runs;
 # in 67% of games both SPs go full 5 innings and bullpen = 0%
 BULLPEN_FEATURES = {

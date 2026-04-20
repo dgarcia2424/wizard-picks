@@ -1228,10 +1228,12 @@ def predict_game(
     mc_home_k_mean = home_k_rate * home_expected_bf * KPROP_MEAN_CALIB + ump_adj * home_expected_bf
     mc_away_k_mean = away_k_rate * away_expected_bf * KPROP_MEAN_CALIB + ump_adj * away_expected_bf
 
-    # Blend PrizePicks standard line as a market prior (35% weight).
+    # Blend PrizePicks standard line as a market prior (45% weight).
     # PP line represents sharp market consensus; pulling MC toward it improves calibration
     # when our K rate estimate diverges significantly from the market.
-    _PP_K_WEIGHT = 0.35
+    # Weight bumped 35%→45% after 2026 early-season audit: MC K correlation ≈0.02,
+    # suggesting the physics model adds noise; revisit at n≥200 starts.
+    _PP_K_WEIGHT = 0.45
     if home_pp_k_line is not None and not pd.isna(home_pp_k_line):
         mc_home_k_mean = (1 - _PP_K_WEIGHT) * mc_home_k_mean + _PP_K_WEIGHT * float(home_pp_k_line)
     if away_pp_k_line is not None and not pd.isna(away_pp_k_line):

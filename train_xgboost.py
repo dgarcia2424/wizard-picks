@@ -178,6 +178,42 @@ NON_FEATURE_COLS = {
     "vegas_implied_home", "vegas_implied_away",
 }
 
+# ── Pass 1 feature drops ──────────────────────────────────────────────────────
+# Applied before any training.  Two categories:
+#
+# (A) 100% NULL — pybaseball functions not available in the installed version.
+#     Keeping these wastes colsample_bytree budget and adds no signal.
+#     mc_expected_runs is intentionally excluded from this list: it stays as a
+#     feature because it is populated at inference time (NaN during training is
+#     handled by XGBoost's default-branch routing).
+#
+# (B) Collinear derivations — ratios / products of features already in the
+#     matrix.  For GBDTs the redundancy doesn't cause instability, but it burns
+#     ~8 colsample slots that signal features could occupy.
+_PASS1_DROP = {
+    # ── (A) 100% null: pitcher run value / pitch movement (pybaseball unavailable)
+    "home_sp_swing_rv_per100",    "away_sp_swing_rv_per100",    "sp_swing_rv_diff",
+    "home_sp_take_rv_per100",     "away_sp_take_rv_per100",     "sp_take_rv_diff",
+    "home_sp_ff_h_break_inch",    "away_sp_ff_h_break_inch",    "sp_ff_h_break_diff",
+    "home_sp_ff_v_break_inch",    "away_sp_ff_v_break_inch",    "sp_ff_v_break_diff",
+    # ── (A) 100% null: arsenal stats (unavailable — all derived interactions also null)
+    "home_sp_arsenal_weighted_rv", "away_sp_arsenal_weighted_rv", "sp_arsenal_rv_diff",
+    "home_sp_primary_whiff_pct",   "away_sp_primary_whiff_pct",   "sp_primary_whiff_diff",
+    "home_sp_primary_putaway_pct", "away_sp_primary_putaway_pct", "sp_primary_putaway_diff",
+    "home_sp_arsenal_quality_ratio","away_sp_arsenal_quality_ratio","sp_arsenal_quality_ratio_diff",
+    # ── (B) Collinear: K/BB ratio is a ratio of k_pct / bb_pct, which the model
+    #    already sees directly alongside k_minus_bb.  All 6 ratio cols are redundant.
+    "home_sp_k_bb_ratio",    "away_sp_k_bb_ratio",    "sp_k_bb_ratio_diff",
+    "home_sp_k_bb_ratio_10d","away_sp_k_bb_ratio_10d","sp_k_bb_ratio_10d_diff",
+    # ── (B) Collinear: local_hour is a simple offset of game_hour_et; circadian_edge
+    #    already captures the timezone mismatch.  Raw hour adds no independent signal.
+    "home_game_local_hour",  "away_game_local_hour",
+    # ── (C) Zero gain across all 3 models (ML, RL, Total) in NCV run — dead weight
+    "away_sp_il_return_flag", "away_sp_starts_since_il", "home_sp_starts_since_il",
+    "is_day_game",            "mc_expected_runs",
+}
+NON_FEATURE_COLS = NON_FEATURE_COLS | _PASS1_DROP
+
 # Diff columns (home - away) that must be negated when building the away perspective.
 # Covers all *_diff and edge columns that are signed relative to home team.
 _DIFF_COLS_TO_NEGATE = [

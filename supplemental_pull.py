@@ -16,8 +16,14 @@ Usage:
 Expected runtime: 20-40 minutes first run, ~2 min with cache
 """
 
+import sys
 import warnings
 warnings.filterwarnings('ignore')
+
+# Force UTF-8 output on Windows to avoid cp1252 encode errors with → etc.
+if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf_8"):
+    import io as _io
+    sys.stdout = _io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 import time
 import json

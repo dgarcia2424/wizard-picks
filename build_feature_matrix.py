@@ -1373,24 +1373,23 @@ def build_bullpen_fatigue(years: list[int], verbose: bool = True) -> pd.DataFram
     all_rel = pd.concat(frames, ignore_index=True)
     all_rel  = all_rel.sort_values(["pitching_team", "game_date"]).reset_index(drop=True)
 
-    # Rolling 72h sum per team — closed='left' excludes the current game date
-    def _rolling_72h(grp: pd.DataFrame) -> pd.DataFrame:
-        grp = grp.sort_values("game_date").copy()
-        grp = grp.set_index("game_date")
+    # Rolling 72h sum per team — closed='left' excludes the current game date.
+    # Explicit for-loop avoids pandas 3.x groupby.apply key-drop behaviour.
+    result_parts = []
+    for team_name, grp in all_rel.groupby("pitching_team"):
+        grp = grp.sort_values("game_date").set_index("game_date")
         grp["bp_pitch_count_72h"] = (
             grp["rel_pitches"]
             .rolling("3D", min_periods=0, closed="left")
             .sum()
         )
-        return grp.reset_index()
+        grp = grp.reset_index()[["game_pk", "bp_pitch_count_72h"]]
+        grp["team"] = team_name
+        result_parts.append(grp)
 
     result = (
-        all_rel
-        .groupby("pitching_team", group_keys=False)
-        .apply(_rolling_72h)
-        .rename(columns={"pitching_team": "team"})
+        pd.concat(result_parts, ignore_index=True)
         [["team", "game_pk", "bp_pitch_count_72h"]]
-        .reset_index(drop=True)
     )
 
     if verbose:
