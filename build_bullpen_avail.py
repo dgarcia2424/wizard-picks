@@ -104,16 +104,28 @@ def _build_year(year: int, verbose: bool = True) -> pd.DataFrame:
         # 2-day lag sum (yesterday + day before)
         rest2d   = s_pitches.shift(1).fillna(0) + s_pitches.shift(2).fillna(0)
 
+        # Extend index by 2 extra days to cover the next scoring window
+        # (so predictions for the day after the last game have real rest data)
+        last_date = s_pitches.index.max()
+        extra_idx = pd.date_range(full_idx[-1] + pd.Timedelta(days=1),
+                                  last_date + pd.Timedelta(days=2), freq="D")
+        s_pitches = s_pitches.reindex(full_idx.union(extra_idx), fill_value=0)
+        s_n_used  = s_n_used.reindex(full_idx.union(extra_idx), fill_value=0)
+        rest1d   = s_pitches.shift(1).fillna(0)
+        n_yday   = s_n_used.shift(1).fillna(0)
+        rest2d   = s_pitches.shift(1).fillna(0) + s_pitches.shift(2).fillna(0)
+
         tbl = pd.DataFrame({
             "team":               team,
-            "game_date":          full_idx,
+            "game_date":          s_pitches.index,
             "bp_pitches_rest1d":  rest1d.values,
             "bp_pitches_rest2d":  rest2d.values,
             "bp_n_used_yday":     n_yday.values.astype(int),
         })
-        # Keep only dates that actually had a game for this team
+        # Keep game dates AND the 2 forward-projection days
         game_dates = set(grp.index)
-        tbl = tbl[tbl["game_date"].isin(game_dates)]
+        fwd_dates  = set(extra_idx)
+        tbl = tbl[tbl["game_date"].isin(game_dates | fwd_dates)]
         out_rows.append(tbl)
 
     result = pd.concat(out_rows, ignore_index=True)
