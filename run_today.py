@@ -3724,7 +3724,7 @@ def write_html_card(results: list[dict], date_str: str,
         )
 
     parlay_combos  = _find_parlay_combos(results, allowed_game_keys=_f5_game_keys(results))
-    parlay_section = "" if email_filter else _parlay_html(parlay_combos)
+    parlay_section = _parlay_html(parlay_combos)
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
