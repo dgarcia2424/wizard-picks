@@ -82,7 +82,16 @@ def load_models():
     team_model = xgb.XGBClassifier()
     team_model.load_model(str(TEAM_MODEL_PATH))
 
-    cal     = pickle.load(open(XGB_CAL_PATH, "rb"))
+    cal = pickle.load(open(XGB_CAL_PATH, "rb"))
+
+    # Stacker pickle was saved when train_f5_model was __main__, so
+    # BayesianStackerF5 is stored as __main__.BayesianStackerF5.
+    # Inject the class into __main__ before unpickling so it resolves
+    # regardless of which module is currently __main__.
+    import sys as _sys
+    import __main__ as _main
+    if not hasattr(_main, "BayesianStackerF5"):
+        _main.BayesianStackerF5 = BayesianStackerF5
     stacker = pickle.load(open(STACKER_PATH, "rb"))
 
     return xgb_model, cal, feat_cols, stacker, team_model, team_feat_cols
