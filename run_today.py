@@ -3088,7 +3088,8 @@ def write_html_card(results: list[dict], date_str: str,
             f5a  = r.get("mc_f5_away_runs")
             f5t  = r.get("mc_f5_total")
             f5wh = r.get("mc_f5_home_win_prob")
-            f5cov = r.get("mc_f5_home_covers_rl")   # MC cover +0.5 probability
+            f5aw  = r.get("mc_f5_away_win_prob")
+            f5cov = (1.0 - float(f5aw)) if not _is_missing(f5aw) else None  # P(home covers F5 +0.5)
             tlo  = r.get("mc_f5_total_lo")
             thi  = r.get("mc_f5_total_hi")
             l1   = r.get("f5_xgb_l1")
@@ -3429,7 +3430,6 @@ def write_html_card(results: list[dict], date_str: str,
             hw   = r.get("mc_f5_home_win_prob")
             if _is_missing(hw): continue
             aw   = r.get("mc_f5_away_win_prob")
-            cov  = r.get("mc_f5_home_covers_rl")
             l1_raw  = r.get("f5_xgb_l1")
             l2_raw  = r.get("f5_stacker_l2")
             tlo_raw = r.get("f5_team_log_odds")
@@ -3442,8 +3442,9 @@ def write_html_card(results: list[dict], date_str: str,
             ]:
                 is_home = (side == "HOME")
                 win_p  = float(hw) if is_home else 1 - float(hw)
-                cov_p  = (float(cov) if is_home and not _is_missing(cov)
-                          else (1 - float(cov)) if not is_home and not _is_missing(cov)
+                # +0.5 cover = team wins OR ties = 1 - opponent wins outright
+                cov_p  = ((1 - float(aw)) if is_home and not _is_missing(aw)
+                          else (1 - float(hw)) if not is_home and not _is_missing(hw)
                           else None)
                 l1_p   = (float(l1_raw) if is_home and not _is_missing(l1_raw)
                           else (1 - float(l1_raw)) if not is_home and not _is_missing(l1_raw)
