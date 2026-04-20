@@ -961,12 +961,15 @@ def _build_parlay_legs(r: dict) -> list[dict]:
         _add("ML_AWAY", f"{away} ML", 1 - float(ml_home_p), r.get("vegas_ml_away"))
 
     # ── Run line ──────────────────────────────────────────────────────────────
-    _add("RL_HOME", f"{home} -1.5", r.get("lock_p_model"), r.get("rl_odds"))
+    _rl_home_line_pl = r.get("rl_home_line", -1.5) or -1.5
+    _home_rl_lbl_pl  = f"{home} +1.5" if float(_rl_home_line_pl) > 0 else f"{home} -1.5"
+    _away_rl_lbl_pl  = f"{away} -1.5" if float(_rl_home_line_pl) > 0 else f"{away} +1.5"
+    _add("RL_HOME", _home_rl_lbl_pl, r.get("lock_p_model"), r.get("rl_odds"))
     rl_away_odds = None
     if not _is_missing(r.get("rl_odds")):
         ho = float(r["rl_odds"])
         rl_away_odds = int(round((-ho - 20) if ho < 0 else (-ho + 20)))
-    _add("RL_AWAY", f"{away} +1.5", r.get("away_lock_p_model"), rl_away_odds)
+    _add("RL_AWAY", _away_rl_lbl_pl, r.get("away_lock_p_model"), rl_away_odds)
 
     # ── Over / Under ──────────────────────────────────────────────────────────
     mc_over   = r.get("mc_over_prob")
@@ -1607,22 +1610,31 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
             ensemble_max  = ensemble_min
             model_spread  = 0.0
 
-        # Pinnacle and retail columns for RL home
+        # Pinnacle and retail columns for RL home/away
+        # P_true_rl_home = P(home covers THEIR market line, +1.5 or -1.5)
+        # P_true_rl_away = P(away covers THEIR market line, mirror of above)
+        # The model always computes p_model_rl = P(home wins by 2+) = P(home -1.5).
+        # When the home team is the +1.5 underdog, the model direction is flipped:
+        #   p_model_rl_away (= 1 - p_model_rl) correctly matches P_true_rl_home (P(home +1.5))
+        #   p_model_rl correctly matches P_true_rl_away (P(away -1.5))
+        _home_is_dog = (not _is_missing(rl_home_line) and float(rl_home_line) > 0)
+        _home_lock_model = p_model_rl_away if _home_is_dog else p_model_rl
+        _away_lock_model = p_model_rl      if _home_is_dog else p_model_rl_away
+
         p_true_rl          = game.get("P_true_rl_home")
         retail_implied_rl  = game.get("retail_implied_rl_home")
-        retail_odds_rl     = game.get("runline_home_odds")   # retail RL odds (American)
+        retail_odds_rl     = game.get("runline_home_odds")
 
         lock_result = _apply_three_part_lock(
-            p_model         = p_model_rl,
+            p_model         = _home_lock_model,
             p_true          = p_true_rl,
             retail_implied_prob = retail_implied_rl,
             retail_ml_odds  = retail_odds_rl,
         )
 
-        # Away-side RL (away team +1.5)
-        p_true_rl_away       = game.get("P_true_rl_away")
+        # Away-side RL
+        p_true_rl_away         = game.get("P_true_rl_away")
         retail_implied_rl_away = game.get("retail_implied_rl_away")
-        # Estimate away retail RL odds by flipping home odds minus juice
         if not _is_missing(retail_odds_rl):
             _ho = float(retail_odds_rl)
             retail_odds_rl_away = int(round((-_ho - 20) if _ho < 0 else (-_ho + 20)))
@@ -1630,7 +1642,7 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
             retail_odds_rl_away = None
 
         away_lock_result = _apply_three_part_lock(
-            p_model             = p_model_rl_away,
+            p_model             = _away_lock_model,
             p_true              = p_true_rl_away,
             retail_implied_prob = retail_implied_rl_away,
             retail_ml_odds      = retail_odds_rl_away,
@@ -1814,11 +1826,12 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
             "best_tier":         best.get("tier", ""),
             "best_tier_capped":  best.get("tier_capped", False),
             "market_deviation":  best.get("market_deviation", 0.0),
-            # Three-Part Lock fields — RL home (-1.5)
+            # Three-Part Lock fields — RL home (label depends on rl_home_line direction)
+            "rl_home_line":      float(rl_home_line),   # actual run line for home team
             "lock_tier":         lock_result["tier"],
             "lock_dollars":      lock_result["dollar_stake"],
             "lock_edge":         lock_result["edge"],
-            "lock_p_model":      round(p_model_rl, 4),
+            "lock_p_model":      round(_home_lock_model, 4) if _home_lock_model is not None else None,
             "lock_p_true":       p_true_rl,
             "lock_retail_implied": retail_implied_rl,
             "lock_sanity_pass":  lock_result["sanity_pass"],
@@ -2329,9 +2342,12 @@ def _build_email_body(results: list[dict], date_str: str) -> str:
             tier = r.get(tier_key)
             if tier is not None:
                 ou_dir = r.get("ou_direction", "OVER") if mkt == "O/U" else ""
+                _rhl = r.get("rl_home_line", -1.5) or -1.5
+                _h_rl = f"{home} +1.5" if float(_rhl) > 0 else f"{home} -1.5"
+                _a_rl = f"{away} -1.5" if float(_rhl) > 0 else f"{away} +1.5"
                 line_label = (f"O/U {ou_dir} {r.get('ou_posted_line','')} " if mkt == "O/U"
-                              else f"RL {away} +1.5 " if mkt == "RL_AWAY"
-                              else f"RL {home} -1.5 " if mkt == "RL" else "ML WIN ")
+                              else f"RL {_a_rl} " if mkt == "RL_AWAY"
+                              else f"RL {_h_rl} " if mkt == "RL" else "ML WIN ")
                 all_locks.append({
                     "game": f"{away} @ {home}", "mkt": mkt, "tier": tier,
                     "label": line_label.strip(),
@@ -2947,8 +2963,11 @@ def write_html_card(results: list[dict], date_str: str,
             _shadow_row = ""
 
         # RL market
+        _rl_home_line_card = r.get("rl_home_line", -1.5) or -1.5
+        _home_rl_lbl = f"{home} +1.5" if float(_rl_home_line_card) > 0 else f"{home} -1.5"
+        _away_rl_lbl = f"{away} -1.5" if float(_rl_home_line_card) > 0 else f"{away} +1.5"
         rl_block = _mkt_block(
-            label        = f"RL · {home} -1.5",
+            label        = f"RL · {_home_rl_lbl}",
             p_model      = r.get("lock_p_model"),
             p_pin        = r.get("lock_p_true"),
             p_retail     = r.get("lock_retail_implied"),
@@ -2962,9 +2981,9 @@ def write_html_card(results: list[dict], date_str: str,
             extra_rows   = _shadow_row,
         )
 
-        # RL away market (+1.5)
+        # RL away market
         rl_away_block = _mkt_block(
-            label        = f"RL · {away} +1.5",
+            label        = f"RL · {_away_rl_lbl}",
             p_model      = r.get("away_lock_p_model"),
             p_pin        = r.get("away_lock_p_true"),
             p_retail     = r.get("away_lock_retail_implied"),
