@@ -910,6 +910,19 @@ else:
 
 
 # -
+# Merge any columns present in feature_matrix.parquet but not yet in fm
+# (Phase 2 / QW features added after enriched.parquet was last rebuilt)
+# -
+base_fm_path = os.path.join(BASE, "feature_matrix.parquet")
+if os.path.exists(base_fm_path):
+    base_fm = pd.read_parquet(base_fm_path)
+    missing_cols = [c for c in base_fm.columns if c not in fm.columns]
+    if missing_cols:
+        print(f"\n  Merging {len(missing_cols)} pass-through cols from feature_matrix.parquet ...")
+        fm = fm.merge(base_fm[["game_pk"] + missing_cols], on="game_pk", how="left")
+        print(f"  fm shape after merge: {fm.shape}")
+
+# -
 # Save output
 # -
 print("\n" + "=" * 70)
