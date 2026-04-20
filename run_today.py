@@ -3050,8 +3050,9 @@ def write_html_card(results: list[dict], date_str: str,
 
         # ── F5 section ────────────────────────────────────────────────────────
         # Half/full vote thresholds (from analyze_f5_signals.py 2025 backtest):
-        #   Full vote (≥65%) → 72.5% hist accuracy   (_V_FULL / mirror 1-_V_FULL)
-        #   Half vote (60-65%) → 68.8% hist accuracy (_V_HALF / mirror 1-_V_HALF)
+        #   Full vote (≥60%) → 68.8% hist accuracy   (_V_FULL / mirror 1-_V_FULL)
+        #   Half vote (55-60%) → ~65% hist accuracy  (_V_HALF / mirror 1-_V_HALF)
+        #   (Lowered from 65%/60% — user aware accuracy drops from 72.5% to 68.8%)
         #
         # XGB L1/L2 and Pinnacle use the standard _V_FULL/_V_HALF thresholds.
         # MC cover% is calibrated lower (62/38 full, 58/42 half) per signal AUC analysis.
@@ -3368,13 +3369,14 @@ def write_html_card(results: list[dict], date_str: str,
     _F5_K = 1.289
 
     # Vote thresholds (from analyze_f5_signals.py 2025 back-test)
-    # Full vote (1.0): signal >= 65%  — 72.5% historical accuracy
-    # Half vote (0.5): signal 60-65% — 68.8% historical accuracy
-    # Same logic mirrored for away side (<=35% full, 35-40% half)
-    _V_FULL = 0.65   # full vote threshold
-    _V_HALF = 0.60   # half vote threshold (lower bound of half-vote band)
-    _V_TEAM_FULL = 0.60  # team log-odds sigmoid: slightly lower bar (AUC 0.601)
-    _V_TEAM_HALF = 0.55
+    # Full vote (1.0): signal >= 60%  — 68.8% historical accuracy
+    # Half vote (0.5): signal 55-60% — ~65% historical accuracy
+    # Same logic mirrored for away side (<=40% full, 40-45% half)
+    # (Lowered from 65%/60% — user aware accuracy drops from 72.5% to 68.8%)
+    _V_FULL = 0.60   # full vote threshold
+    _V_HALF = 0.55   # half vote threshold (lower bound of half-vote band)
+    _V_TEAM_FULL = 0.57  # team log-odds sigmoid: slightly lower bar (AUC 0.601)
+    _V_TEAM_HALF = 0.53
 
     def _vote_score(prob, full_hi=_V_FULL, half_hi=_V_HALF):
         """Return (vote_contribution, css_class) for a probability value (home perspective)."""
