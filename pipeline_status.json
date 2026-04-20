@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-20T12:06:36",
+  "generated_at": "2026-04-20T14:01:41",
   "date": "2026-04-20",
   "overall": "ok",
   "picks_ready": true,
@@ -7,87 +7,87 @@
     "lineups": {
       "status": "ok",
       "path": "data/statcast/lineups_today.parquet",
-      "age_hours": 0.05,
+      "age_hours": 0.02,
       "critical": true,
       "description": "Today's starting lineups",
-      "last_modified": "2026-04-20T12:03:45"
+      "last_modified": "2026-04-20T14:00:34"
     },
     "lineups_long": {
       "status": "ok",
       "path": "data/statcast/lineups_today_long.parquet",
-      "age_hours": 0.05,
+      "age_hours": 0.02,
       "critical": false,
       "description": "Batting order for lineup quality",
-      "last_modified": "2026-04-20T12:03:45"
+      "last_modified": "2026-04-20T14:00:34"
     },
     "odds_current": {
       "status": "ok",
       "path": "data/statcast/odds_current_2026_04_20.parquet",
-      "age_hours": 0.04,
+      "age_hours": 0.01,
       "critical": true,
       "description": "Today's ML/RL/total odds",
-      "last_modified": "2026-04-20T12:04:26"
+      "last_modified": "2026-04-20T14:01:06"
     },
     "k_props": {
       "status": "ok",
       "path": "data/statcast/k_props_2026-04-20.parquet",
-      "age_hours": 0.04,
+      "age_hours": 0.01,
       "critical": false,
       "description": "Pitcher K prop lines",
-      "last_modified": "2026-04-20T12:04:30"
+      "last_modified": "2026-04-20T14:01:11"
     },
     "pitcher_profiles": {
       "status": "ok",
       "path": "data/statcast/pitcher_profiles_2026.parquet",
-      "age_hours": 0.04,
+      "age_hours": 0.01,
       "critical": true,
       "description": "Pitcher xwOBA/K%/IP profiles",
-      "last_modified": "2026-04-20T12:04:14"
+      "last_modified": "2026-04-20T14:00:53"
     },
     "pitcher_10d": {
       "status": "ok",
       "path": "data/statcast/pitcher_10d_2026.parquet",
-      "age_hours": 0.04,
+      "age_hours": 0.01,
       "critical": false,
       "description": "Pitcher trailing-10d K%/xwOBA",
-      "last_modified": "2026-04-20T12:04:15"
+      "last_modified": "2026-04-20T14:00:53"
     },
     "team_stats": {
       "status": "ok",
       "path": "data/statcast/team_stats_2026.parquet",
-      "age_hours": 0.04,
+      "age_hours": 0.01,
       "critical": true,
       "description": "Team batting/bullpen stats (incl 10d)",
-      "last_modified": "2026-04-20T12:04:15"
+      "last_modified": "2026-04-20T14:00:53"
     },
     "lineup_quality": {
       "status": "ok",
       "path": "data/statcast/lineup_quality_today.parquet",
-      "age_hours": 0.03,
+      "age_hours": 0.01,
       "critical": false,
       "description": "Lineup wRC+ scores",
-      "last_modified": "2026-04-20T12:04:35"
+      "last_modified": "2026-04-20T14:01:15"
     },
     "daily_card": {
       "status": "ok",
       "path": "daily_card.csv",
-      "age_hours": 0.03,
+      "age_hours": 0.01,
       "critical": true,
       "description": "Today's model predictions",
-      "last_modified": "2026-04-20T12:04:37"
+      "last_modified": "2026-04-20T14:01:17"
     },
     "backtest": {
       "status": "ok",
       "path": "data/raw/backtest_games_2026.csv",
-      "age_hours": 0.02,
+      "age_hours": 0.0,
       "critical": false,
       "description": "Season backtest tracker",
-      "last_modified": "2026-04-20T12:05:09"
+      "last_modified": "2026-04-20T14:01:41"
     },
     "statcast_2026": {
       "status": "ok",
       "path": "data/statcast/statcast_2026.parquet",
-      "age_hours": 0.12,
+      "age_hours": 2.04,
       "critical": false,
       "description": "2026 Statcast pitch data",
       "last_modified": "2026-04-20T11:59:34"
@@ -95,10 +95,10 @@
     "fangraphs": {
       "status": "ok",
       "path": "data/raw/fangraphs_batters.csv",
-      "age_hours": 0.04,
+      "age_hours": 0.02,
       "critical": false,
       "description": "FanGraphs batter wRC+ data",
-      "last_modified": "2026-04-20T12:04:04"
+      "last_modified": "2026-04-20T14:00:42"
     }
   },
   "next_scheduled_runs": {
