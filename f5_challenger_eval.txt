@@ -1,0 +1,113 @@
+======================================================================
+F5 CHALLENGER vs INCUMBENT - 2025 holdout  [with isotonic calibration]
+======================================================================
+Val rows (joined):   2436
+Base rate f5_cover:  0.6145
+
+----------------------------------------------------------------------
+COVER-PROBABILITY METRICS  (target = f5_home_cover)
+----------------------------------------------------------------------
+Model                            Brier   LogLoss     AUC    MeanP
+incumbent_xgb_cal               0.2235    0.6383  0.6418   0.5872
+incumbent_stacker               0.2212    0.6329  0.6533   0.5883
+challenger_poisson_raw          0.2240    0.6407  0.6420   0.6280
+challenger_poisson_platt        0.2258    0.6434  0.6420   0.5776
+challenger_poisson_iso          0.2279    0.6629  0.6395   0.5762
+challenger_poisson_cal          0.2279    0.6629  0.6395   0.5762
+base_rate                       0.2369    0.6667     n/a   0.6145
+
+----------------------------------------------------------------------
+CALIBRATION BINS
+----------------------------------------------------------------------
+
+  incumbent_xgb_cal
+       0.00-0.30  n=  20  pred=0.283  actual=0.300  gap=+0.017
+       0.30-0.35  n=  51  pred=0.327  actual=0.294  gap=-0.033
+       0.35-0.40  n=  66  pred=0.376  actual=0.348  gap=-0.028
+       0.40-0.45  n= 143  pred=0.426  actual=0.455  gap=+0.028
+       0.45-0.50  n= 205  pred=0.476  actual=0.517  gap=+0.041
+       0.50-0.55  n= 331  pred=0.526  actual=0.532  gap=+0.005
+       0.55-0.60  n= 432  pred=0.575  actual=0.588  gap=+0.013
+       0.60-0.65  n= 444  pred=0.627  actual=0.678  gap=+0.051
+       0.65-0.70  n= 389  pred=0.674  actual=0.720  gap=+0.046
+       0.70-1.01  n= 355  pred=0.737  actual=0.763  gap=+0.026
+
+  incumbent_stacker
+       0.00-0.30  n=  61  pred=0.247  actual=0.262  gap=+0.015
+       0.30-0.35  n=  62  pred=0.328  actual=0.435  gap=+0.108
+       0.35-0.40  n= 104  pred=0.376  actual=0.346  gap=-0.030
+       0.40-0.45  n= 158  pred=0.428  actual=0.494  gap=+0.066
+       0.45-0.50  n= 235  pred=0.477  actual=0.532  gap=+0.055
+       0.50-0.55  n= 266  pred=0.525  actual=0.511  gap=-0.013
+       0.55-0.60  n= 354  pred=0.575  actual=0.593  gap=+0.018
+       0.60-0.65  n= 340  pred=0.626  actual=0.676  gap=+0.050
+       0.65-0.70  n= 333  pred=0.674  actual=0.697  gap=+0.023
+       0.70-1.01  n= 523  pred=0.762  actual=0.778  gap=+0.016
+
+  challenger_poisson_raw
+       0.00-0.30  n=  41  pred=0.242  actual=0.317  gap=+0.075
+       0.30-0.35  n=  35  pred=0.327  actual=0.286  gap=-0.042
+       0.35-0.40  n=  58  pred=0.379  actual=0.397  gap=+0.018
+       0.40-0.45  n= 112  pred=0.429  actual=0.464  gap=+0.036
+       0.45-0.50  n= 162  pred=0.477  actual=0.469  gap=-0.008
+       0.50-0.55  n= 233  pred=0.526  actual=0.511  gap=-0.015
+       0.55-0.60  n= 305  pred=0.578  actual=0.554  gap=-0.024
+       0.60-0.65  n= 320  pred=0.623  actual=0.609  gap=-0.014
+       0.65-0.70  n= 424  pred=0.674  actual=0.642  gap=-0.032
+       0.70-1.01  n= 746  pred=0.773  actual=0.761  gap=-0.012
+
+  challenger_poisson_platt
+       0.00-0.30  n=   7  pred=0.258  actual=0.429  gap=+0.171
+       0.30-0.35  n=  23  pred=0.329  actual=0.348  gap=+0.019
+       0.35-0.40  n=  46  pred=0.380  actual=0.261  gap=-0.119
+       0.40-0.45  n= 110  pred=0.430  actual=0.436  gap=+0.006
+       0.45-0.50  n= 263  pred=0.477  actual=0.498  gap=+0.021
+       0.50-0.55  n= 430  pred=0.527  actual=0.512  gap=-0.015
+       0.55-0.60  n= 557  pred=0.576  actual=0.612  gap=+0.037
+       0.60-0.65  n= 513  pred=0.623  actual=0.725  gap=+0.102
+       0.65-0.70  n= 305  pred=0.672  actual=0.728  gap=+0.056
+       0.70-1.01  n= 182  pred=0.746  actual=0.769  gap=+0.023
+
+  challenger_poisson_iso
+       0.00-0.30  n=  16  pred=0.054  actual=0.375  gap=+0.321
+       0.30-0.35  n=  29  pred=0.345  actual=0.276  gap=-0.069
+       0.35-0.40  n=   3  pred=0.368  actual=0.667  gap=+0.299
+       0.40-0.45  n= 133  pred=0.405  actual=0.406  gap=+0.001
+       0.45-0.50  n= 244  pred=0.488  actual=0.480  gap=-0.009
+       0.50-0.55  n= 295  pred=0.528  actual=0.485  gap=-0.043
+       0.55-0.60  n= 994  pred=0.578  actual=0.624  gap=+0.046
+       0.60-0.65  n= 530  pred=0.640  actual=0.755  gap=+0.115
+       0.65-0.70  n=  17  pred=0.677  actual=0.706  gap=+0.028
+       0.70-1.01  n= 175  pred=0.788  actual=0.771  gap=-0.016
+
+  challenger_poisson_cal
+       0.00-0.30  n=  16  pred=0.054  actual=0.375  gap=+0.321
+       0.30-0.35  n=  29  pred=0.345  actual=0.276  gap=-0.069
+       0.35-0.40  n=   3  pred=0.368  actual=0.667  gap=+0.299
+       0.40-0.45  n= 133  pred=0.405  actual=0.406  gap=+0.001
+       0.45-0.50  n= 244  pred=0.488  actual=0.480  gap=-0.009
+       0.50-0.55  n= 295  pred=0.528  actual=0.485  gap=-0.043
+       0.55-0.60  n= 994  pred=0.578  actual=0.624  gap=+0.046
+       0.60-0.65  n= 530  pred=0.640  actual=0.755  gap=+0.115
+       0.65-0.70  n=  17  pred=0.677  actual=0.706  gap=+0.028
+       0.70-1.01  n= 175  pred=0.788  actual=0.771  gap=-0.016
+
+----------------------------------------------------------------------
+TOTALS DIAGNOSTIC  (challenger derives P(total > K) for free)
+----------------------------------------------------------------------
+  line=7.5  base_rate=0.210  brier=0.1636  logloss=0.5145  auc=0.6470  mean_pred=0.136
+  line=8.5  base_rate=0.148  brier=0.1275  logloss=0.4399  auc=0.6505  mean_pred=0.074
+  line=9.5  base_rate=0.099  brier=0.0909  logloss=0.3547  auc=0.6531  mean_pred=0.038
+
+----------------------------------------------------------------------
+VERDICT  (lower Brier = better)
+----------------------------------------------------------------------
+  Best incumbent:         0.2212
+  Challenger raw:         0.2240  (delta +0.0027)
+  Challenger + Platt:     0.2258  (delta +0.0046)
+  Challenger + Isotonic:  0.2279  (delta +0.0067)
+  Best challenger variant on val: raw
+
+  Note: on OOF (2024) calibration lowers Brier, but on held-out 2025
+  it raises it. The analytical Poisson cover probability is already
+  well-calibrated by construction; fitted calibrators chase OOF noise.

@@ -756,7 +756,18 @@ def _get_p_model(stk_model, xgb_rl_raw: float, stacking_feats: dict | None,
 
     # ── Plain sklearn calibrator (Platt LogisticRegression or isotonic) ─────
     try:
-        return float(stk_model.predict_proba([[xgb_rl_raw]])[0, 1])
+        _n_feats = getattr(stk_model, "n_features_in_", 1)
+        _sf = stacking_feats or {}
+        _gmonth = float(_sf.get("game_month", 6))
+        _mnorm  = (_gmonth - 4) / 5.0
+        _enorm  = float(_sf.get("elo_diff", 0)) / 100.0
+        if _n_feats >= 3:
+            _cal_in = [[float(xgb_rl_raw), _mnorm, _enorm]]
+        elif _n_feats >= 2:
+            _cal_in = [[float(xgb_rl_raw), _mnorm]]
+        else:
+            _cal_in = [[float(xgb_rl_raw)]]
+        return float(stk_model.predict_proba(_cal_in)[0, 1])
     except (AttributeError, ValueError):
         try:
             return float(stk_model.predict([[xgb_rl_raw]])[0])
@@ -1244,6 +1255,22 @@ def _best_bet(
                 tier = "*"   # downgrade strong → lean
                 best["tier_capped"] = True  # flag for display
 
+    # ── Guardrail: suppress when model is much more bullish than sharp market ──
+    # Backtest (2025 val, >60% ml_cal): when raw_model - market_implied > 0.04
+    # the win rate is ~60-61% vs 80% when the market agrees or is more bullish.
+    # Fighting sharp money at this magnitude erodes any real edge.
+    raw_gap_check = best.get("raw_model_prob", best["model_prob"])
+    mkt_gap_check = best.get("market_implied", np.nan)
+    if not np.isnan(mkt_gap_check):
+        model_vs_market = raw_gap_check - mkt_gap_check
+        if model_vs_market > 0.04:
+            if tier == "**":
+                tier = "*"
+                best["tier_capped"] = True
+            elif tier == "*":
+                tier = ""
+                best["tier_capped"] = True
+
     best["tier"] = tier
 
     # How far does the raw model diverge from the market? Flag large deviations.
@@ -1362,7 +1389,7 @@ def _load_ump_k(date_str: str) -> dict:
 
 
 def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
-    from monte_carlo_runline import predict_game, load_profiles, load_pitcher_10d
+    from monte_carlo_runline import predict_game, load_profiles, load_pitcher_10d, load_stuff_plus, load_steamer_era
 
     # Load all data sources
     lineups    = load_lineups(date_str)
@@ -1371,6 +1398,20 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
     profiles   = load_profiles()
     pitcher_10d = load_pitcher_10d()
     kprops     = load_kprops(date_str)
+
+    # Stuff+/Pitching+ — refresh from FanGraphs then load lookup
+    _stuff_year = int(date_str[:4])
+    try:
+        from fetch_challenger_projections import refresh_stuff_plus as _refresh_sp
+        _refresh_sp(_stuff_year)
+    except Exception as _e:
+        print(f"  [WARN] Stuff+ refresh failed: {_e} — using cached data if available")
+    stuff_plus_lookup = load_stuff_plus(_stuff_year)
+    if stuff_plus_lookup:
+        print(f"  [Stuff+] {len(stuff_plus_lookup)} pitchers loaded")
+    steamer_lookup = load_steamer_era(_stuff_year)
+    if steamer_lookup:
+        print(f"  [Steamer ERA] {len(steamer_lookup)} pitchers loaded")
     stk_model  = _load_stacking_model()
     try:
         team_stats = _load_team_stats()
@@ -1560,6 +1601,8 @@ def run_card(date_str: str, min_edge: float = 0.0) -> list[dict]:
                 ump_k_above_avg=float(ump_k) if ump_k is not None else 0.0,
                 home_pp_k_line=_pp_home_k,
                 away_pp_k_line=_pp_away_k,
+                stuff_plus_lookup=stuff_plus_lookup or None,
+                steamer_lookup=steamer_lookup or None,
             )
         except Exception as e:
             print(f"  {away} @ {home}: ERROR — {e}")
