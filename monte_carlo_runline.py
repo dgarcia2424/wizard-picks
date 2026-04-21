@@ -1597,9 +1597,15 @@ def predict_game(
             cal_rl = load_calibrator("rl")
             result["xgb_home_covers_rl_raw"] = round(xgb_rl_prob_raw, 4)
             if cal_rl is not None:
-                _game_month = float(row.get("game_month", 6))
+                def _xrow_get(col, default):
+                    if xgb_row is not None and col in xgb_row.columns:
+                        v = xgb_row[col].iloc[0]
+                        if pd.notna(v):
+                            return float(v)
+                    return float(default)
+                _game_month = _xrow_get("game_month", 6)
                 _month_norm = (_game_month - 4) / 5.0
-                _elo_norm   = float(row.get("elo_diff", 0)) / 100.0
+                _elo_norm   = _xrow_get("elo_diff", 0) / 100.0
                 _n_feats = getattr(cal_rl, "n_features_in_", 1)
                 try:
                     # Platt scaling — [raw_prob, month_norm, elo_norm?]
