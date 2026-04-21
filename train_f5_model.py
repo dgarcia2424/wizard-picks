@@ -872,44 +872,83 @@ def train_team_model(df: pd.DataFrame, feat_cols: list[str]):
 def _generate_oof_for_stacker(
     df: pd.DataFrame,
     feat_cols: list[str],
+    years: list[int] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, pd.DataFrame, np.ndarray]:
     """
-    Year-swap cross-validation on 2023+2024 training data.
-    Generates zero-leakage OOF XGBoost predictions for stacker training.
+    Leave-One-Year-Out (LOYO) cross-validation across every year present
+    in `df`.  Generates zero-leakage OOF predictions for the L1 XGB, the
+    doubled-dataset Team XGB, and the dual-Poisson sidecar — the four
+    artefacts consumed as stacker domain features.
 
-    Fold A: train=2023 → predict 2024
-    Fold B: train=2024 → predict 2023
-    Combined: OOF covering all 2023+2024 rows.
+    For each held-out year:
+      train = all remaining years (requires ≥ 1)
+      val   = held-out year
+    The concatenated OOF arrays cover every row in `df` whose year appears
+    in `years` and whose target columns are non-null.
+
+    Parameters
+    ----------
+    df        : full label-joined frame (all years).
+    feat_cols : L1 feature manifest.
+    years     : optional explicit year list.  Defaults to sorted unique
+                years present in df (only those with ≥ 2 distinct years
+                available as training partners; a singleton year cannot
+                be held out and is skipped with a warning).
 
     Returns
     -------
-    oof_probs     : np.ndarray, shape (n_train,)  — XGBoost OOF probabilities
-    oof_labels    : np.ndarray, shape (n_train,)  — f5_home_cover labels
-    train_df      : pd.DataFrame                  — 2023+2024 rows + team_f5_log_odds col
-    oof_segs      : np.ndarray, shape (n_train,)  — SP handedness segment IDs
+    oof_probs     : np.ndarray (n_oof,)   — L1 XGB OOF probs
+    oof_labels    : np.ndarray (n_oof,)   — f5_home_cover
+    oof_df        : pd.DataFrame (n_oof,) — OOF rows + team_f5_log_odds,
+                                            pois_lam_home/away, pois_p_cover
+    oof_segs      : np.ndarray (n_oof,)   — SP handedness segments
     """
-    train_df = df[df["year"].isin([2023, 2024])].reset_index(drop=True)
-    n = len(train_df)
-    oof_probs      = np.zeros(n, dtype=float)
-    oof_team_logodds = np.zeros(n, dtype=float)
-    oof_lam_home   = np.zeros(n, dtype=float)
-    oof_lam_away   = np.zeros(n, dtype=float)
-    oof_p_cover_poi = np.zeros(n, dtype=float)
-    oof_labels     = train_df["f5_home_cover"].values.astype(int)
+    import gc
 
-    # year_to_positions: integer row indices into train_df for each year
-    year_pos = {yr: np.where(train_df["year"].values == yr)[0]
-                for yr in [2023, 2024]}
+    # Drop rows with missing targets — required by XGB.  Match by truthy
+    # target availability so 2026 partials with NaN runs don't contaminate.
+    required_cols = ["f5_home_cover", "f5_home_runs", "f5_away_runs", "year"]
+    full = df.dropna(subset=required_cols).reset_index(drop=True).copy()
+    full["year"] = full["year"].astype(int)
 
-    swap_folds = [
-        ([2023], 2024, "Fold A: train=2023 → val=2024"),
-        ([2024], 2023, "Fold B: train=2024 → val=2023"),
-    ]
+    if years is None:
+        years = sorted(full["year"].unique().tolist())
+    years = [int(y) for y in years if int(y) in set(full["year"].unique())]
 
-    print("\n  [OOF] Year-swap CV on 2023+2024 for stacker training:")
-    for train_yrs, val_yr, label in swap_folds:
-        tr = train_df[train_df["year"].isin(train_yrs)].reset_index(drop=True)
-        va = train_df[train_df["year"] == val_yr].reset_index(drop=True)
+    # LOYO requires at least one other year to train on.
+    eligible = [y for y in years if len(set(years) - {y}) >= 1]
+    skipped  = [y for y in years if y not in eligible]
+    if skipped:
+        print(f"  [OOF][WARN] Skipping singleton years with no training partner: {skipped}")
+
+    if len(eligible) == 0:
+        raise ValueError("LOYO requires at least 2 distinct years in df.")
+
+    # Restrict the OOF frame to the eligible-held-out rows.  (If a year is
+    # skipped it still stays in the *training* pool for the other folds.)
+    oof_mask = full["year"].isin(eligible).values
+    oof_df   = full.loc[oof_mask].reset_index(drop=True).copy()
+    n_oof    = len(oof_df)
+
+    oof_probs        = np.zeros(n_oof, dtype=float)
+    oof_team_logodds = np.zeros(n_oof, dtype=float)
+    oof_lam_home     = np.zeros(n_oof, dtype=float)
+    oof_lam_away     = np.zeros(n_oof, dtype=float)
+    oof_p_cover_poi  = np.zeros(n_oof, dtype=float)
+    oof_labels       = oof_df["f5_home_cover"].values.astype(int)
+
+    # Row positions in oof_df for each held-out year (for scatter writes)
+    year_pos = {yr: np.where(oof_df["year"].values == yr)[0] for yr in eligible}
+
+    print(f"\n  [OOF] Leave-One-Year-Out CV across {eligible} for stacker training:")
+    print(f"  [OOF] Pool rows: {len(full):,} total  |  OOF rows: {n_oof:,}")
+
+    for val_yr in eligible:
+        tr = full[full["year"] != val_yr].reset_index(drop=True)
+        va = full[full["year"] == val_yr].reset_index(drop=True)
+        if len(tr) == 0 or len(va) == 0:
+            print(f"    [skip] year={val_yr}  tr={len(tr)} va={len(va)}")
+            continue
 
         X_tr  = tr[feat_cols].fillna(0).values.astype(np.float32)
         y_tr  = tr["f5_home_cover"].values.astype(int)
@@ -917,17 +956,16 @@ def _generate_oof_for_stacker(
         X_va  = va[feat_cols].fillna(0).values.astype(np.float32)
         y_va  = va["f5_home_cover"].values.astype(int)
 
-        # ── Single-perspective XGB OOF ────────────────────────────────────
+        # ── L1 single-perspective XGB OOF ──────────────────────────────────
         m   = _train_xgb(X_tr, y_tr, sw_tr, X_va, y_va)
         raw = m.predict_proba(X_va)[:, 1]
 
-        # ── Team model OOF (doubled training, normalized val predictions) ──
+        # ── Team model OOF (doubled training, log-odds val predictions) ────
         tr_doubled, team_feat_cols = _build_team_dataset(tr, feat_cols)
-        X_tm_tr  = tr_doubled[team_feat_cols].fillna(0).values.astype(np.float32)
-        y_tm_tr  = tr_doubled["f5_home_cover"].values.astype(int)
-        sw_tm    = _sample_weights(tr_doubled)
-        # Early-stop monitor: home-perspective val
-        va_es = va.copy(); va_es["is_home"] = 1
+        X_tm_tr = tr_doubled[team_feat_cols].fillna(0).values.astype(np.float32)
+        y_tm_tr = tr_doubled["f5_home_cover"].values.astype(int)
+        sw_tm   = _sample_weights(tr_doubled)
+        va_es   = va.copy(); va_es["is_home"] = 1
         X_tm_es = va_es[team_feat_cols].fillna(0).values.astype(np.float32)
         tm_m = _train_xgb(X_tm_tr, y_tm_tr, sw_tm, X_tm_es, y_va)
 
@@ -941,10 +979,11 @@ def _generate_oof_for_stacker(
 
         lo_fold = _compute_log_odds_ratio(p_h, p_a)
 
-        # ── Dual-Poisson OOF (sidecar challenger) ──────────────────────────
-        # Train two count:poisson regressors on the same features; predict val
-        # fold's home + away F5 runs. The convolved P(home >= away) and the
-        # two lambdas get passed through as stacker domain features.
+        # Release doubled-dataset memory before the Poisson boosters allocate.
+        del tr_doubled, X_tm_tr, y_tm_tr, sw_tm, X_tm_es, tm_m, va_home, va_flip, va_es
+        gc.collect()
+
+        # ── Dual-Poisson OOF sidecar ──────────────────────────────────────
         y_hr_tr = tr["f5_home_runs"].astype(float).values
         y_ar_tr = tr["f5_away_runs"].astype(float).values
         bst_hr  = _train_poisson_booster(X_tr, y_hr_tr, POISSON_N_ROUNDS_HOME)
@@ -953,7 +992,7 @@ def _generate_oof_for_stacker(
         lam_a_fold = _poisson_predict(bst_ar, X_va)
         p_cov_fold = _prob_home_cover_from_lambdas(lam_h_fold, lam_a_fold)
 
-        # Write both back to aligned positions in the combined OOF arrays
+        # Scatter into the concatenated OOF arrays
         pos = year_pos[val_yr]
         oof_probs[pos]        = raw
         oof_team_logodds[pos] = lo_fold
@@ -961,27 +1000,38 @@ def _generate_oof_for_stacker(
         oof_lam_away[pos]     = lam_a_fold
         oof_p_cover_poi[pos]  = p_cov_fold
 
-        auc_xgb  = roc_auc_score(y_va, raw)
-        auc_team = roc_auc_score(y_va, lo_fold)   # rank-order AUC on log-odds
-        auc_poi  = roc_auc_score(y_va, p_cov_fold)
-        print(f"    {label}: n={len(va):,}  XGB-AUC={auc_xgb:.4f}  "
-              f"team-logodds-AUC={auc_team:.4f}  poi-AUC={auc_poi:.4f}")
+        # Per-fold diagnostics (guard single-class AUC edge case)
+        def _safe_auc(y, p):
+            return float(roc_auc_score(y, p)) if len(np.unique(y)) > 1 else float("nan")
+        print(f"    Fold {val_yr}: tr={len(tr):>5,}  va={len(va):>5,}  "
+              f"XGB-AUC={_safe_auc(y_va, raw):.4f}  "
+              f"team-logodds-AUC={_safe_auc(y_va, lo_fold):.4f}  "
+              f"poi-AUC={_safe_auc(y_va, p_cov_fold):.4f}")
 
-    overall_auc  = roc_auc_score(oof_labels, oof_probs)
-    overall_team = roc_auc_score(oof_labels, oof_team_logodds)
-    overall_poi  = roc_auc_score(oof_labels, oof_p_cover_poi)
-    print(f"  [OOF] Combined: n={n:,}  XGB={overall_auc:.4f}  "
-          f"team-logodds={overall_team:.4f}  poi={overall_poi:.4f}")
+        # Release per-fold artefacts before the next loop iteration.
+        del m, raw, bst_hr, bst_ar, lam_h_fold, lam_a_fold, p_cov_fold
+        del X_tr, y_tr, sw_tr, X_va, y_va, tr, va, lo_fold, p_h, p_a
+        gc.collect()
 
-    # Attach stacker-facing columns so the stacker can pick them up by name.
-    train_df = train_df.copy()
-    train_df["team_f5_log_odds"] = oof_team_logodds
-    train_df["pois_lam_home"]    = oof_lam_home
-    train_df["pois_lam_away"]    = oof_lam_away
-    train_df["pois_p_cover"]     = oof_p_cover_poi
+    # Post-sanity: row count invariant
+    assert len(oof_df) == n_oof == oof_probs.shape[0], \
+        f"OOF length mismatch: oof_df={len(oof_df)}  arrays={oof_probs.shape[0]}"
 
-    oof_segs = _derive_segment_id(train_df)
-    return oof_probs, oof_labels, train_df, oof_segs
+    def _safe_auc(y, p):
+        return float(roc_auc_score(y, p)) if len(np.unique(y)) > 1 else float("nan")
+    print(f"  [OOF] Combined: n={n_oof:,}  "
+          f"XGB={_safe_auc(oof_labels, oof_probs):.4f}  "
+          f"team-logodds={_safe_auc(oof_labels, oof_team_logodds):.4f}  "
+          f"poi={_safe_auc(oof_labels, oof_p_cover_poi):.4f}")
+
+    # Attach stacker-facing columns
+    oof_df["team_f5_log_odds"] = oof_team_logodds
+    oof_df["pois_lam_home"]    = oof_lam_home
+    oof_df["pois_lam_away"]    = oof_lam_away
+    oof_df["pois_p_cover"]     = oof_p_cover_poi
+
+    oof_segs = _derive_segment_id(oof_df)
+    return oof_probs, oof_labels, oof_df, oof_segs
 
 
 # ---------------------------------------------------------------------------
@@ -1145,8 +1195,13 @@ def train_default(df: pd.DataFrame, feat_cols: list[str]):
     # The Platt layer must be fitted on TRUE OOF predictions so it sees the
     # same score distribution the model produces on held-out data.
     # This is also needed by the team model per fold, so generate once here.
-    print("\n[3b] Generating OOF predictions (year-swap on 2023+2024) …")
-    oof_probs, oof_labels, oof_df, oof_segs = _generate_oof_for_stacker(df, feat_cols)
+    # train_default() holds 2025 out as the true validation year, so OOF
+    # generation is pinned to [2023, 2024] to preserve 2025's holdout purity.
+    # (train_final() uses the full LOYO range.)
+    print("\n[3b] Generating OOF predictions (LOYO on 2023+2024) …")
+    oof_probs, oof_labels, oof_df, oof_segs = _generate_oof_for_stacker(
+        df, feat_cols, years=[2023, 2024],
+    )
 
     # ── Platt calibration fitted on OOF probs (not in-sample raw_tr) ─────────
     cal = LogisticRegression(C=1.0, solver="lbfgs", max_iter=1000)
@@ -1356,7 +1411,20 @@ def train_final(df: pd.DataFrame, feat_cols: list[str], with_2026: bool = False)
     print(f"  Poisson boosters → {MODELS_DIR / 'f5_pois_home.json'}")
     print(f"                   → {MODELS_DIR / 'f5_pois_away.json'}")
 
-    return model, cal
+    # ── [4d] LOYO OOF + Bayesian Stacker refit on all years ───────────────
+    # Ensures stacking_lr_f5.pkl / .npz are anchored to the full
+    # 2023-…-current environment rather than an older 2023+2024 swap.
+    print("  [4d] Generating LOYO OOF across all training years for stacker …")
+    oof_probs, oof_labels, oof_df, oof_segs = _generate_oof_for_stacker(
+        final_df, feat_cols, years=years,
+    )
+
+    print("  [4d] Refitting Bayesian Hierarchical Stacker on full-year OOF …")
+    stacker = train_f5_stacker(oof_probs, oof_df, oof_labels, oof_segs)
+    print(f"  Stacker artefacts → {OUTPUT_STACKER}")
+    print(f"                    → {OUTPUT_STACKER_NPZ}")
+
+    return model, cal, stacker
 
 
 # ---------------------------------------------------------------------------
@@ -1540,7 +1608,7 @@ def main():
     model_val, cal_val, stacker, _, val_df, _log_odds_val = train_default(df, feat_cols)
 
     # Final model on all data
-    model_final, cal_final = train_final(df, feat_cols, with_2026=args.with_2026)
+    model_final, cal_final, stacker_final = train_final(df, feat_cols, with_2026=args.with_2026)
     model_final.save_model(str(OUTPUT_MODEL))
     pickle.dump(cal_final, open(OUTPUT_CALIB, "wb"))
     print(f"\n  Saved final model → {OUTPUT_MODEL}")

@@ -198,15 +198,12 @@ def compute_rolling_adj_f5_form_today(date_str: str, fm: pd.DataFrame) -> dict[s
 # ---------------------------------------------------------------------------
 
 def build_sp_lookup(fm: pd.DataFrame) -> dict:
-    """
-    Build a lookup: SP name (upper) → most recent 1st-inning + durability stats.
-    Uses both home and away starter columns from the enriched feature matrix.
-    """
+    """Build a lookup: SP name (upper) → most recent durability stat (avg_ip)."""
     lookup = {}
     fm_sorted = fm.sort_values("game_date")
 
-    SP_COLS_HOME = ["home_sp_avg_ip", "home_sp_1st_k_pct", "home_sp_1st_bb_pct", "home_sp_1st_xwoba"]
-    SP_COLS_AWAY = ["away_sp_avg_ip", "away_sp_1st_k_pct", "away_sp_1st_bb_pct", "away_sp_1st_xwoba"]
+    SP_COLS_HOME = ["home_sp_avg_ip"]
+    SP_COLS_AWAY = ["away_sp_avg_ip"]
 
     home_cols_ok = all(c in fm_sorted.columns for c in SP_COLS_HOME)
     away_cols_ok = all(c in fm_sorted.columns for c in SP_COLS_AWAY)
@@ -215,87 +212,13 @@ def build_sp_lookup(fm: pd.DataFrame) -> dict:
         for _, row in fm_sorted.iterrows():
             name = str(row.get("home_starter_name", "")).upper().strip()
             if name:
-                lookup[name] = {
-                    "avg_ip":      row["home_sp_avg_ip"],
-                    "1st_k_pct":   row["home_sp_1st_k_pct"],
-                    "1st_bb_pct":  row["home_sp_1st_bb_pct"],
-                    "1st_xwoba":   row["home_sp_1st_xwoba"],
-                }
+                lookup[name] = {"avg_ip": row["home_sp_avg_ip"]}
     if away_cols_ok:
         for _, row in fm_sorted.iterrows():
             name = str(row.get("away_starter_name", "")).upper().strip()
             if name:
-                lookup[name] = {
-                    "avg_ip":      row["away_sp_avg_ip"],
-                    "1st_k_pct":   row["away_sp_1st_k_pct"],
-                    "1st_bb_pct":  row["away_sp_1st_bb_pct"],
-                    "1st_xwoba":   row["away_sp_1st_xwoba"],
-                }
+                lookup[name] = {"avg_ip": row["away_sp_avg_ip"]}
     return lookup
-
-
-def get_weather_today(date_str: str, fm: pd.DataFrame) -> dict:
-    """Load today's weather from weather_2026.parquet. Falls back to fm median if missing."""
-    _DEFAULTS = {
-        "temp_f":       float(fm["temp_f"].median())       if "temp_f"       in fm.columns else 72.0,
-        "wind_mph":     float(fm["wind_mph"].median())     if "wind_mph"     in fm.columns else 7.0,
-        "wind_bearing": float(fm["wind_bearing"].median()) if "wind_bearing" in fm.columns else 180.0,
-    }
-    weather_path = DATA_DIR / "weather_2026.parquet"
-    if not weather_path.exists():
-        return {}
-    w = pd.read_parquet(weather_path)
-    w["game_date"] = pd.to_datetime(w["game_date"])
-    today = w[w["game_date"].dt.strftime("%Y-%m-%d") == date_str]
-    result = {}
-    for _, row in today.iterrows():
-        result[row["home_team"]] = {
-            "temp_f":       float(row.get("temp_f",       _DEFAULTS["temp_f"])),
-            "wind_mph":     float(row.get("wind_mph",     _DEFAULTS["wind_mph"])),
-            "wind_bearing": float(row.get("wind_bearing", _DEFAULTS["wind_bearing"])),
-        }
-    return result
-
-
-def get_bullpen_avail_today(date_str: str, fm: pd.DataFrame) -> dict:
-    """Load today's bullpen availability. Falls back to 0 (fresh) if missing."""
-    bp_path = DATA_DIR / "bullpen_avail_2026.parquet"
-    if not bp_path.exists():
-        return {}
-    bp = pd.read_parquet(bp_path)
-    bp["game_date"] = pd.to_datetime(bp["game_date"])
-    today = bp[bp["game_date"].dt.strftime("%Y-%m-%d") == date_str]
-    result = {}
-    for _, row in today.iterrows():
-        result[row["team"]] = {
-            "bp_depleted_flag":   int(row.get("bp_depleted_flag",   0)),
-            "bp_pitches_rest1d":  float(row.get("bp_pitches_rest1d", 0.0)),
-        }
-    return result
-
-
-def compute_sp_days_rest(date_str: str, sp_name: str, fm: pd.DataFrame) -> float:
-    """Find how many days since this SP's last start. Returns 5.0 if unknown."""
-    if not sp_name or pd.isna(sp_name):
-        return 5.0
-    sp_up  = sp_name.upper().strip()
-    cutoff = pd.to_datetime(date_str)
-
-    home_dates = fm.loc[
-        fm["home_starter_name"].str.upper().str.strip() == sp_up, "game_date"
-    ]
-    away_dates = fm.loc[
-        fm["away_starter_name"].str.upper().str.strip() == sp_up, "game_date"
-    ]
-    all_dates = pd.concat([home_dates, away_dates])
-    all_dates = pd.to_datetime(all_dates)
-    prior = all_dates[all_dates < cutoff]
-
-    if len(prior) == 0:
-        return 5.0
-    last_start = prior.max()
-    days = int((cutoff - last_start).days)
-    return float(np.clip(days, 3, 15))
 
 
 # ---------------------------------------------------------------------------
@@ -469,19 +392,9 @@ def predict_games(date_str: str) -> pd.DataFrame:
     print(f"Rolling adj F5 form: {len(form_dict)} teams  global_mean={form_global:.4f}")
 
     # Pre-compute today's lookup tables
-    sp_lookup    = build_sp_lookup(fm)
-    weather_dict = get_weather_today(date_str, fm)
-    bp_dict      = get_bullpen_avail_today(date_str, fm)
-
-    # Global defaults from feature matrix medians
-    _default_avg_ip    = float(fm["home_sp_avg_ip"].median())    if "home_sp_avg_ip"    in fm.columns else 5.1
-    _default_1st_k     = float(fm["home_sp_1st_k_pct"].median()) if "home_sp_1st_k_pct" in fm.columns else 0.231
-    _default_1st_bb    = float(fm["home_sp_1st_bb_pct"].median())if "home_sp_1st_bb_pct"in fm.columns else 0.085
-    _default_1st_xwoba = float(fm["home_sp_1st_xwoba"].median()) if "home_sp_1st_xwoba"  in fm.columns else 0.330
+    sp_lookup = build_sp_lookup(fm)
 
     print(f"SP lookup: {len(sp_lookup)} pitchers")
-    print(f"Weather:   {len(weather_dict)} home parks")
-    print(f"Bullpen:   {len(bp_dict)} teams")
 
     lineups = get_todays_games(date_str)
     print(f"\n{len(lineups)} games scheduled for {date_str}\n")
@@ -520,51 +433,17 @@ def predict_games(date_str: str) -> pd.DataFrame:
         feat["away_rolling_adj_f5_form"] = away_form
         feat["rolling_adj_f5_form_diff"] = home_form - away_form
 
-        # ── Weather ──────────────────────────────────────────────────────────
-        wx = weather_dict.get(home, {})
-        if wx:
-            feat["temp_f"]       = wx.get("temp_f",       72.0)
-            feat["wind_mph"]     = wx.get("wind_mph",     7.0)
-            feat["wind_bearing"] = wx.get("wind_bearing", 180.0)
-        else:
-            feat["temp_f"]       = float(fm["temp_f"].median())       if "temp_f"       in fm.columns else 72.0
-            feat["wind_mph"]     = float(fm["wind_mph"].median())     if "wind_mph"     in fm.columns else 7.0
-            feat["wind_bearing"] = float(fm["wind_bearing"].median()) if "wind_bearing" in fm.columns else 180.0
-
-        # ── Bullpen availability ──────────────────────────────────────────────
-        bp_home = bp_dict.get(home, {})
-        bp_away = bp_dict.get(away, {})
-        feat["home_bp_depleted_flag"]  = bp_home.get("bp_depleted_flag",  0)
-        feat["home_bp_pitches_rest1d"] = bp_home.get("bp_pitches_rest1d", 0.0)
-        feat["away_bp_depleted_flag"]  = bp_away.get("bp_depleted_flag",  0)
-        feat["away_bp_pitches_rest1d"] = bp_away.get("bp_pitches_rest1d", 0.0)
-
-        # ── SP days of rest ───────────────────────────────────────────────────
-        feat["home_sp_days_rest"] = compute_sp_days_rest(date_str, home_sp, fm)
-        feat["away_sp_days_rest"] = compute_sp_days_rest(date_str, away_sp, fm)
-
-        # ── SP avg IP + 1st inning splits ────────────────────────────────────
-        h_sp_up    = str(home_sp).upper().strip()
-        a_sp_up    = str(away_sp).upper().strip()
-        h_sp_stats = sp_lookup.get(h_sp_up, {})
-        a_sp_stats = sp_lookup.get(a_sp_up, {})
-
-        feat["home_sp_avg_ip"]      = h_sp_stats.get("avg_ip",    _default_avg_ip)
-        feat["home_sp_1st_k_pct"]   = h_sp_stats.get("1st_k_pct", _default_1st_k)
-        feat["home_sp_1st_bb_pct"]  = h_sp_stats.get("1st_bb_pct",_default_1st_bb)
-        feat["home_sp_1st_xwoba"]   = h_sp_stats.get("1st_xwoba", _default_1st_xwoba)
-
-        feat["away_sp_avg_ip"]      = a_sp_stats.get("avg_ip",    _default_avg_ip)
-        feat["away_sp_1st_k_pct"]   = a_sp_stats.get("1st_k_pct", _default_1st_k)
-        feat["away_sp_1st_bb_pct"]  = a_sp_stats.get("1st_bb_pct",_default_1st_bb)
-        feat["away_sp_1st_xwoba"]   = a_sp_stats.get("1st_xwoba", _default_1st_xwoba)
-
-        # Diff features (recompute from injected values)
-        feat["sp_1st_k_pct_diff"]  = feat["home_sp_1st_k_pct"]  - feat["away_sp_1st_k_pct"]
-        feat["sp_1st_xwoba_diff"]  = feat["home_sp_1st_xwoba"]  - feat["away_sp_1st_xwoba"]
-
         # ── L1: XGBoost + OOF-fitted Platt ───────────────────────────────
-        X_l1 = feat[feat_cols].fillna(0).values.reshape(1, -1).astype(np.float32)
+        feat_df = pd.DataFrame([feat[feat_cols].fillna(0)], columns=feat_cols)
+
+        # --- START VALIDATION BLOCK ---
+        expected_cols = json.load(open(FEAT_COLS_PATH))
+        actual_cols = list(feat_df.columns)
+        assert expected_cols == actual_cols, "Feature list mismatch after pruning. Check for missing or extra columns."
+        assert not feat_df[expected_cols].isnull().any().any(), "Pruning introduced unexpected NaNs."
+        # --- END VALIDATION BLOCK ---
+
+        X_l1 = feat_df.values.astype(np.float32)
         raw   = xgb_model.predict_proba(X_l1)[0, 1]
         cal_p = cal.predict_proba([[raw]])[0, 1]
 
@@ -594,20 +473,6 @@ def predict_games(date_str: str) -> pd.DataFrame:
             "actual_f5_home":      act_row.get("f5_home_runs"),
             "actual_f5_away":      act_row.get("f5_away_runs"),
             "actual_f5_win":       act_row.get("f5_home_win"),
-            # Diagnostic: lookup hit booleans
-            "home_sp_lookup_hit":  bool(h_sp_stats),
-            "away_sp_lookup_hit":  bool(a_sp_stats),
-            "weather_hit":         bool(wx),
-            "home_bp_hit":         bool(bp_home),
-            "away_bp_hit":         bool(bp_away),
-            # Injected values for reporting
-            "temp_f":              feat["temp_f"],
-            "wind_mph":            feat["wind_mph"],
-            "wind_bearing":        feat["wind_bearing"],
-            "home_bp_depleted":    feat["home_bp_depleted_flag"],
-            "home_bp_rest1d":      feat["home_bp_pitches_rest1d"],
-            "away_bp_depleted":    feat["away_bp_depleted_flag"],
-            "away_bp_rest1d":      feat["away_bp_pitches_rest1d"],
         })
 
     df = pd.DataFrame(rows)

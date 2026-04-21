@@ -1,26 +1,47 @@
 {
-  "last_run": "2026-04-21T03:30:11",
-  "elapsed_s": 9.3,
+  "last_run": "2026-04-21T11:30:54",
+  "elapsed_s": 52.8,
   "total_checks": 35,
-  "ok": 33,
-  "warn": 0,
-  "fail": 2,
-  "repaired": 2,
-  "overall": "fail",
+  "ok": 30,
+  "warn": 5,
+  "fail": 0,
+  "repaired": 4,
+  "overall": "warn",
   "issues": [
     {
-      "name": "odds_current",
-      "status": "fail",
-      "message": "FILE MISSING: data/statcast/odds_current_2026_04_21.parquet | REPAIRED via odds_current_pull.py --force",
+      "name": "ump_assignments",
+      "status": "warn",
+      "message": "STALE: 5.5h old (limit 5h) \u2014 data/statcast/umpire_assignments_2026.parquet | REPAIRED via ump_pull.py",
       "repaired": true,
-      "repair_cmd": "odds_current_pull.py --force"
+      "repair_cmd": "ump_pull.py"
     },
     {
-      "name": "k_props",
-      "status": "fail",
-      "message": "FILE MISSING: data/statcast/k_props_2026-04-21.parquet | REPAIRED via prizepicks_pull.py",
+      "name": "lineup_quality",
+      "status": "warn",
+      "message": "STALE: 15.8h old (limit 5h) \u2014 data/statcast/lineup_quality_today.parquet | REPAIRED via build_lineup_quality.py",
       "repaired": true,
-      "repair_cmd": "prizepicks_pull.py"
+      "repair_cmd": "build_lineup_quality.py"
+    },
+    {
+      "name": "daily_card",
+      "status": "warn",
+      "message": "STALE: 6.8h old (limit 5h) \u2014 daily_card.csv | REPAIR FAILED (rc=3221226505): [LightGBM] [Fatal] Model format error, expect a tree here. met 46 185.411 206.235 179.724 156.507 101.065 52.0747 163.789 141.069 55.4421 41.3654 48.99 20.1543 133.816 28.0912 600.544 570.679 532.682 ",
+      "repaired": false,
+      "repair_cmd": "run_today.py --csv"
+    },
+    {
+      "name": "park_factors_2026",
+      "status": "warn",
+      "message": "STALE: 6.0h old (limit 5h) \u2014 data/statcast/park_factors_2026.parquet | REPAIRED via supplemental_pull.py --force-year 2026",
+      "repaired": true,
+      "repair_cmd": "supplemental_pull.py --force-year 2026"
+    },
+    {
+      "name": "standings_2026",
+      "status": "warn",
+      "message": "STALE: 6.0h old (limit 5h) \u2014 data/statcast/standings_2026.parquet | REPAIRED via supplemental_pull.py --force-year 2026",
+      "repaired": true,
+      "repair_cmd": "supplemental_pull.py --force-year 2026"
     }
   ]
 }
