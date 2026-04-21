@@ -106,6 +106,15 @@ BACKTEST_FILES = {
 # Used as a direct feature — gives the model explicit ballpark run context
 # that the MC engine already encodes but the XGBoost layer never sees.
 # ---------------------------------------------------------------------------
+STADIUM_ELEVATION = {   # feet above sea level
+    "COL": 5200, "AZ": 1082, "TEX": 551, "HOU": 43, "ATL": 1050,
+    "STL": 465,  "KC": 740,  "MIN": 840, "CIN": 550, "MIL": 635,
+    "CHC": 595,  "CLE": 653, "DET": 600, "PIT": 730, "PHI": 20,
+    "NYY": 55,   "NYM": 33,  "BOS": 19,  "BAL": 53,  "WSH": 25,
+    "TOR": 249,  "TB": 28,   "MIA": 8,   "SF": 52,   "LAD": 512,
+    "LAA": 160,  "SD": 17,   "SEA": 56,  "ATH": 25,  "CWS": 20,
+}
+
 PARK_FACTORS = {
     "COL": 1.281, "BOS": 1.078, "CIN": 1.062, "TEX": 1.050,
     "PHI": 1.040, "BAL": 1.038, "ATL": 1.034, "MIL": 1.029,
@@ -1403,18 +1412,781 @@ def build_bullpen_fatigue(years: list[int], verbose: bool = True) -> pd.DataFram
 
 
 # ---------------------------------------------------------------------------
+# SECTION 4E — PITCHER GAME STATE
+#   sp_pitches_last_start  : pitch count from pitcher's most recent start
+#   sp_velo_diff_l14       : 14-day rolling mean FF velo minus season baseline
+#   is_opener_flag         : 1 if max pitches in last 3 appearances < 40
+# ---------------------------------------------------------------------------
+
+def build_pitcher_game_state(years: list[int], verbose: bool = True) -> pd.DataFrame:
+    """
+    Per-pitcher, per-game state features derived from pitch-level statcast.
+
+    All features are computed from *prior* games only (shift/leakage-safe).
+
+    Returns one row per (pitcher_id, game_pk) with columns:
+        sp_pitches_last_start   int    — pitch count in most recent prior start
+        sp_velo_diff_l14        float  — (14d rolling avg FF velo) − season_baseline_velo
+        is_opener_flag          int8   — 1 if max pitches across last 3 prior games < 40
+    """
+    if verbose:
+        print("  [3.95/4] Building pitcher game-state features ...")
+
+    sc_cols = ["pitcher", "game_pk", "game_date", "inning",
+               "release_speed", "pitch_type", "home_team", "away_team",
+               "inning_topbot", "pitcher_days_since_prev_game"]
+
+    frames = []
+    for year in years:
+        try:
+            df = _load_statcast(year, sc_cols)
+        except Exception as e:
+            if verbose:
+                print(f"      {year}: load failed — {e}")
+            continue
+
+        df["game_date"] = pd.to_datetime(df["game_date"])
+        df["inning"]    = _to_num(df["inning"])
+        df["pitcher"]   = _to_num(df["pitcher"])
+
+        # ── Pitch count per pitcher per game ───────────────────────────────
+        pitch_counts = (
+            df.groupby(["game_pk", "game_date", "pitcher"])
+            .size()
+            .reset_index(name="n_pitches")
+        )
+
+        # ── FF velocity per pitcher per game (mean of four-seam pitches) ───
+        ff_velo = (
+            df[df["pitch_type"].isin(["FF", "FA"])]
+            .groupby(["game_pk", "game_date", "pitcher"])["release_speed"]
+            .mean()
+            .reset_index(name="ff_velo_game")
+        )
+
+        game_stats = pitch_counts.merge(ff_velo, on=["game_pk", "game_date", "pitcher"], how="left")
+        game_stats = game_stats.sort_values(["pitcher", "game_date", "game_pk"])
+
+        # ── Season baseline velo (expanding mean up to but not including current game) ─
+        game_stats["ff_velo_baseline"] = (
+            game_stats.groupby(["pitcher"])["ff_velo_game"]
+            .transform(lambda s: s.shift(1).expanding().mean())
+        )
+
+        # ── sp_pitches_last_start: pitch count in immediately prior appearance ─
+        game_stats["sp_pitches_last_start"] = (
+            game_stats.groupby("pitcher")["n_pitches"].shift(1)
+        )
+
+        # ── is_opener_flag: max pitches across last 3 prior appearances < 40 ─
+        max_last3 = (
+            game_stats.groupby("pitcher")["n_pitches"]
+            .transform(lambda s: s.shift(1).rolling(3, min_periods=1).max())
+        )
+        game_stats["is_opener_flag"] = (max_last3 < 40).astype("Int8")
+        # Null out flag if no prior data (debut game)
+        game_stats.loc[game_stats["sp_pitches_last_start"].isna(), "is_opener_flag"] = pd.NA
+
+        # ── sp_velo_diff_l14: 14-day rolling mean minus season baseline ────
+        # Use game_count-based rolling with a 14-day cutoff filter to avoid
+        # duplicate DatetimeIndex issues from doubleheader games.
+        def _velo_l14(grp: pd.DataFrame) -> pd.Series:
+            grp = grp.sort_values("game_date").copy()
+            vals = []
+            for i, (_, row) in enumerate(grp.iterrows()):
+                cutoff = row["game_date"] - pd.Timedelta("14D")
+                prior  = grp.iloc[:i]
+                prior  = prior[prior["game_date"] >= cutoff]["ff_velo_game"].dropna()
+                vals.append(prior.mean() if len(prior) >= 3 else float("nan"))
+            return pd.Series(vals, index=grp.index)
+
+        game_stats["ff_velo_l14"] = (
+            game_stats.groupby("pitcher", group_keys=False)
+            .apply(_velo_l14)
+        )
+        game_stats["sp_velo_diff_l14"] = (
+            game_stats["ff_velo_l14"] - game_stats["ff_velo_baseline"]
+        )
+
+        # ── Tag each pitcher-game with their pitching team ────────────────
+        # Top of inning = home team is pitching (away batters).
+        # Bot of inning = away team is pitching (home batters).
+        team_map = (
+            df[["game_pk", "pitcher", "home_team", "away_team", "inning_topbot"]]
+            .drop_duplicates(["game_pk", "pitcher"])
+        )
+        team_map["pitching_team"] = np.where(
+            team_map["inning_topbot"] == "Top",
+            team_map["home_team"],
+            team_map["away_team"],
+        )
+        team_map["pitching_role"] = np.where(
+            team_map["inning_topbot"] == "Top", "home", "away"
+        )
+        game_stats = game_stats.merge(
+            team_map[["game_pk", "pitcher", "pitching_team", "pitching_role"]],
+            on=["game_pk", "pitcher"], how="left"
+        )
+
+        frames.append(game_stats[["game_pk", "pitcher", "pitching_team",
+                                   "pitching_role", "sp_pitches_last_start",
+                                   "sp_velo_diff_l14", "is_opener_flag"]])
+
+    if not frames:
+        return pd.DataFrame(columns=["game_pk", "pitcher", "pitching_team",
+                                      "pitching_role", "sp_pitches_last_start",
+                                      "sp_velo_diff_l14", "is_opener_flag"])
+
+    result = pd.concat(frames, ignore_index=True)
+    result["sp_pitches_last_start"] = pd.to_numeric(result["sp_pitches_last_start"],
+                                                     errors="coerce")
+    # Keep only one row per (game_pk, pitching_role) — use the pitcher with most pitches
+    # if multiple pitchers are tagged to the same role (edge case: doubleheaders keyed wrong)
+    result = (result.sort_values("sp_pitches_last_start", ascending=False)
+              .drop_duplicates(["game_pk", "pitching_role"]))
+    if verbose:
+        n_ok = result["sp_pitches_last_start"].notna().sum()
+        print(f"      {len(result)} pitcher-game rows | "
+              f"{n_ok} with pitch count ({100*n_ok/len(result):.1f}%)")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# SECTION 4F — ENVIRONMENTAL FEATURES
+#   air_density_rho  : kg/m³ from temp + humidity + elevation
+#   roof_closed_flag : 1 for domed/retractable-closed stadiums
+# ---------------------------------------------------------------------------
+
+# Retractable-roof teams + their default closure behaviour.
+# "always" = fixed dome (MIL, HOU, TB, TOR, MIA, SEA, MIN).
+# "weather" = open by default, closed when temp < 50°F or precip > 0.
+_ROOF_TEAMS: dict[str, str] = {
+    "MIL": "always",   # American Family Field — retractable, closed ~75% of games
+    "HOU": "always",   # Minute Maid Park — retractable
+    "TB":  "always",   # Tropicana Field — fixed dome
+    "TOR": "always",   # Rogers Centre — retractable
+    "MIA": "always",   # loanDepot park — retractable
+    "SEA": "always",   # T-Mobile Park — retractable
+    "MIN": "always",   # Target Field — open air (not retractable), keep as open
+    "AZ":  "weather",  # Chase Field — retractable, opens in good weather
+    "TEX": "weather",  # Globe Life Field — retractable
+    "ATL": "weather",  # Truist Park — open air (keep as open)
+}
+# MIN and ATL are open-air; listed for reference, effectively 0.
+_OPEN_AIR_OVERRIDE = {"MIN", "ATL"}
+
+# Molecular weight of dry air (kg/mol), universal gas constant (J/mol·K)
+_M_AIR = 0.0289644
+_R_GAS = 8.31446
+
+
+def _compute_air_density(temp_f: float, humidity_pct: float, elevation_m: float) -> float:
+    """
+    Air density (kg/m³) via the Ideal Gas Law with humidity correction.
+
+    Station pressure estimated from elevation via the barometric formula
+    (ISA standard atmosphere, accurate to ±1% below 3000 m):
+        P_station = 101325 × (1 − 2.2557e-5 × h)^5.2559
+
+    Humidity correction uses the partial pressure of water vapor (Buck eq):
+        P_sat = 611.21 × exp((18.678 − T_c/234.5) × T_c / (257.14 + T_c))
+        P_v   = (RH/100) × P_sat
+        ρ = (P_d × M_d + P_v × M_v) / (R × T_K)
+    """
+    if any(v != v for v in [temp_f, humidity_pct, elevation_m]):  # NaN check
+        return float("nan")
+    temp_c  = (temp_f - 32) * 5 / 9
+    temp_k  = temp_c + 273.15
+    # Station pressure (Pa) from elevation
+    p_sta   = 101325 * (1 - 2.2557e-5 * elevation_m) ** 5.2559
+    # Saturation vapour pressure (Buck equation, Pa)
+    p_sat   = 611.21 * np.exp((18.678 - temp_c / 234.5) * temp_c / (257.14 + temp_c))
+    p_v     = (humidity_pct / 100.0) * p_sat   # partial pressure of vapour
+    p_d     = p_sta - p_v                       # partial pressure of dry air
+    # Density: ρ = (P_d·M_d + P_v·M_v) / (R·T)
+    m_v     = 0.018016                          # kg/mol water vapour
+    rho     = (p_d * _M_AIR + p_v * m_v) / (_R_GAS * temp_k)
+    return round(rho, 5)
+
+
+def build_air_density_features(
+    years: list[int],
+    verbose: bool = True,
+) -> pd.DataFrame:
+    """
+    Join weather parquets to game list and compute air_density_rho and
+    roof_closed_flag for every (home_team, game_date) pair.
+
+    Edge cases
+    ----------
+    - Missing weather  → NaN for density, flag stays at dome default.
+    - Dome stadiums    → density computed from indoor conditions (72°F / 50% RH).
+    - Debuts / new teams → elevation defaults to 100 m (sea-level-ish).
+
+    Returns DataFrame with columns:
+        home_team, game_date, air_density_rho, roof_closed_flag
+    """
+    if verbose:
+        print("  [3.97/4] Building air density + roof flag ...")
+
+    # Stadium elevation in metres (convert feet → metres; dict defined at module top)
+    elev_m: dict[str, float] = {t: ft * 0.3048 for t, ft in STADIUM_ELEVATION.items()}
+
+    frames = []
+    for year in years:
+        path = Path(f"data/statcast/weather_{year}.parquet")
+        if not path.exists():
+            if verbose:
+                print(f"      {year}: no weather file, skipping")
+            continue
+        wx = pd.read_parquet(path)
+        wx["game_date"] = pd.to_datetime(wx["game_date"])
+        if "humidity" not in wx.columns:
+            wx["humidity"] = 50.0  # conservative fallback
+        if "precip_mm" not in wx.columns:
+            wx["precip_mm"] = 0.0
+
+        rows = []
+        for _, r in wx.iterrows():
+            team  = r["home_team"]
+            elev  = elev_m.get(team, 30.0)        # ~100 ft default
+            roof  = _ROOF_TEAMS.get(team, "open")
+
+            # Roof status
+            if team in _OPEN_AIR_OVERRIDE:
+                closed = 0
+            elif roof == "always":
+                closed = 1
+            elif roof == "weather":
+                # Retractable: close when cold or raining
+                closed = int(r.get("temp_f", 72) < 50 or r.get("precip_mm", 0) > 0.5)
+            else:
+                closed = 0
+
+            # For domed games use standard indoor conditions
+            if closed:
+                eff_temp = 72.0
+                eff_hum  = 50.0
+            else:
+                eff_temp = float(r.get("temp_f", 72))
+                eff_hum  = float(r.get("humidity", 50))
+
+            rho = _compute_air_density(eff_temp, eff_hum, elev)
+            rows.append({
+                "home_team":       team,
+                "game_date":       r["game_date"],
+                "air_density_rho": rho,
+                "roof_closed_flag": closed,
+            })
+        frames.append(pd.DataFrame(rows))
+
+    if not frames:
+        return pd.DataFrame(columns=["home_team", "game_date",
+                                      "air_density_rho", "roof_closed_flag"])
+    result = pd.concat(frames, ignore_index=True)
+    if verbose:
+        n = result["air_density_rho"].notna().sum()
+        mean_rho = result["air_density_rho"].mean()
+        print(f"      {len(result)} game-rows | air_density mean={mean_rho:.4f} kg/m³ | "
+              f"roofs closed: {result['roof_closed_flag'].sum()}")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# SECTION 4G — BULLPEN TOP-3 FATIGUE  (quality-weighted, 3-day window)
+#   bullpen_top3_fatigue_3d : total pitches by team's 3 most-used relievers
+#                             in the prior 72 hours — focuses on high-leverage
+#                             arms rather than the full pen.
+# ---------------------------------------------------------------------------
+
+def build_bullpen_top3_fatigue(years: list[int], verbose: bool = True) -> pd.DataFrame:
+    """
+    Per-team count of pitches thrown in the prior 3 days (72 h) by the team's
+    three most frequently used relievers in the trailing 14 days.
+
+    Rationale: the existing bp_fatigue_72h sums ALL relief pitches and can be
+    diluted by mop-up arms.  This metric tracks only the elite/high-leverage
+    relievers who actually affect game outcomes.
+
+    Leakage prevention: current game pitches are excluded via closed='left'.
+
+    Returns one row per (team, game_pk) with column bullpen_top3_fatigue_3d.
+    """
+    if verbose:
+        print("  [3.98/4] Building bullpen top-3 fatigue (3-day, quality arms) ...")
+
+    sc_cols = ["pitcher", "game_pk", "game_date", "inning",
+               "home_team", "away_team", "inning_topbot"]
+
+    frames = []
+    for year in years:
+        try:
+            raw = _load_statcast(year, sc_cols)
+        except Exception as e:
+            if verbose:
+                print(f"      {year}: load failed — {e}")
+            continue
+
+        raw["game_date"]     = pd.to_datetime(raw["game_date"])
+        raw["inning"]        = _to_num(raw["inning"])
+        raw["pitcher"]       = _to_num(raw["pitcher"])
+        raw["inning_topbot"] = raw["inning_topbot"].fillna("Top")
+        raw["pitching_team"] = np.where(
+            raw["inning_topbot"] == "Top", raw["home_team"], raw["away_team"]
+        )
+
+        # Starters = pitched inning 1 in that game
+        starters = (
+            raw[raw["inning"] == 1][["game_pk", "pitching_team", "pitcher"]]
+            .drop_duplicates()
+        )
+        raw = raw.merge(
+            starters.assign(is_starter=1),
+            on=["game_pk", "pitching_team", "pitcher"], how="left"
+        )
+        relievers = raw[raw["is_starter"].isna()].copy()
+
+        # Pitch count per reliever per game
+        rp_game = (
+            relievers.groupby(["game_pk", "game_date", "pitching_team", "pitcher"])
+            .size()
+            .reset_index(name="pitches")
+        )
+        rp_game = rp_game.sort_values("game_date")
+
+        team_frames = []
+        for team, grp in rp_game.groupby("pitching_team"):
+            grp = grp.sort_values(["game_date", "game_pk"]).copy()
+
+            # Per game: find top-3 relievers by 14-day usage, sum their 3-day pitches
+            result_rows = []
+            for idx, row in grp.drop_duplicates("game_pk").iterrows():
+                gdate = row["game_date"]
+                gp    = row["game_pk"]
+                win14_start = gdate - pd.Timedelta("14D")
+                win3_start  = gdate - pd.Timedelta("3D")
+
+                # Prior games only (strict less-than = current game excluded)
+                prior14 = grp[(grp["game_date"] >= win14_start) & (grp["game_date"] < gdate)]
+                prior3  = grp[(grp["game_date"] >= win3_start)  & (grp["game_date"] < gdate)]
+
+                # Top-3 by total pitches in prior 14 days
+                top3 = (
+                    prior14.groupby("pitcher")["pitches"].sum()
+                    .nlargest(3).index.tolist()
+                )
+                top3_pitches = int(
+                    prior3[prior3["pitcher"].isin(top3)]["pitches"].sum()
+                )
+                result_rows.append({
+                    "team": team, "game_pk": gp,
+                    "bullpen_top3_fatigue_3d": top3_pitches,
+                })
+            if result_rows:
+                team_frames.append(pd.DataFrame(result_rows))
+
+        if team_frames:
+            frames.append(pd.concat(team_frames, ignore_index=True))
+
+    if not frames:
+        return pd.DataFrame(columns=["team", "game_pk", "bullpen_top3_fatigue_3d"])
+    result = pd.concat(frames, ignore_index=True)
+    if verbose:
+        med = result["bullpen_top3_fatigue_3d"].median()
+        print(f"      {len(result)} team-game rows | median top-3 pitches (3d): {med:.0f}")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# SECTION 4H — UMPIRE CALLED-STRIKE RATE
+#   ump_called_strike_above_avg : HP umpire's called-strike rate vs league avg
+#                                 on non-swing pitches (balls + called strikes)
+# ---------------------------------------------------------------------------
+
+def build_ump_called_strike_rate(years: list[int], verbose: bool = True) -> pd.DataFrame:
+    """
+    Per-game HP umpire called-strike rate above league average.
+
+    Methodology
+    -----------
+    - Filter to non-swing pitches: description in {'called_strike', 'ball',
+      'blocked_ball', 'pitchout'} (excludes swings, fouls, HBP).
+    - CS_rate = called_strikes / non_swing_pitches per umpire per game.
+    - Rolling EWMA (halflife=30 days) per umpire, shift(1) for leakage safety.
+    - Subtract the league-day mean for that game date = above-avg metric.
+
+    Edge cases: debut umpires → NaN (filled with 0 = league average).
+
+    Uses the statcast `umpire` column (HP umpire ID, present on every pitch).
+
+    Returns one row per game_pk with columns:
+        game_pk, ump_called_strike_above_avg
+    """
+    if verbose:
+        print("  [3.99/4] Building umpire called-strike rate ...")
+
+    sc_cols = ["game_pk", "game_date", "description", "umpire",
+               "home_team", "away_team"]
+    NON_SWING = {"called_strike", "ball", "blocked_ball", "pitchout"}
+
+    frames = []
+    for year in years:
+        # ── Load umpire assignments (game_pk → ump_hp_id) ─────────────────
+        ump_path = DATA_DIR / f"umpire_assignments_{year}.parquet"
+        if not ump_path.exists():
+            if verbose:
+                print(f"      {year}: no umpire_assignments file, skipping")
+            continue
+        assignments = pd.read_parquet(ump_path)[["game_pk", "ump_hp_id"]] \
+                        .drop_duplicates("game_pk")
+
+        try:
+            df = _load_statcast(year, sc_cols)
+        except Exception as e:
+            if verbose:
+                print(f"      {year}: statcast load failed — {e}")
+            continue
+
+        df["game_date"] = pd.to_datetime(df["game_date"])
+        df = df[df["description"].isin(NON_SWING)].copy()
+        if df.empty:
+            continue
+
+        df["is_cs"] = (df["description"] == "called_strike").astype(int)
+
+        # Per game called-strike rate (aggregate across all pitchers)
+        game_cs = (
+            df.groupby(["game_pk", "game_date"])
+            .agg(n_called=("is_cs", "count"), n_cs=("is_cs", "sum"))
+            .reset_index()
+        )
+        game_cs["cs_rate"] = game_cs["n_cs"] / game_cs["n_called"].clip(lower=1)
+
+        # Join umpire ID onto game stats
+        ump_game = game_cs.merge(assignments[["game_pk", "ump_hp_id"]], on="game_pk", how="inner")
+        ump_game = ump_game.sort_values(["ump_hp_id", "game_date", "game_pk"])
+
+        # EWMA per umpire with shift(1) — prior games only
+        ump_game["cs_rate_ewma"] = (
+            ump_game.groupby("ump_hp_id")["cs_rate"]
+            .transform(lambda s: s.shift(1).ewm(span=30, ignore_na=True).mean())
+        )
+
+        # League daily mean for normalisation (using prior-game EWMA values)
+        daily_mean = (
+            ump_game.groupby("game_date")["cs_rate_ewma"]
+            .mean()
+            .rename("league_cs_rate")
+        )
+        ump_game = ump_game.join(daily_mean, on="game_date")
+        ump_game["ump_called_strike_above_avg"] = (
+            ump_game["cs_rate_ewma"] - ump_game["league_cs_rate"]
+        ).fillna(0)   # debut ump = league average
+
+        frames.append(ump_game[["game_pk", "ump_called_strike_above_avg"]])
+
+    if not frames:
+        return pd.DataFrame(columns=["game_pk", "ump_called_strike_above_avg"])
+    result = pd.concat(frames, ignore_index=True).drop_duplicates("game_pk")
+    if verbose:
+        print(f"      {len(result)} games | "
+              f"mean above_avg={result['ump_called_strike_above_avg'].mean():.4f}")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# SECTION 4I — LINEUP HANDEDNESS MATCHUP
+# ---------------------------------------------------------------------------
+
+def build_lineup_handedness(years: list[int], verbose: bool = True) -> pd.DataFrame:
+    """
+    For each game, count how many starting batters (inning 1 appearances)
+    have a platoon advantage against the opposing SP:
+      - batter `stand` is opposite of opposing SP `p_throws`  (L vs R, R vs L)
+      - switch hitters (S) always count as advantaged
+
+    Returns one row per game_pk with:
+        game_pk,
+        home_lineup_opp_hand_count  (home batters with platoon edge vs away SP)
+        away_lineup_opp_hand_count  (away batters with platoon edge vs home SP)
+        lineup_opp_hand_diff        (home - away)
+    """
+    if verbose:
+        print("  [3.995/4] Building lineup handedness matchup ...")
+
+    sc_cols = ["game_pk", "game_date", "inning", "inning_topbot",
+               "batter", "stand", "pitcher", "p_throws",
+               "home_team", "away_team"]
+
+    frames = []
+    for year in years:
+        try:
+            df = _load_statcast(year, sc_cols)
+        except Exception as e:
+            if verbose:
+                print(f"      {year}: statcast load failed — {e}")
+            continue
+
+        if df.empty:
+            continue
+
+        df["inning"] = pd.to_numeric(df["inning"], errors="coerce")
+
+        # Starting lineup = inning 1 only, first appearance per batter per game
+        inn1 = df[df["inning"] == 1].copy()
+        if inn1.empty:
+            continue
+
+        # First appearance of each batter in each game
+        inn1 = inn1.sort_values("game_pk")
+        first_app = inn1.drop_duplicates(subset=["game_pk", "batter"])
+
+        # Identify SP for each side: pitcher with most pitches in inning 1, top/bot
+        # top inning = home team pitching against away batters
+        # bot inning = away team pitching against home batters
+        home_sp = (
+            first_app[first_app["inning_topbot"] == "Top"]
+            .groupby(["game_pk", "pitcher"])["p_throws"]
+            .first()
+            .reset_index()
+            .rename(columns={"pitcher": "away_sp_id", "p_throws": "away_sp_throws"})
+        )
+        # Take first pitcher (starter) per game
+        home_sp = home_sp.groupby("game_pk").first().reset_index()
+
+        away_sp = (
+            first_app[first_app["inning_topbot"] == "Bot"]
+            .groupby(["game_pk", "pitcher"])["p_throws"]
+            .first()
+            .reset_index()
+            .rename(columns={"pitcher": "home_sp_id", "p_throws": "home_sp_throws"})
+        )
+        away_sp = away_sp.groupby("game_pk").first().reset_index()
+
+        # Get batters per side
+        home_batters = (
+            first_app[first_app["inning_topbot"] == "Bot"]
+            [["game_pk", "batter", "stand"]]
+            .drop_duplicates()
+        )
+        away_batters = (
+            first_app[first_app["inning_topbot"] == "Top"]
+            [["game_pk", "batter", "stand"]]
+            .drop_duplicates()
+        )
+
+        def count_platoon_edge(batters_df: pd.DataFrame,
+                               sp_df: pd.DataFrame,
+                               sp_throws_col: str) -> pd.DataFrame:
+            merged = batters_df.merge(sp_df[["game_pk", sp_throws_col]],
+                                      on="game_pk", how="left")
+            # Switch hitters always get platoon edge; opposite hand = edge
+            merged["platoon_adv"] = (
+                (merged["stand"] == "S") |
+                ((merged["stand"] == "L") & (merged[sp_throws_col] == "R")) |
+                ((merged["stand"] == "R") & (merged[sp_throws_col] == "L"))
+            ).astype(int)
+            return (
+                merged.groupby("game_pk")["platoon_adv"]
+                .sum()
+                .reset_index()
+            )
+
+        home_counts = count_platoon_edge(
+            home_batters, away_sp, "home_sp_throws"
+        ).rename(columns={"platoon_adv": "home_lineup_opp_hand_count"})
+
+        away_counts = count_platoon_edge(
+            away_batters, home_sp, "away_sp_throws"
+        ).rename(columns={"platoon_adv": "away_lineup_opp_hand_count"})
+
+        game_result = home_counts.merge(away_counts, on="game_pk", how="outer")
+        game_result["lineup_opp_hand_diff"] = (
+            game_result["home_lineup_opp_hand_count"]
+            - game_result["away_lineup_opp_hand_count"]
+        )
+        frames.append(game_result)
+
+    if not frames:
+        return pd.DataFrame(columns=["game_pk", "home_lineup_opp_hand_count",
+                                     "away_lineup_opp_hand_count",
+                                     "lineup_opp_hand_diff"])
+
+    result = pd.concat(frames, ignore_index=True).drop_duplicates("game_pk")
+    if verbose:
+        n_ok = result["home_lineup_opp_hand_count"].notna().sum()
+        mean_diff = result["lineup_opp_hand_diff"].mean()
+        print(f"      {n_ok} games | mean lineup_opp_hand_diff={mean_diff:.2f}")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# SECTION 4J — SP K-PROP MARKET SIGNAL
+# ---------------------------------------------------------------------------
+
+def _normalize_pitcher_name(name: str) -> str:
+    """Lowercase, strip accents/punctuation for fuzzy matching."""
+    import unicodedata
+    name = str(name).lower().strip()
+    name = unicodedata.normalize("NFD", name)
+    name = "".join(c for c in name if not unicodedata.combining(c))
+    name = name.replace(".", "").replace("-", " ").replace("'", "")
+    return " ".join(name.split())
+
+
+def build_kprop_features(years: list[int], verbose: bool = True) -> pd.DataFrame:
+    """
+    Load daily `k_props_{date}.parquet` files and produce per-game SP K-line features.
+
+    K-prop lines are DraftKings/market consensus SP strikeout over/unders.
+    Only available from 2026-04-12 onwards; prior years return empty (NaN join).
+
+    Returns one row per (game_pk, game_date, home_team, away_team) with:
+        home_sp_k_line        — market K total for home SP (NaN if absent)
+        away_sp_k_line        — market K total for away SP
+        sp_k_line_diff        — home minus away (positive = home SP higher K line)
+        home_sp_k_line_implied — vig-removed over probability for home SP
+        away_sp_k_line_implied — vig-removed over probability for away SP
+    """
+    if verbose:
+        print("  [3.996/4] Building SP K-prop market signal ...")
+
+    def _vig_remove(over_odds: float, under_odds: float) -> float:
+        """Convert American odds to vig-removed over probability."""
+        def _to_prob(o: float) -> float:
+            if o >= 0:
+                return 100 / (o + 100)
+            return (-o) / (-o + 100)
+        p_over  = _to_prob(over_odds)
+        p_under = _to_prob(under_odds)
+        total   = p_over + p_under
+        return p_over / total if total > 0 else 0.5
+
+    all_frames = []
+    for year in years:
+        files = sorted(DATA_DIR.glob(f"k_props_{year}-*.parquet"))
+        if not files:
+            continue
+        daily = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
+        daily["game_date"] = pd.to_datetime(daily["game_date"])
+        daily["pitcher_norm"] = daily["pitcher_name"].apply(_normalize_pitcher_name)
+
+        # Vig-removed over probability
+        daily["k_over_prob"] = daily.apply(
+            lambda r: _vig_remove(r["over_odds"], r["under_odds"]), axis=1
+        )
+
+        # Deduplicate multiple books: median line + mean implied prob per pitcher-game
+        agg = (
+            daily.groupby(["game_date", "home_team", "away_team", "pitcher_norm"])
+            .agg(sp_k_line=("line", "median"),
+                 sp_k_over_prob=("k_over_prob", "mean"))
+            .reset_index()
+        )
+        all_frames.append(agg)
+
+    if not all_frames:
+        return pd.DataFrame(columns=["game_date", "home_team", "away_team",
+                                     "home_sp_k_line", "away_sp_k_line",
+                                     "sp_k_line_diff",
+                                     "home_sp_k_line_implied",
+                                     "away_sp_k_line_implied"])
+
+    props = pd.concat(all_frames, ignore_index=True)
+
+    # We need to match pitcher_norm against home/away starter names in game list.
+    # This join happens in assemble_matrix where we have starter names.
+    # Return the raw props; assemble_matrix does the merge.
+    if verbose:
+        n = len(props)
+        n_games = props.groupby(["game_date", "home_team", "away_team"]).ngroups
+        print(f"      {n} pitcher-game K-prop rows | {n_games} game-dates")
+    return props
+
+
+# ---------------------------------------------------------------------------
+# SECTION 4B — ELO RATINGS
+# ---------------------------------------------------------------------------
+
+ELO_BASE      = 1500   # new-team / regression-target rating
+ELO_K         = 20     # K-factor (MLB calibrated: 1 win ≈ ±10-15 Elo pts)
+ELO_HFA       = 35     # home-field advantage in Elo points
+ELO_REGRESS   = 0.50   # fraction of season-end deviation retained into next season
+
+
+def compute_elo_ratings(
+    df: pd.DataFrame,
+    k: float = ELO_K,
+    base_elo: float = ELO_BASE,
+    hfa: float = ELO_HFA,
+    season_regression: float = ELO_REGRESS,
+) -> tuple[pd.DataFrame, dict]:
+    """
+    Compute rolling pre-game Elo ratings from the full game DataFrame.
+
+    Uses standard Elo update with:
+      - Home-field advantage of `hfa` Elo points added to expected score
+      - 50% regression toward 1500 at each season boundary
+      - shift-by-row leakage prevention (ratings updated AFTER recording)
+
+    Returns
+    -------
+    elo_df : DataFrame with columns [game_pk, home_elo, away_elo]
+    ratings : dict of {team: current_elo} after all processed games
+    """
+    df = df.sort_values(["game_date", "game_pk"]).copy()
+    ratings: dict[str, float] = {}
+    current_season: int | None = None
+    records: list[dict] = []
+
+    for _, row in df.iterrows():
+        home   = row["home_team"]
+        away   = row["away_team"]
+        season = int(row["year"])
+
+        # Season boundary: regress all ratings toward the mean
+        if season != current_season:
+            if current_season is not None:
+                for team in list(ratings):
+                    ratings[team] = base_elo + season_regression * (ratings[team] - base_elo)
+            current_season = season
+
+        home_r = ratings.get(home, base_elo)
+        away_r = ratings.get(away, base_elo)
+
+        records.append({"game_pk": row["game_pk"], "home_elo": home_r, "away_elo": away_r})
+
+        # Update only when game result is known
+        h_score = row.get("home_score")
+        a_score = row.get("away_score")
+        if pd.notna(h_score) and pd.notna(a_score):
+            home_win = 1.0 if float(h_score) > float(a_score) else 0.0
+            home_exp = 1.0 / (1.0 + 10.0 ** ((away_r - home_r - hfa) / 400.0))
+            ratings[home] = home_r + k * (home_win - home_exp)
+            ratings[away] = away_r + k * ((1.0 - home_win) - (1.0 - home_exp))
+
+    return pd.DataFrame(records), ratings
+
+
+# ---------------------------------------------------------------------------
 # SECTION 5 — ASSEMBLE FEATURE MATRIX
 # ---------------------------------------------------------------------------
 
 def assemble_matrix(
-    games:        pd.DataFrame,
-    pitchers:     pd.DataFrame,
-    batting:      pd.DataFrame,
-    bullpen:      pd.DataFrame,
-    bat_tracking: pd.DataFrame | None = None,
-    defense:      pd.DataFrame | None = None,
-    bp_fatigue:   pd.DataFrame | None = None,
-    verbose:      bool = True,
+    games:              pd.DataFrame,
+    pitchers:           pd.DataFrame,
+    batting:            pd.DataFrame,
+    bullpen:            pd.DataFrame,
+    bat_tracking:       pd.DataFrame | None = None,
+    defense:            pd.DataFrame | None = None,
+    bp_fatigue:         pd.DataFrame | None = None,
+    pitcher_game_state: pd.DataFrame | None = None,
+    air_density:        pd.DataFrame | None = None,
+    bp_top3_fatigue:    pd.DataFrame | None = None,
+    ump_cs_rate:        pd.DataFrame | None = None,
+    lineup_handedness:  pd.DataFrame | None = None,
+    kprop_features:     pd.DataFrame | None = None,
+    verbose:            bool = True,
 ) -> pd.DataFrame:
     """
     Merge all feature tables onto the game-level dataframe.
@@ -1425,8 +2197,13 @@ def assemble_matrix(
     at inference time before XGBoost scoring.
 
     Phase 2 additions (graceful NaN if tables not provided):
-      bat_tracking  — team bat speed, blast rate, batter run values
-      defense       — team OAA, Fielding Run Value
+      bat_tracking       — team bat speed, blast rate, batter run values
+      defense            — team OAA, Fielding Run Value
+      pitcher_game_state — sp_pitches_last_start, sp_velo_diff_l14, is_opener_flag
+      air_density        — air_density_rho, roof_closed_flag
+      bp_top3_fatigue    — bullpen_top3_fatigue_3d
+      ump_cs_rate        — ump_called_strike_above_avg
+      lineup_handedness  — home/away_lineup_opp_hand_count, lineup_opp_hand_diff
     """
     if verbose:
         print("  [4/4] Assembling feature matrix ...")
@@ -1469,14 +2246,11 @@ def assemble_matrix(
             "il_return_flag", "starts_since_il",
             # Trailing 10-day recency stats
             "k_pct_10d", "bb_pct_10d", "xwoba_10d",
-            # Phase 2: arsenal quality (usage-weighted run value + primary pitch)
-            "arsenal_weighted_rv", "primary_whiff_pct", "primary_putaway_pct",
-            # Phase 2: swing/take decision quality
-            "swing_rv_per100", "take_rv_per100",
-            # Phase 2: fastball movement (SSW proxy inputs)
-            "ff_h_break_inch", "ff_v_break_inch",
             # Quick Win: BABIP luck + velocity decay trend
             "babip_game", "velo_decay",
+            # NOTE: Phase 2 arsenal/movement/swing-rv features omitted — data files
+            # (pitcher_arsenal_stats, pitcher_run_value, pitcher_pitch_movement)
+            # are not yet populated; they are 100% NaN and add no signal.
         ]
         try:
             row = pit_lookup.loc[(name, game_pk)]
@@ -1514,24 +2288,6 @@ def assemble_matrix(
                                 - df["home_sp_xwoba_10d"])   # flipped: lower home xwOBA = better
     df["sp_bb_pct_10d_diff"] = (df["home_sp_bb_pct_10d"]
                                 - df["away_sp_bb_pct_10d"])
-
-    # Phase 2: arsenal quality diffs (positive = home pitcher advantage)
-    df["sp_arsenal_rv_diff"]     = (df["home_sp_arsenal_weighted_rv"]
-                                    - df["away_sp_arsenal_weighted_rv"])
-    df["sp_primary_whiff_diff"]  = (df["home_sp_primary_whiff_pct"]
-                                    - df["away_sp_primary_whiff_pct"])
-    df["sp_primary_putaway_diff"]= (df["home_sp_primary_putaway_pct"]
-                                    - df["away_sp_primary_putaway_pct"])
-    # Phase 2: swing/take run value diffs
-    df["sp_swing_rv_diff"]  = (df["home_sp_swing_rv_per100"]
-                               - df["away_sp_swing_rv_per100"])
-    df["sp_take_rv_diff"]   = (df["home_sp_take_rv_per100"]
-                               - df["away_sp_take_rv_per100"])
-    # Phase 2: FF movement diffs (raw values useful; diff captures deception asymmetry)
-    df["sp_ff_h_break_diff"] = (df["home_sp_ff_h_break_inch"]
-                                - df["away_sp_ff_h_break_inch"])
-    df["sp_ff_v_break_diff"] = (df["home_sp_ff_v_break_inch"]
-                                - df["away_sp_ff_v_break_inch"])
 
     # Quick Win: form/talent ratio (recent xwOBA vs season-EWMA baseline)
     # > 1 = pitcher allowing more xwOBA recently than usual (regression candidate)
@@ -1658,6 +2414,28 @@ def assemble_matrix(
             df["home_team_home_wp10"] - df["away_team_away_wp10"]
         )
 
+    # ── Elo ratings ───────────────────────────────────────────────────────
+    # Strength-of-schedule-adjusted team quality that updates every game.
+    # Addresses mid-season calibration drift: a .600-pace team in August is
+    # meaningfully different from a .400-pace team, which wp10 can't distinguish
+    # once their current-series form coincidentally matches.
+    if "home_score" in df.columns and "year" in df.columns:
+        _elo_input = df[["game_pk", "game_date", "home_team", "away_team",
+                          "year", "home_score", "away_score"]].copy()
+        _elo_df, _elo_final = compute_elo_ratings(_elo_input)
+        df = df.merge(_elo_df, on="game_pk", how="left")
+        df["elo_diff"] = df["home_elo"] - df["away_elo"]
+
+        # Persist final state so inference can load current ratings without
+        # re-running the full game history each day.
+        _elo_state_path = Path("data/statcast/elo_state.parquet")
+        _elo_state_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            [{"team": t, "elo": r} for t, r in _elo_final.items()]
+        ).to_parquet(_elo_state_path, index=False)
+        if verbose:
+            print(f"      Elo: saved {len(_elo_final)} team ratings → {_elo_state_path}")
+
     # ── Bullpen quality (season-level, IP-weighted) ───────────────────────
     if not bullpen.empty:
         bp_lookup = bullpen.set_index(["team", "season"])
@@ -1716,6 +2494,130 @@ def assemble_matrix(
     else:
         if verbose:
             print("      Bullpen fatigue: no data provided — columns omitted")
+
+    # ── Pitcher game-state features ───────────────────────────────────────
+    # sp_pitches_last_start, sp_velo_diff_l14, is_opener_flag
+    # Joined via (game_pk, pitching_team) — works for both home and away SPs
+    # without needing a pitcher_id column in the game list.
+    if pitcher_game_state is not None and not pitcher_game_state.empty:
+        state_cols = ["sp_pitches_last_start", "sp_velo_diff_l14", "is_opener_flag"]
+
+        home_pgs = (pitcher_game_state[pitcher_game_state["pitching_role"] == "home"]
+                    [["game_pk", "pitching_team"] + state_cols]
+                    .rename(columns={c: f"home_{c}" for c in state_cols}
+                            | {"pitching_team": "home_team"}))
+        away_pgs = (pitcher_game_state[pitcher_game_state["pitching_role"] == "away"]
+                    [["game_pk", "pitching_team"] + state_cols]
+                    .rename(columns={c: f"away_{c}" for c in state_cols}
+                            | {"pitching_team": "away_team"}))
+
+        df = df.merge(home_pgs, on=["game_pk", "home_team"], how="left")
+        df = df.merge(away_pgs, on=["game_pk", "away_team"], how="left")
+
+        if verbose:
+            n_home = df["home_sp_pitches_last_start"].notna().sum()
+            n_away = df["away_sp_pitches_last_start"].notna().sum()
+            print(f"      Pitcher game-state: home={n_home}/{len(df)}, "
+                  f"away={n_away}/{len(df)}")
+
+    # ── Air density + roof flag ───────────────────────────────────────────
+    if air_density is not None and not air_density.empty:
+        ad = air_density.copy()
+        ad["game_date"] = pd.to_datetime(ad["game_date"])
+        df = df.merge(ad[["home_team", "game_date", "air_density_rho", "roof_closed_flag"]],
+                      on=["home_team", "game_date"], how="left")
+        if verbose:
+            n_rho = df["air_density_rho"].notna().sum()
+            n_roof = df["roof_closed_flag"].notna().sum()
+            print(f"      Air density: {n_rho}/{len(df)} rows | "
+                  f"roof_flag: {n_roof}/{len(df)} rows")
+
+    # ── Bullpen top-3 quality-arm fatigue ────────────────────────────────
+    if bp_top3_fatigue is not None and not bp_top3_fatigue.empty:
+        home_t3 = bp_top3_fatigue.rename(columns={
+            "team": "home_team",
+            "bullpen_top3_fatigue_3d": "home_bp_top3_fatigue_3d"
+        })
+        away_t3 = bp_top3_fatigue.rename(columns={
+            "team": "away_team",
+            "bullpen_top3_fatigue_3d": "away_bp_top3_fatigue_3d"
+        })
+        df = df.merge(home_t3[["home_team","game_pk","home_bp_top3_fatigue_3d"]],
+                      on=["home_team","game_pk"], how="left")
+        df = df.merge(away_t3[["away_team","game_pk","away_bp_top3_fatigue_3d"]],
+                      on=["away_team","game_pk"], how="left")
+        df["bp_top3_fatigue_diff"] = (
+            df.get("away_bp_top3_fatigue_3d", np.nan)
+            - df.get("home_bp_top3_fatigue_3d", np.nan)
+        )
+        if verbose:
+            n_ok = df["home_bp_top3_fatigue_3d"].notna().sum()
+            print(f"      Bullpen top-3 fatigue: {n_ok}/{len(df)} home rows have data")
+
+    # ── Umpire called-strike rate ─────────────────────────────────────────
+    if ump_cs_rate is not None and not ump_cs_rate.empty:
+        df = df.merge(ump_cs_rate[["game_pk", "ump_called_strike_above_avg"]],
+                      on="game_pk", how="left")
+        df["ump_called_strike_above_avg"] = (
+            df["ump_called_strike_above_avg"].fillna(0)   # debut ump = league average
+        )
+        if verbose:
+            n_ok = (df["ump_called_strike_above_avg"] != 0).sum()
+            print(f"      Ump called-strike: {n_ok}/{len(df)} non-zero rows")
+
+    # ── Lineup handedness matchup ─────────────────────────────────────────
+    if lineup_handedness is not None and not lineup_handedness.empty:
+        lh_cols = ["game_pk", "home_lineup_opp_hand_count",
+                   "away_lineup_opp_hand_count", "lineup_opp_hand_diff"]
+        df = df.merge(lineup_handedness[lh_cols], on="game_pk", how="left")
+        if verbose:
+            n_ok = df["home_lineup_opp_hand_count"].notna().sum()
+            mean_diff = df["lineup_opp_hand_diff"].mean()
+            print(f"      Lineup handedness: {n_ok}/{len(df)} rows | "
+                  f"mean_opp_hand_diff={mean_diff:.2f}")
+
+    # ── SP K-prop market signal (DraftKings consensus) ────────────────────
+    if kprop_features is not None and not kprop_features.empty:
+        kp = kprop_features.copy()
+        kp["game_date"] = pd.to_datetime(kp["game_date"])
+
+        # Normalize starter names from games for matching
+        df["_home_sp_norm"] = df["home_starter_name"].apply(_normalize_pitcher_name)
+        df["_away_sp_norm"] = df["away_starter_name"].apply(_normalize_pitcher_name)
+
+        # Home SP join: pitcher_norm == home_sp_norm
+        kp_home = kp.rename(columns={
+            "pitcher_norm": "_home_sp_norm",
+            "sp_k_line": "home_sp_k_line",
+            "sp_k_over_prob": "home_sp_k_line_implied",
+        })[["game_date", "home_team", "away_team", "_home_sp_norm",
+            "home_sp_k_line", "home_sp_k_line_implied"]]
+        df = df.merge(kp_home,
+                      on=["game_date", "home_team", "away_team", "_home_sp_norm"],
+                      how="left")
+
+        # Away SP join
+        kp_away = kp.rename(columns={
+            "pitcher_norm": "_away_sp_norm",
+            "sp_k_line": "away_sp_k_line",
+            "sp_k_over_prob": "away_sp_k_line_implied",
+        })[["game_date", "home_team", "away_team", "_away_sp_norm",
+            "away_sp_k_line", "away_sp_k_line_implied"]]
+        df = df.merge(kp_away,
+                      on=["game_date", "home_team", "away_team", "_away_sp_norm"],
+                      how="left")
+
+        df["sp_k_line_diff"] = df["home_sp_k_line"] - df["away_sp_k_line"]
+        df = df.drop(columns=["_home_sp_norm", "_away_sp_norm"])
+
+        if verbose:
+            n_home = df["home_sp_k_line"].notna().sum()
+            n_away = df["away_sp_k_line"].notna().sum()
+            print(f"      K-prop market signal: home={n_home}, away={n_away} of {len(df)} rows")
+    else:
+        for c in ("home_sp_k_line", "away_sp_k_line", "sp_k_line_diff",
+                  "home_sp_k_line_implied", "away_sp_k_line_implied"):
+            df[c] = np.nan
 
     # ── Phase 2: Team bat tracking + batter run values ────────────────────
     # Seasonal aggregate (team, season) joined like bullpen data.
@@ -2328,18 +3230,30 @@ def main():
           f"|  Trailing: {TRAILING_DAYS}d")
     print("=" * 60)
 
-    games        = build_game_list(years)
-    pitchers     = build_pitcher_ewma_stats(years)
-    batting      = build_team_batting_ewma(years)
-    bullpen      = build_bullpen_stats(years)
-    bat_tracking = build_team_bat_tracking(years)
-    defense      = build_team_defense(years)
-    bp_fatigue   = build_bullpen_fatigue(years)
+    games             = build_game_list(years)
+    pitchers          = build_pitcher_ewma_stats(years)
+    batting           = build_team_batting_ewma(years)
+    bullpen           = build_bullpen_stats(years)
+    bat_tracking      = build_team_bat_tracking(years)
+    defense           = build_team_defense(years)
+    bp_fatigue        = build_bullpen_fatigue(years)
+    pitcher_game_state = build_pitcher_game_state(years)
+    air_density       = build_air_density_features(years)
+    bp_top3_fatigue   = build_bullpen_top3_fatigue(years)
+    ump_cs_rate       = build_ump_called_strike_rate(years)
+    lineup_handedness = build_lineup_handedness(years)
+    kprop_features    = build_kprop_features(years)
 
     print()
     matrix = assemble_matrix(games, pitchers, batting, bullpen,
                              bat_tracking=bat_tracking, defense=defense,
-                             bp_fatigue=bp_fatigue)
+                             bp_fatigue=bp_fatigue,
+                             pitcher_game_state=pitcher_game_state,
+                             air_density=air_density,
+                             bp_top3_fatigue=bp_top3_fatigue,
+                             ump_cs_rate=ump_cs_rate,
+                             lineup_handedness=lineup_handedness,
+                             kprop_features=kprop_features)
 
     out_parquet = f"{args.out}.parquet"
     out_csv     = f"{args.out}.csv"

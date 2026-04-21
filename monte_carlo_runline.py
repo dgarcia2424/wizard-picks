@@ -93,7 +93,19 @@ _TEAM_DIFF_COLS = [
     "sp_age_diff", "sp_kminusbb_diff", "sp_k_pct_10d_diff", "sp_xwoba_10d_diff",
     "sp_bb_pct_10d_diff", "batting_matchup_edge", "batting_matchup_edge_10d",
     "bp_era_diff", "bp_k9_diff", "bp_whip_diff", "circadian_edge",
+    "elo_diff",
 ]
+
+# Elo ratings — loaded once at import time, refreshed daily by build_feature_matrix.py
+_ELO_BASE = 1500.0
+_elo_state: dict[str, float] = {}
+_elo_state_path = DATA_DIR / "elo_state.parquet"
+if _elo_state_path.exists():
+    try:
+        _elo_df = __import__("pandas").read_parquet(_elo_state_path)
+        _elo_state = dict(zip(_elo_df["team"], _elo_df["elo"]))
+    except Exception:
+        pass
 
 N_SIMS         = 50_000    # Monte Carlo sample count
 INNINGS_SP     = 5.5       # Expected innings from starter before bullpen
@@ -142,7 +154,27 @@ KPROP_NB_R: float = 20.0
 # blended_k_pct overestimates by ~1.8pp and expected_ip by ~0.25 inn.
 # MLE on 470 starts: pred μ=5.29, actual μ=4.75 → multiplier=4.75/5.29=0.898
 # Apply before simulation to remove systematic overestimation bias.
-KPROP_MEAN_CALIB: float = 0.899
+KPROP_MEAN_CALIB: float = 0.902  # recalibrated post Stuff+ blend (was 0.899; MLE on 197 starts)
+
+# ── Stuff+/Pitching+ blend weight ────────────────────────────────────────────
+# Blend Stuff+-implied K% with EWMA blended_k_pct before NB simulation.
+# Challenger eval (2026 early season): Stuff+ AUC=0.70 vs EWMA AUC=0.52.
+# Conservative 50/50 blend to guard against small-sample Stuff+ noise;
+# revisit at n≥200 starts. Set to 0.0 to disable.
+STUFF_PLUS_K_BLEND: float = 0.50
+
+# Linear mapping: Stuff+ → implied K%
+# Fit: K% ≈ 0.222 + (Stuff+ − 100) × 0.0018  (≈ +1.8% K per +10 Stuff+)
+_STUFF_LEAGUE_K_PCT: float = 0.222
+_STUFF_SENS:         float = 0.0018
+
+# ── Steamer ERA blend weight (run simulation) ─────────────────────────────────
+# Blend Steamer projected ERA → implied xwOBA into home_mu / away_mu.
+# F5 challenger eval: Steamer ERA AUC=0.643 vs MC sim AUC=0.525.
+# Conservative 0.35 blend to avoid over-weighting a season projection
+# against in-season EWMA xwOBA; revisit at n≥200 games.
+# Set to 0.0 to disable. ERA → xwOBA: (ERA + 3.0) / 24.0 (from XWOBA_INTERCEPT/SLOPE fit).
+STEAMER_ERA_BLEND: float = 0.35
 
 # Stadium elevations for air density calculation
 STADIUM_ELEVATION = {
@@ -203,6 +235,71 @@ def load_pitcher_10d() -> dict:
             for _, row in df.iterrows()
             if pd.notna(row.get("pitcher_name_upper"))
         }
+    except Exception:
+        return {}
+
+
+def load_stuff_plus(year: int | None = None) -> dict:
+    """
+    Load Stuff+/Pitching+ leaderboard → dict keyed by normalised pitcher name.
+
+    Returns {name_key: stuff_k_pct} where stuff_k_pct is the implied K%
+    derived from the linear Stuff+ model (see STUFF_PLUS_K_BLEND constant).
+    Returns {} if the file is absent (graceful degradation — EWMA K% used).
+    """
+    if year is None:
+        import datetime
+        year = datetime.date.today().year
+    path = DATA_DIR / f"fg_stuff_plus_{year}.parquet"
+    if not path.exists():
+        return {}
+    try:
+        df = pd.read_parquet(path, engine="pyarrow")
+        result = {}
+        for _, row in df.iterrows():
+            key = str(row.get("name_key", "")).strip()
+            if not key:
+                continue
+            # Prefer pre-computed k_pct_implied; fall back to sp_stuff raw
+            k_pct = row.get("k_pct_implied")
+            if pd.isna(k_pct):
+                sp = row.get("stuff_plus")
+                if pd.notna(sp):
+                    k_pct = _STUFF_LEAGUE_K_PCT + (float(sp) - 100.0) * _STUFF_SENS
+                else:
+                    continue
+            result[key] = float(max(0.05, min(0.50, k_pct)))
+        return result
+    except Exception:
+        return {}
+
+
+def load_steamer_era(year: int | None = None) -> dict:
+    """
+    Load Steamer ERA projections → dict keyed by normalised pitcher name.
+
+    Returns {name_key: era} for use in the run-simulation blend.
+    Returns {} if file absent (graceful degradation — EWMA xwOBA used alone).
+    """
+    if year is None:
+        import datetime
+        year = datetime.date.today().year
+    path = DATA_DIR / f"fg_proj_steamer_{year}.parquet"
+    if not path.exists():
+        return {}
+    try:
+        df = pd.read_parquet(path, engine="pyarrow")
+        result = {}
+        for _, row in df.iterrows():
+            key = str(row.get("name_key", "")).strip()
+            era = row.get("era")
+            if not key or pd.isna(era):
+                continue
+            era = float(era)
+            if era <= 0 or era > 15:   # sanity bounds
+                continue
+            result[key] = era
+        return result
     except Exception:
         return {}
 
@@ -844,6 +941,16 @@ def build_xgb_row(home_prof: pd.Series, away_prof: pd.Series,
     row["rolling_rd_diff"]   = safe_diff(row.get("home_rolling_rd_15g"),   row.get("away_rolling_rd_15g"))
     row["pyth_win_pct_diff"] = safe_diff(row.get("home_pyth_win_pct_15g"), row.get("away_pyth_win_pct_15g"))
 
+    # Elo ratings — strength-of-schedule-adjusted team quality
+    home_elo = _elo_state.get(home_team, _ELO_BASE)
+    away_elo = _elo_state.get(away_team, _ELO_BASE)
+    if "home_elo" in row:
+        row["home_elo"] = home_elo
+    if "away_elo" in row:
+        row["away_elo"] = away_elo
+    if "elo_diff" in row:
+        row["elo_diff"] = home_elo - away_elo
+
     # Lineup wRC+ as direct ML features (v2 model additions — from today's actual lineup)
     if home_lineup_wrc is not None and pd.notna(float(home_lineup_wrc)):
         if "home_lineup_wrc_plus" in row:
@@ -1030,6 +1137,8 @@ def predict_game(
     ump_k_above_avg: float = 0.0,      # HP ump trailing K% vs league avg (from ump_features)
     home_pp_k_line: float | None = None,  # PrizePicks standard K line for home SP
     away_pp_k_line: float | None = None,  # PrizePicks standard K line for away SP
+    stuff_plus_lookup: dict | None = None,  # {name_key: stuff_k_pct} from load_stuff_plus()
+    steamer_lookup: dict | None = None,     # {name_key: era} from load_steamer_era()
 ) -> dict:
     """
     Full prediction pipeline for one game.
@@ -1076,6 +1185,23 @@ def predict_game(
     # Pitcher expected xwOBA and sigma
     home_mu, home_sigma = pitcher_expected_xwoba(home_prof, month)
     away_mu, away_sigma = pitcher_expected_xwoba(away_prof, month)
+
+    # ── Steamer ERA blend ─────────────────────────────────────────────────────
+    # Convert Steamer projected ERA → implied xwOBA and blend with EWMA mu.
+    # xwoba = (ERA - XWOBA_INTERCEPT) / XWOBA_SLOPE = (ERA + 3.0) / 24.0
+    if steamer_lookup and STEAMER_ERA_BLEND > 0.0:
+        home_nk = _normalize_name(home_sp_name)
+        away_nk = _normalize_name(away_sp_name)
+        home_era = steamer_lookup.get(home_nk)
+        away_era = steamer_lookup.get(away_nk)
+        if home_era is not None:
+            steamer_xwoba_home = (home_era - XWOBA_INTERCEPT) / XWOBA_SLOPE
+            steamer_xwoba_home = float(np.clip(steamer_xwoba_home, 0.15, 0.50))
+            home_mu = STEAMER_ERA_BLEND * steamer_xwoba_home + (1.0 - STEAMER_ERA_BLEND) * home_mu
+        if away_era is not None:
+            steamer_xwoba_away = (away_era - XWOBA_INTERCEPT) / XWOBA_SLOPE
+            steamer_xwoba_away = float(np.clip(steamer_xwoba_away, 0.15, 0.50))
+            away_mu = STEAMER_ERA_BLEND * steamer_xwoba_away + (1.0 - STEAMER_ERA_BLEND) * away_mu
 
     # Environment
     elev = STADIUM_ELEVATION.get(home_team, 0)
@@ -1221,6 +1347,21 @@ def predict_game(
     if pd.isna(home_k_rate): home_k_rate = 0.225
     if pd.isna(away_k_rate): away_k_rate = 0.225
 
+    # ── Stuff+/Pitching+ blend ───────────────────────────────────────────────
+    # Blend Stuff+-implied K% with EWMA blended_k_pct (Option B: at predict time).
+    # Only applied when lookup has data for that pitcher; falls back to EWMA alone.
+    if stuff_plus_lookup and STUFF_PLUS_K_BLEND > 0.0:
+        home_name_key = _normalize_name(home_sp_name)
+        away_name_key = _normalize_name(away_sp_name)
+        home_stuff_k = stuff_plus_lookup.get(home_name_key)
+        away_stuff_k = stuff_plus_lookup.get(away_name_key)
+        if home_stuff_k is not None:
+            home_k_rate = (STUFF_PLUS_K_BLEND * home_stuff_k
+                           + (1.0 - STUFF_PLUS_K_BLEND) * home_k_rate)
+        if away_stuff_k is not None:
+            away_k_rate = (STUFF_PLUS_K_BLEND * away_stuff_k
+                           + (1.0 - STUFF_PLUS_K_BLEND) * away_k_rate)
+
     home_expected_bf = home_ip * BF_PER_INNING
     away_expected_bf = away_ip * BF_PER_INNING
 
@@ -1229,11 +1370,9 @@ def predict_game(
     mc_away_k_mean = away_k_rate * away_expected_bf * KPROP_MEAN_CALIB + ump_adj * away_expected_bf
 
     # Blend PrizePicks standard line as a market prior (45% weight).
-    # PP line represents sharp market consensus; pulling MC toward it improves calibration
-    # when our K rate estimate diverges significantly from the market.
-    # Weight bumped 35%→45% after 2026 early-season audit: MC K correlation ≈0.02,
-    # suggesting the physics model adds noise; revisit at n≥200 starts.
-    _PP_K_WEIGHT = 0.45
+    # Grid search (N=51 games, post Stuff+ blend): 0% PP weight -> Brier=0.2202 vs 0.2268 at 45%.
+    # Stuff+ now carries the signal; PP line adds noise rather than signal at this sample size.
+    _PP_K_WEIGHT = 0.0
     if home_pp_k_line is not None and not pd.isna(home_pp_k_line):
         mc_home_k_mean = (1 - _PP_K_WEIGHT) * mc_home_k_mean + _PP_K_WEIGHT * float(home_pp_k_line)
     if away_pp_k_line is not None and not pd.isna(away_pp_k_line):
@@ -1453,12 +1592,23 @@ def predict_game(
 
             # Apply calibration — Platt (LogisticRegression) uses predict_proba;
             # legacy isotonic regression uses predict.  Handle both interfaces.
+            # Month-aware: if calibrator was trained with 2 features (raw_prob +
+            # month_norm), supply month_norm = (game_month - 4) / 5.
             cal_rl = load_calibrator("rl")
             result["xgb_home_covers_rl_raw"] = round(xgb_rl_prob_raw, 4)
             if cal_rl is not None:
+                _game_month = float(row.get("game_month", 6))
+                _month_norm = (_game_month - 4) / 5.0
+                _elo_norm   = float(row.get("elo_diff", 0)) / 100.0
+                _n_feats = getattr(cal_rl, "n_features_in_", 1)
                 try:
-                    # Platt scaling (LogisticRegression) — explicit (1,1) array
-                    _cal_input = np.array([[float(xgb_rl_prob_raw)]])
+                    # Platt scaling — [raw_prob, month_norm, elo_norm?]
+                    if _n_feats >= 3:
+                        _cal_input = np.array([[float(xgb_rl_prob_raw), _month_norm, _elo_norm]])
+                    elif _n_feats >= 2:
+                        _cal_input = np.array([[float(xgb_rl_prob_raw), _month_norm]])
+                    else:
+                        _cal_input = np.array([[float(xgb_rl_prob_raw)]])
                     xgb_rl_prob = float(cal_rl.predict_proba(_cal_input)[0, 1])
                 except (AttributeError, ValueError):
                     try:

@@ -221,6 +221,7 @@ _DIFF_COLS_TO_NEGATE = [
     "sp_age_diff", "sp_kminusbb_diff", "sp_k_pct_10d_diff", "sp_xwoba_10d_diff",
     "sp_bb_pct_10d_diff", "batting_matchup_edge", "batting_matchup_edge_10d",
     "bp_era_diff", "bp_k9_diff", "bp_whip_diff", "circadian_edge",
+    "elo_diff",
 ]
 
 # XGBoost base parameters
@@ -640,19 +641,44 @@ def train_regression_catboost(X_train, y_train, X_val, y_val, label, early_stop,
 # PLATT SCALING
 # ---------------------------------------------------------------------------
 
-def fit_platt_calibrator(raw_probs, true_labels, out_path, label=""):
+def _platt_input(raw_probs, context_arr=None):
+    """Build the feature matrix fed to the Platt LR: [raw_prob, month_norm?]."""
+    X = raw_probs.reshape(-1, 1)
+    if context_arr is not None:
+        ctx = np.asarray(context_arr, dtype=float)
+        if ctx.ndim == 1:
+            ctx = ctx.reshape(-1, 1)
+        X = np.hstack([X, ctx])
+    return X
+
+
+def fit_platt_calibrator(raw_probs, true_labels, out_path, label="",
+                         context_arr=None):
+    """
+    Fit Platt scaling (logistic regression) calibrator.
+
+    context_arr : optional 1-D or 2-D array of shape (N,) or (N, K).
+        Extra features appended to raw_probs before fitting — used for
+        mid-season month normalisation (game_month_norm = (month - 4) / 5).
+        When supplied the saved calibrator requires the same features at
+        inference time; n_features_in_ will be 2 instead of 1.
+    """
+    X = _platt_input(raw_probs, context_arr)
     platt = LogisticRegression(C=1e10, solver="lbfgs", max_iter=500)
-    platt.fit(raw_probs.reshape(-1, 1), true_labels)
+    platt.fit(X, true_labels)
     out_path.write_bytes(pickle.dumps(platt))
-    cal = platt.predict_proba(raw_probs.reshape(-1, 1))[:, 1]
+    cal = platt.predict_proba(X)[:, 1]
     print(f"  Saved Platt [{label}] -> {out_path}  "
           f"slope={platt.coef_[0][0]:.4f}  "
+          f"n_features={X.shape[1]}  "
           f"mean_raw={raw_probs.mean():.4f} -> mean_cal={cal.mean():.4f}")
     return platt
 
 
-def calibration_report(raw_probs, true_labels, calibrator, label=""):
-    cal = calibrator.predict_proba(raw_probs.reshape(-1, 1))[:, 1]
+def calibration_report(raw_probs, true_labels, calibrator, label="",
+                       context_arr=None):
+    X = _platt_input(raw_probs, context_arr)
+    cal = calibrator.predict_proba(X)[:, 1]
     bins   = [0, .30, .35, .40, .45, .50, .55, .60, .65, 1.0]
     labels = ["<.30",".30-.35",".35-.40",".40-.45",".45-.50",
               ".50-.55",".55-.60",".60-.65",">.65"]
@@ -966,8 +992,8 @@ def run_ncv(df, X_all, feature_cols, early_stop):
 
     ncv_rows = []
     oof_xgb_rl  = [];  oof_lgbm_rl = [];  oof_cat_rl  = []
-    oof_labels_rl = []
-    oof_xgb_ml  = [];  oof_labels_ml = []
+    oof_labels_rl = [];  oof_months_rl = [];  oof_elo_diffs_rl = []
+    oof_xgb_ml  = [];  oof_labels_ml = [];  oof_months_ml = [];  oof_elo_diffs_ml = []
     oof_feat_rows    = []
     oof_segment_rows = []   # SP handedness segment IDs aligned to oof_feat_rows
     oof_stk_probs    = []
@@ -1014,6 +1040,8 @@ def run_ncv(df, X_all, feature_cols, early_stop):
 
         oof_xgb_rl.extend(xgb_p.tolist())
         oof_labels_rl.extend(y_vl.tolist())
+        oof_months_rl.extend(df.loc[rl_vl, "game_month"].fillna(6).tolist())
+        oof_elo_diffs_rl.extend(df.loc[rl_vl, "elo_diff"].fillna(0).tolist())
         if lgbm_p is not None: oof_lgbm_rl.extend(lgbm_p.tolist())
         if cat_p  is not None: oof_cat_rl.extend(cat_p.tolist())
 
@@ -1129,6 +1157,8 @@ def run_ncv(df, X_all, feature_cols, early_stop):
         if ml_tr.sum() > 0:
             oof_xgb_ml.extend(ml_p.tolist())
             oof_labels_ml.extend(ym_vl.tolist())
+            oof_months_ml.extend(df.loc[ml_vl, "game_month"].fillna(6).tolist())
+            oof_elo_diffs_ml.extend(df.loc[ml_vl, "elo_diff"].fillna(0).tolist())
         ml_auc = roc_auc_score(ym_vl, ml_p)
         print(f"    XGB ML AUC={ml_auc:.4f}")
         ncv_rows.append(dict(
@@ -1223,8 +1253,12 @@ def run_ncv(df, X_all, feature_cols, early_stop):
         ncv_rows,
         np.array(oof_xgb_rl),
         np.array(oof_labels_rl),
+        np.array(oof_months_rl),
+        np.array(oof_elo_diffs_rl),
         np.array(oof_xgb_ml) if oof_xgb_ml else np.array([]),
         np.array(oof_labels_ml) if oof_labels_ml else np.array([]),
+        np.array(oof_months_ml) if oof_months_ml else np.array([]),
+        np.array(oof_elo_diffs_ml) if oof_elo_diffs_ml else np.array([]),
         oof_feat_df,
         oof_segment_ids,
         np.array(oof_lgbm_rl) if oof_lgbm_rl else None,
@@ -1369,8 +1403,8 @@ def main():
             raise ValueError(f"Missing NCV years: {missing}")
 
         (ncv_rows,
-         oof_xgb_rl, oof_labels_rl,
-         oof_xgb_ml, oof_labels_ml,
+         oof_xgb_rl, oof_labels_rl, oof_months_rl, oof_elo_diffs_rl,
+         oof_xgb_ml, oof_labels_ml, oof_months_ml, oof_elo_diffs_ml,
          oof_feat_df,
          oof_segment_ids,
          oof_lgbm_rl, oof_cat_rl,
@@ -1443,17 +1477,30 @@ def main():
         val_df_edge["tot_pred"] = tot_preds
         val_df_edge["ml_prob"]  = ml_probs
 
-        # ── Platt calibration (pooled OOF)
+        # ── Platt calibration (pooled OOF, month-aware + elo-aware)
+        # context = [month_norm, elo_diff_norm] where:
+        #   month_norm   = (month - 4) / 5    (April=0 → September=1)
+        #   elo_diff_norm = elo_diff / 100    (100 Elo pts = 1 unit; fixed scale)
         print(f"\n{'='*60}")
-        print(f"  PLATT CALIBRATION  (pooled OOF — zero leakage)")
+        print(f"  PLATT CALIBRATION  (pooled OOF — zero leakage, month+elo aware)")
         print(f"{'='*60}")
+        _mnorm_rl = (np.array(oof_months_rl) - 4) / 5.0
+        _enorm_rl = np.array(oof_elo_diffs_rl) / 100.0
+        _ctx_rl   = np.column_stack([_mnorm_rl, _enorm_rl])
         cal_rl = fit_platt_calibrator(oof_xgb_rl, oof_labels_rl,
-                                      MODELS_DIR/"calibrator_rl.pkl", "run_line")
-        calibration_report(oof_xgb_rl, oof_labels_rl, cal_rl, "run_line")
+                                      MODELS_DIR/"calibrator_rl.pkl", "run_line",
+                                      context_arr=_ctx_rl)
+        calibration_report(oof_xgb_rl, oof_labels_rl, cal_rl, "run_line",
+                           context_arr=_ctx_rl)
         if len(oof_xgb_ml) > 0:
+            _mnorm_ml = (np.array(oof_months_ml) - 4) / 5.0
+            _enorm_ml = np.array(oof_elo_diffs_ml) / 100.0
+            _ctx_ml   = np.column_stack([_mnorm_ml, _enorm_ml])
             cal_ml = fit_platt_calibrator(oof_xgb_ml, oof_labels_ml,
-                                          MODELS_DIR/"calibrator_ml.pkl", "moneyline")
-            calibration_report(oof_xgb_ml, oof_labels_ml, cal_ml, "moneyline")
+                                          MODELS_DIR/"calibrator_ml.pkl", "moneyline",
+                                          context_arr=_ctx_ml)
+            calibration_report(oof_xgb_ml, oof_labels_ml, cal_ml, "moneyline",
+                               context_arr=_ctx_ml)
 
         # ── Bayesian Hierarchical Stacker (Level-2)
         # Now trained on doubled team-perspective OOF (home + away rows, zero-leakage).
@@ -1474,7 +1521,7 @@ def main():
             _home_segs    = team_oof["seg_ids"][_hm]
 
             stk_p   = stk_model.predict(_home_probs, _home_feat_df, _home_segs)
-            platt_p = cal_rl.predict_proba(oof_xgb_rl.reshape(-1, 1))[:, 1]
+            platt_p = cal_rl.predict_proba(_platt_input(oof_xgb_rl, _ctx_rl))[:, 1]
             # Use _home_labels (aligned to team OOF home rows) as ground truth.
             y       = _home_labels
 
@@ -1607,15 +1654,25 @@ def main():
 
         # Platt calibration on val set (minor leakage — use --ncv for zero leakage)
         print(f"\n{'='*60}")
-        print(f"  PLATT CALIBRATION  (val set — use --ncv for zero leakage)")
+        print(f"  PLATT CALIBRATION  (val set — use --ncv for zero leakage, month+elo aware)")
         print(f"{'='*60}")
+        _vl_mnorm_rl = (df.loc[rl_vl, "game_month"].fillna(6).values - 4) / 5.0
+        _vl_enorm_rl = df.loc[rl_vl, "elo_diff"].fillna(0).values / 100.0
+        _vl_ctx_rl   = np.column_stack([_vl_mnorm_rl, _vl_enorm_rl])
         cal_rl = fit_platt_calibrator(rl_probs, y_rl_vl.values,
-                                      MODELS_DIR/"calibrator_rl.pkl", "run_line")
-        calibration_report(rl_probs, y_rl_vl.values, cal_rl, "run_line")
+                                      MODELS_DIR/"calibrator_rl.pkl", "run_line",
+                                      context_arr=_vl_ctx_rl)
+        calibration_report(rl_probs, y_rl_vl.values, cal_rl, "run_line",
+                           context_arr=_vl_ctx_rl)
         if len(ml_probs) == len(y_ml_vl):
+            _vl_mnorm_ml = (df.loc[ml_vl, "game_month"].fillna(6).values - 4) / 5.0
+            _vl_enorm_ml = df.loc[ml_vl, "elo_diff"].fillna(0).values / 100.0
+            _vl_ctx_ml   = np.column_stack([_vl_mnorm_ml, _vl_enorm_ml])
             cal_ml = fit_platt_calibrator(ml_probs, y_ml_vl.values,
-                                          MODELS_DIR/"calibrator_ml.pkl", "moneyline")
-            calibration_report(ml_probs, y_ml_vl.values, cal_ml, "moneyline")
+                                          MODELS_DIR/"calibrator_ml.pkl", "moneyline",
+                                          context_arr=_vl_ctx_ml)
+            calibration_report(ml_probs, y_ml_vl.values, cal_ml, "moneyline",
+                               context_arr=_vl_ctx_ml)
 
         # Comparison table
         print(f"\n{'='*60}")

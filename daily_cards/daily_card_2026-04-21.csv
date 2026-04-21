@@ -1,0 +1,3 @@
+game,home_team,away_team,home_sp,away_sp,game_time_et,lineup_confirmed,vegas_ml_home,vegas_ml_away,vegas_pick,rl_signal,total_signal,best_line,best_tier,f5_xgb_l1,f5_stacker_l2,f5_team_log_odds
+PIT @ TEX,TEX,PIT,TBD,TBD,8:05 pm ET,False,,,,,,,,0.763,0.737,0.249
+SD @ COL,COL,SD,TBD,RANDY VÁSQUEZ,8:40 pm ET,False,,,,,,,,0.276,0.272,-1.971
