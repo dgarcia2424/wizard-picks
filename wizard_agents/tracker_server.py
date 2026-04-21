@@ -11,6 +11,11 @@ Endpoints:
   POST /log_result  → log_result()
   GET  /stats       → read_tracker_stats()
   GET  /health      → {"status": "ok"}
+
+Accepted `model` values (strict): "ML", "Totals", "Runline", "F5".
+Enforcement lives in AGENT6's tool schema (tools/schemas.py:AGENT6_TOOLS);
+this handler delegates validation there rather than duplicating the enum.
+Legacy labels ("MFull", "MF5i", "MF3i", "MF1i", "MBat") are no longer accepted.
 """
 from __future__ import annotations
 
@@ -22,6 +27,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from agents.definitions import AGENT6
 from orchestrator.agent_loop import run_agent
 from config.settings import TRACKER_PORT
+
+# Single source of truth for the current market vocabulary.  Validation is
+# enforced by AGENT6's schema, but we pre-check here so a bad POST returns
+# a fast, explicit error instead of the generic tool-executor wrapping.
+ALLOWED_MODELS = ("ML", "Totals", "Runline", "F5")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [TRACKER] %(message)s")
 logger = logging.getLogger("wizard.tracker")
@@ -81,6 +91,13 @@ class TrackerHandler(BaseHTTPRequestHandler):
             missing  = [f for f in required if f not in body]
             if missing:
                 self._send_json({"status": "REJECTED", "error": f"Missing fields: {missing}"}, 400)
+                return
+            model_val = body.get("model")
+            if model_val not in ALLOWED_MODELS:
+                self._send_json({
+                    "status": "REJECTED",
+                    "error":  f"Invalid model '{model_val}'. Allowed: {list(ALLOWED_MODELS)}.",
+                }, 400)
                 return
             result = AGENT6.tool_executor("append_bet", body)
             self._send_json(json.loads(result))

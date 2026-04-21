@@ -63,47 +63,6 @@ F5_ESTIMATE_RATIO  = 0.555
 F3_ESTIMATE_RATIO  = 0.32
 F1_ESTIMATE_RATIO  = 0.11
 
-MODEL_PARAMS = {
-    "MFull": {
-        "bet_type":             "Full game Over/Under",
-        "coors_under_penalty":  0.10,
-        "home_field_bonus":     0.0,
-        "apply_lineup_quality": True,    # Validated +7.3% accuracy
-        "base_calibration":     None,    # Not locked
-    },
-    "MF5i": {
-        "bet_type":             "First 5 innings moneyline",
-        "coors_under_penalty":  0.0,
-        "home_field_bonus":     8.0,     # Raises accuracy 45.5% → 66.7% — always apply
-        "apply_lineup_quality": False,
-        "base_calibration":     None,
-    },
-    "MF3i": {
-        "bet_type":             "First 3 innings Over/Under",
-        "coors_under_penalty":  0.10,
-        "home_field_bonus":     0.0,
-        "apply_lineup_quality": False,
-        "base_calibration":     0.58,    # LOCKED — do NOT raise (0.64 caused regression)
-        "calibration_step":     0.05,
-        "calibration_floor":    0.13,
-    },
-    "MF1i": {
-        "bet_type":             "First inning Over/Under",
-        "coors_under_penalty":  0.0,     # Park effects don't dominate inning 1
-        "home_field_bonus":     0.0,
-        "apply_lineup_quality": False,
-        "base_calibration":     None,
-    },
-    "MBat": {
-        "bet_type":             "Batter hit prop",
-        "method":               "bernoulli",
-        "coors_under_penalty":  0.0,
-        "home_field_bonus":     0.0,
-        "apply_lineup_quality": False,
-        "base_calibration":     None,
-    },
-}
-
 # ── Three-Part Lock (execution gate) ─────────────────────────────────────────
 # A game must pass ALL THREE conditions to be flagged actionable at 4:45 PM ET.
 #

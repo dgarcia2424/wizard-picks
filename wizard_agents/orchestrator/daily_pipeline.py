@@ -148,9 +148,10 @@ def run_daily_pipeline(force: bool = False) -> dict[str, str]:
                 tool_executor=AGENT3.tool_executor,
                 max_tokens=8096,
                 user_message=(
-                    f"Run all 5 models (MFull, MF5i, MF3i, MF1i, MBat) against today's game slate ({TODAY}). "
-                    "Read games.csv and all static CSVs. Apply all model parameters exactly as specified. "
-                    "Write model_scores.csv with all picks, probabilities, and unit sizing."
+                    f"Score today's slate ({TODAY}) by calling generate_ml_scores. "
+                    "The tool runs the ML, Totals, Runline, and F5 stackers, applies the "
+                    "Three-Part Lock, computes Kelly stakes, and writes model_scores.csv. "
+                    "Emit the completion report from the returned JSON — do not re-score manually."
                 ),
                 context=f"Agent 1 (Data Ingestion) completed:\n{agent1_output}",
                 agent_name=AGENT3.name,

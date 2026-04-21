@@ -22,7 +22,7 @@ import pandas as pd
 import requests
 
 from config.settings import (
-    FILES, STATIC_FILES, STALE_THRESHOLD_DAYS,
+    FILES, STATIC_FILES, STALE_THRESHOLD_DAYS, PIPELINE_DIR,
     ODDS_API_KEY, F5_ESTIMATE_RATIO, F3_ESTIMATE_RATIO, F1_ESTIMATE_RATIO,
     GMAIL_FROM, GMAIL_PASSWORD, EMAIL_RECIPIENTS,
 )
@@ -375,6 +375,279 @@ def validate_static_file(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# AGENT 3 — Scoring Engine (ML inference + Three-Part Lock)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# generate_ml_scores() replaces the legacy heuristic scorers.  It:
+#   1. Invokes score_ml_today.predict_games()        → full-game moneyline L2 prob
+#   2. Invokes score_f5_today.predict_games()        → F5 home-cover L2 prob (informational)
+#   3. Invokes score_run_dist_today.predict_games()  → totals + runline L2 probs
+#   4. Joins model output with games.csv on (home_team, away_team)
+#   5. Applies the Three-Part Lock (sanity / odds-floor / edge) per market
+#   6. Computes Kelly dollar stake ($2,000 bank, cap $50, $1 floor)
+#   7. Writes model_scores.csv and returns ONLY a compact actionable summary
+#
+# Design invariant: the heavy DataFrame work happens inside this tool; the LLM
+# only ever sees a small JSON payload (counts + actionable pick list).
+
+_KELLY_BANK       = 2000.0
+_KELLY_CAP        = 50.0
+_TIER1_EDGE       = 0.030
+_TIER2_EDGE       = 0.010
+_SANITY_THRESHOLD = 0.04
+_ODDS_FLOOR       = -225
+
+
+def _american_to_decimal(odds: float) -> float:
+    return 1.0 + (odds / 100.0) if odds >= 0 else 1.0 + (100.0 / abs(odds))
+
+
+def _kelly_stake(model_prob: float, american_odds: float, tier: int) -> int:
+    """Quarter-Kelly (tier 1) / Eighth-Kelly (tier 2), $2000 bank, $50 cap, $1 floor."""
+    if american_odds is None or model_prob is None:
+        return 0
+    b = _american_to_decimal(float(american_odds)) - 1.0
+    if b <= 0:
+        return 0
+    f_star = (b * model_prob - (1.0 - model_prob)) / b
+    if f_star <= 0:
+        return 0
+    mult    = 0.25 if tier == 1 else 0.125
+    raw     = _KELLY_BANK * f_star * mult
+    capped  = min(raw, _KELLY_CAP)
+    rounded = int(round(capped))
+    return max(rounded, 1)
+
+
+def _classify_edge(edge: float) -> Optional[int]:
+    if edge is None:
+        return None
+    if edge >= _TIER1_EDGE:
+        return 1
+    if edge >= _TIER2_EDGE:
+        return 2
+    return None
+
+
+def _safe_float(v) -> Optional[float]:
+    try:
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return None
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _invoke_scorer(module_name: str, date_str: str) -> pd.DataFrame:
+    """Import a score_*_today module fresh and run predict_games(date_str).
+    Scoring scripts use cwd-relative paths, so we chdir into PIPELINE_DIR for the call."""
+    import sys, os, io, contextlib
+    prev_cwd = os.getcwd()
+    prev_path = list(sys.path)
+    try:
+        os.chdir(str(PIPELINE_DIR))
+        if str(PIPELINE_DIR) not in sys.path:
+            sys.path.insert(0, str(PIPELINE_DIR))
+        sys.modules.pop(module_name, None)
+        with contextlib.redirect_stdout(io.StringIO()):
+            mod = __import__(module_name)
+            df  = mod.predict_games(date_str)
+        return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+    finally:
+        os.chdir(prev_cwd)
+        sys.path[:] = prev_path
+
+
+def _evaluate_pick(
+    model_prob: float,
+    p_true:     Optional[float],
+    retail_imp: Optional[float],
+    retail_odds: Optional[float],
+) -> dict:
+    """Apply Three-Part Lock and compute tier + stake.  Returns all gate flags."""
+    sanity_pass = False if p_true is None else (abs(model_prob - p_true) <= _SANITY_THRESHOLD)
+    odds_pass   = False if retail_odds is None else (retail_odds >= _ODDS_FLOOR)
+    edge        = None if retail_imp is None else (model_prob - retail_imp)
+    tier        = _classify_edge(edge) if edge is not None else None
+    stake       = 0
+    if sanity_pass and odds_pass and tier is not None:
+        stake = _kelly_stake(model_prob, retail_odds, tier)
+    actionable  = bool(sanity_pass and odds_pass and tier is not None and stake >= 1)
+    return {
+        "model_prob":          round(model_prob, 4),
+        "P_true":              None if p_true is None else round(p_true, 4),
+        "Retail_Implied_Prob": None if retail_imp is None else round(retail_imp, 4),
+        "edge":                None if edge is None else round(edge, 4),
+        "retail_american_odds": retail_odds,
+        "sanity_check_pass":   bool(sanity_pass),
+        "odds_floor_pass":     bool(odds_pass),
+        "tier":                tier,
+        "dollar_stake":        int(stake) if stake >= 1 else None,
+        "actionable":          actionable,
+    }
+
+
+def generate_ml_scores(game_date: str = "") -> str:
+    """
+    Run all three ML scoring scripts for game_date, join with games.csv,
+    apply the Three-Part Lock + Kelly staking, write model_scores.csv,
+    and return a compact actionable summary.
+
+    Returns JSON with keys:
+      status, games_scored, actionable, tier1, tier2,
+      failed_sanity, failed_odds_floor, failed_edge,
+      actionable_picks (list of ≤N compact dicts)
+    """
+    target = game_date or date.today().isoformat()
+
+    # 1. Games + market context
+    games_path = FILES.get("games")
+    if not games_path or not Path(games_path).exists():
+        return json.dumps({"status": "ERROR",
+                           "error": "games.csv not found — Agent 1 must run first."})
+    games_df = pd.read_csv(games_path)
+    if len(games_df) == 0:
+        return json.dumps({"status": "ERROR", "error": "games.csv is empty."})
+
+    # 2. Invoke all three scorers (ML, F5, Run-Dist)
+    try:
+        ml_df  = _invoke_scorer("score_ml_today",       target)
+        rd_df  = _invoke_scorer("score_run_dist_today", target)
+        f5_df  = _invoke_scorer("score_f5_today",       target)
+    except Exception as e:
+        return json.dumps({"status": "ERROR",
+                           "error": f"Scoring inference failed: {type(e).__name__}: {e}"})
+
+    def _keyed(df: pd.DataFrame, cols: list[str]) -> dict:
+        """Index a scoring frame by (home_team, away_team) for O(1) lookup."""
+        out = {}
+        if df is None or len(df) == 0:
+            return out
+        for _, r in df.iterrows():
+            key = (str(r.get("home_team", "")).strip(),
+                   str(r.get("away_team", "")).strip())
+            out[key] = {c: _safe_float(r.get(c)) for c in cols}
+        return out
+
+    ml_by = _keyed(ml_df, ["stacker_l2"])                             # p_home_win
+    rd_by = _keyed(rd_df, ["p_over_final", "p_home_cover_final",
+                           "lam_home",     "lam_away",     "total_line"])
+    f5_by = _keyed(f5_df, ["stacker_l2"])                             # p_f5_home_cover
+
+    # 3. Build pick rows — one per market per game
+    picks: list[dict] = []
+    counters = {"sanity_fail": 0, "odds_fail": 0, "edge_fail": 0,
+                "tier1": 0, "tier2": 0, "actionable": 0}
+
+    for _, g in games_df.iterrows():
+        home       = str(g.get("home_team", "")).strip()
+        away       = str(g.get("away_team", "")).strip()
+        game_label = g.get("game_label") or f"{away} @ {home}"
+        key        = (home, away)
+
+        # ─── MODEL 1: ML (full-game moneyline) ──────────────────────────────
+        ml_row = ml_by.get(key)
+        if ml_row and ml_row.get("stacker_l2") is not None:
+            p_home = float(ml_row["stacker_l2"])
+            # Both directions evaluated — pick side with higher model prob.
+            for side, prob, p_true_col, imp_col, odds_col in [
+                ("HOME", p_home,      "P_true_home", "Retail_Implied_Prob_home", "retail_ml_home_odds"),
+                ("AWAY", 1.0 - p_home, "P_true_away", "Retail_Implied_Prob_away", "retail_ml_away_odds"),
+            ]:
+                ev = _evaluate_pick(prob,
+                                    _safe_float(g.get(p_true_col)),
+                                    _safe_float(g.get(imp_col)),
+                                    _safe_float(g.get(odds_col)))
+                picks.append({"date": target, "game": game_label,
+                              "model": "ML", "bet_type": "Moneyline",
+                              "pick_direction": side, **ev})
+
+        # ─── MODEL 2: Totals (Over / Under) ─────────────────────────────────
+        rd_row = rd_by.get(key)
+        if rd_row and rd_row.get("p_over_final") is not None:
+            p_over = float(rd_row["p_over_final"])
+            for side, prob, p_true_col, imp_col, odds_col in [
+                ("OVER",  p_over,        "P_true_over",  "Retail_Implied_Prob_over",  "retail_over_odds"),
+                ("UNDER", 1.0 - p_over,  "P_true_under", "Retail_Implied_Prob_under", "retail_under_odds"),
+            ]:
+                ev = _evaluate_pick(prob,
+                                    _safe_float(g.get(p_true_col)),
+                                    _safe_float(g.get(imp_col)),
+                                    _safe_float(g.get(odds_col)))
+                picks.append({"date": target, "game": game_label,
+                              "model": "Totals",
+                              "bet_type": f"Total {_safe_float(g.get('retail_total_line')) or rd_row.get('total_line')}",
+                              "pick_direction": side, **ev})
+
+        # ─── MODEL 3: Runline (Pinnacle-only — no retail odds yet) ──────────
+        if rd_row and rd_row.get("p_home_cover_final") is not None:
+            p_rl_home = float(rd_row["p_home_cover_final"])
+            for side, prob, p_true_col in [
+                ("HOME -1.5", p_rl_home,        "P_true_rl_home"),
+                ("AWAY +1.5", 1.0 - p_rl_home,  "P_true_rl_away"),
+            ]:
+                # No retail_rl_*_odds in games.csv schema yet → non-actionable.
+                ev = _evaluate_pick(prob, _safe_float(g.get(p_true_col)), None, None)
+                picks.append({"date": target, "game": game_label,
+                              "model": "Runline", "bet_type": "Runline -1.5",
+                              "pick_direction": side, **ev})
+
+        # ─── MODEL 4: F5 (informational — no F5 market lines in games.csv) ──
+        f5_row = f5_by.get(key)
+        if f5_row and f5_row.get("stacker_l2") is not None:
+            p_f5 = float(f5_row["stacker_l2"])
+            ev = _evaluate_pick(p_f5, None, None, None)
+            picks.append({"date": target, "game": game_label,
+                          "model": "F5", "bet_type": "F5 Home +0.5",
+                          "pick_direction": "HOME" if p_f5 >= 0.5 else "AWAY", **ev})
+
+    # 4. Tally gate-failure breakdown + tier counts
+    for p in picks:
+        if p["actionable"]:
+            counters["actionable"] += 1
+            if p["tier"] == 1: counters["tier1"] += 1
+            if p["tier"] == 2: counters["tier2"] += 1
+            continue
+        if not p["sanity_check_pass"]: counters["sanity_fail"] += 1
+        if not p["odds_floor_pass"]:   counters["odds_fail"]   += 1
+        if p["tier"] is None and p["edge"] is not None: counters["edge_fail"] += 1
+
+    # 5. Persist full frame to model_scores.csv (all picks, gates + stakes)
+    output_cols = ["date", "game", "model", "bet_type", "pick_direction",
+                   "model_prob", "P_true", "Retail_Implied_Prob", "edge",
+                   "retail_american_odds",
+                   "sanity_check_pass", "odds_floor_pass",
+                   "tier", "dollar_stake", "actionable"]
+    out_df = pd.DataFrame(picks, columns=output_cols) if picks else pd.DataFrame(columns=output_cols)
+    out_path = FILES["model_scores"]
+    out_df.to_csv(out_path, index=False)
+
+    # 6. Return compact actionable summary (LLM-safe payload)
+    actionable_picks = [
+        {k: p[k] for k in ("game", "model", "bet_type", "pick_direction",
+                           "model_prob", "P_true", "Retail_Implied_Prob",
+                           "edge", "retail_american_odds", "tier", "dollar_stake")}
+        for p in picks if p["actionable"]
+    ]
+    actionable_picks.sort(key=lambda r: (r["tier"], -(r["edge"] or 0)))
+
+    return json.dumps({
+        "status":             "OK",
+        "date":               target,
+        "games_scored":       int(len(games_df)),
+        "total_picks":        int(len(picks)),
+        "actionable":         counters["actionable"],
+        "tier1":              counters["tier1"],
+        "tier2":              counters["tier2"],
+        "failed_sanity":      counters["sanity_fail"],
+        "failed_odds_floor":  counters["odds_fail"],
+        "failed_edge":        counters["edge_fail"],
+        "model_scores_path":  str(out_path),
+        "actionable_picks":   actionable_picks,
+    })
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # AGENT 5 — Notification Tool
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -502,5 +775,5 @@ def read_tracker_stats() -> str:
     return json.dumps({
         "overall":  stats(fin),
         "by_model": {m: stats(fin[fin["model"] == m])
-                     for m in ["MFull", "MF5i", "MF3i", "MF1i", "MBat"]},
+                     for m in ["ML", "Totals", "Runline", "F5"]},
     })

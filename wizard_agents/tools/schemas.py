@@ -158,8 +158,37 @@ AGENT2_TOOLS = [
 
 AGENT3_TOOLS = [
     {
+        "name": "generate_ml_scores",
+        "description": (
+            "Run the full ML scoring pipeline for the given date. "
+            "Invokes score_ml_today (full-game moneyline), score_run_dist_today "
+            "(totals + runline), and score_f5_today (first 5 innings), joins with "
+            "games.csv, applies the Three-Part Lock (sanity check vs Pinnacle, "
+            "retail odds floor >= -225, edge >= 1.0%), computes Kelly dollar stakes "
+            "(Tier 1 Quarter-Kelly / Tier 2 Eighth-Kelly, $2000 bank, $50 cap), "
+            "writes model_scores.csv, and returns a compact JSON summary containing "
+            "ONLY the actionable picks and gate-failure counts. "
+            "This is the sole scoring tool — no external heuristic models are used."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "game_date": {
+                    "type": "string",
+                    "description": "ISO date YYYY-MM-DD. Leave empty for today.",
+                }
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "read_csv",
-        "description": "Read a pipeline CSV file (games, fangraphs_pitchers, savant_batters, etc.).",
+        "description": (
+            "Read a pipeline CSV file. Use sparingly — generate_ml_scores already "
+            "writes model_scores.csv and returns the actionable picks directly. "
+            "Use this only to spot-check games.csv (≤15 rows) if something in the "
+            "scoring summary looks off."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -167,45 +196,6 @@ AGENT3_TOOLS = [
                 "max_rows": {"type": "integer"},
             },
             "required": ["file_key"],
-        },
-    },
-    {
-        "name": "read_csv_filtered",
-        "description": (
-            "Read a pipeline CSV filtered to specific player names or team abbreviations. "
-            "USE THIS instead of read_csv for fangraphs_pitchers, fangraphs_batters, "
-            "fangraphs_team_vs_lhp, fangraphs_team_vs_rhp, savant_pitchers, and savant_batters. "
-            "Pass today's starting pitcher names in name_filter and/or today's team "
-            "abbreviations in team_filter to reduce token usage by ~90%. "
-            "NEVER call plain read_csv on these large files."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "file_key":    {"type": "string", "description": "Pipeline file key, e.g. 'fangraphs_pitchers'"},
-                "name_filter": {"type": "string", "description": "JSON array of player names, e.g. '[\"Brandon Pfaadt\",\"Taijuan Walker\"]'"},
-                "team_filter": {"type": "string", "description": "JSON array of team abbreviations, e.g. '[\"PHI\",\"ARI\",\"DET\"]'"},
-                "name_col":    {"type": "string", "description": "Column to match names against. Default: 'Name'", "default": "Name"},
-                "team_col":    {"type": "string", "description": "Column to match teams against. Default: 'Team'", "default": "Team"},
-            },
-            "required": ["file_key"],
-        },
-    },
-    {
-        "name": "write_csv",
-        "description": (
-            "Write model scoring results to model_scores.csv. "
-            "One row per pick with: date, game, model, bet_type, pick_direction, model_prob, "
-            "projected_total, market_line_dk, market_line_fd, best_book, recommended_units, actionable."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "file_key":     {"type": "string"},
-                "records_json": {"type": "string"},
-                "mode":         {"type": "string", "enum": ["w", "a"], "default": "w"},
-            },
-            "required": ["file_key", "records_json"],
         },
     },
 ]
@@ -304,7 +294,7 @@ AGENT6_TOOLS = [
             "properties": {
                 "date":        {"type": "string", "description": "YYYY-MM-DD"},
                 "game":        {"type": "string", "description": "'AWAY @ HOME'"},
-                "model":       {"type": "string", "enum": ["MFull", "MF5i", "MF3i", "MF1i", "MBat"]},
+                "model":       {"type": "string", "enum": ["ML", "Totals", "Runline", "F5"]},
                 "bet_type":    {"type": "string", "description": "e.g. 'Under 8.0'"},
                 "model_prob":  {"type": "number", "description": "Probability as float, e.g. 69.5"},
                 "market_line": {"type": "string", "description": "e.g. '-110', '+115'"},

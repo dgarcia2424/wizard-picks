@@ -75,8 +75,9 @@ def _lambdas(params, idx_h, idx_a):
     att_a = params["attack"][idx_a]
     def_h = params["defense"][idx_h]
     hfa   = params["hfa"]
-    lam_h = jnp.exp(att_h + def_a + hfa)
-    lam_a = jnp.exp(att_a + def_h)
+    mu    = params["mu"]
+    lam_h = jnp.exp(mu + att_h + def_a + hfa)
+    lam_a = jnp.exp(mu + att_a + def_h)
     return lam_h, lam_a
 
 
@@ -147,9 +148,11 @@ class DixonColesMLB:
 
         mean_h = float(df["home_runs"].mean())
         mean_a = float(df["away_runs"].mean())
-        hfa0   = np.log(max(mean_h / max(mean_a, _EPS), _EPS)) * 0.5
+        mu0    = float(np.log(max((mean_h + mean_a) / 2.0, _EPS)))
+        hfa0   = float(np.log(max(mean_h / max(mean_a, _EPS), _EPS)))
 
         params = {
+            "mu":      jnp.asarray(mu0,  dtype=jnp.float32),
             "attack":  jnp.zeros(N, dtype=jnp.float32),
             "defense": jnp.zeros(N, dtype=jnp.float32),
             "hfa":     jnp.asarray(hfa0, dtype=jnp.float32),
@@ -176,6 +179,7 @@ class DixonColesMLB:
             if verbose and (i % max(1, self.n_iter // 10) == 0 or i == self.n_iter - 1):
                 rho_now = float(_RHO_MAX * np.tanh(float(params["rho_raw"])))
                 print(f"  DC iter {i:5d}  nll={float(loss):12.2f}  "
+                      f"mu={float(params['mu']):+.4f}  "
                       f"hfa={float(params['hfa']):+.4f}  rho={rho_now:+.4f}")
 
         self.teams_    = teams
@@ -192,14 +196,15 @@ class DixonColesMLB:
     def lambdas(self, home_team: str, away_team: str) -> tuple[float, float]:
         self._require_fit()
         p = self.params_
+        mu = float(p["mu"])
         if home_team in self.team_idx_ and away_team in self.team_idx_:
             ih = self.team_idx_[home_team]
             ia = self.team_idx_[away_team]
-            lam_h = float(np.exp(p["attack"][ih] + p["defense"][ia] + p["hfa"]))
-            lam_a = float(np.exp(p["attack"][ia] + p["defense"][ih]))
+            lam_h = float(np.exp(mu + p["attack"][ih] + p["defense"][ia] + p["hfa"]))
+            lam_a = float(np.exp(mu + p["attack"][ia] + p["defense"][ih]))
             return lam_h, lam_a
-        lam_h = float(np.exp(p["hfa"]))
-        lam_a = 1.0
+        lam_h = float(np.exp(mu + p["hfa"]))
+        lam_a = float(np.exp(mu))
         return lam_h, lam_a
 
     def rho(self) -> float:
