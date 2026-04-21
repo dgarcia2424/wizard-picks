@@ -1,0 +1,25 @@
+======================================================================
+F5 HYBRID STACKER - 2025 holdout
+======================================================================
+Val rows (joined):   2436
+Base rate f5_cover:  0.6145
+
+Model                                    Brier   LogLoss     AUC    MeanP
+production_incumbent_xgb_cal            0.2235    0.6383  0.6418   0.5872
+production_incumbent_stacker            0.2212    0.6329  0.6533   0.5883
+retrained_xgb_binary                    0.2360    0.6698  0.6096   0.5958
+retrained_poisson_raw                   0.2241    0.6400  0.6401   0.6282
+hybrid_simple (bin+poi logits)          0.2258    0.6430  0.6375   0.5781
+hybrid_full (logits+lambdas)            0.2257    0.6431  0.6377   0.5791
+
+----------------------------------------------------------------------
+INTERPRETATION
+----------------------------------------------------------------------
+  Same features, same 2024 training data, three targets:
+    binary classifier:  Brier=0.2360
+    dual Poisson:       Brier=0.2241
+    hybrid (binary+poi logits):            0.2258  (delta vs binary -0.0102)
+    hybrid (binary+poi logits + lambdas):  0.2257  (delta vs binary -0.0103)
+
+  If hybrid Brier < binary Brier, the distributional signal adds
+  independent information beyond what the binary classifier captured.
