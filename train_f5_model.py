@@ -217,7 +217,61 @@ F5_STACKING_FEATURES = [
     "mc_f5_expected_total",    # low-total games → high tie rate → cover probability up
     "team_f5_log_odds",        # logit(p_home) - logit(p_away): tie-safe relative strength
     "rolling_f5_tie_rate",     # observed 30-day F5 tie rate: environmental base-rate signal
+    # Dual-Poisson challenger features (OOF during stacker training; refit-on-full-train at scoring).
+    # See hybrid_stacker_f5.py for the standalone validation showing the distributional
+    # target carries signal the binary classifier misses (~0.012 Brier gain in isolation).
+    "pois_lam_home",           # predicted home F5 runs (Poisson regression)
+    "pois_lam_away",           # predicted away F5 runs (Poisson regression)
+    "pois_p_cover",            # P(home_runs >= away_runs) from convolution of the two Poissons
 ]
+
+
+# ---------------------------------------------------------------------------
+# DUAL-POISSON CHALLENGER FEATURES (STACKER SIDECAR)
+# ---------------------------------------------------------------------------
+# These Poisson regressors run alongside the binary XGBoost to produce
+# distributional features (lam_home, lam_away, p_cover) that feed the
+# Bayesian stacker. They never replace the binary model — they augment it.
+
+POISSON_XGB_PARAMS = {
+    "objective":        "count:poisson",
+    "eval_metric":      "poisson-nloglik",
+    "tree_method":      "hist",
+    "max_depth":        5,
+    "learning_rate":    0.05,
+    "subsample":        0.85,
+    "colsample_bytree": 0.85,
+    "min_child_weight": 5,
+    "reg_lambda":       1.0,
+    "max_delta_step":   0.7,
+}
+POISSON_N_ROUNDS_HOME = 85    # from challenger training best_iter
+POISSON_N_ROUNDS_AWAY = 215   # away runs fit a little longer
+_POISSON_MAX_RUNS     = 20    # convolution truncation
+
+
+def _train_poisson_booster(X_tr: np.ndarray, y_tr: np.ndarray,
+                           n_rounds: int) -> "xgb.Booster":
+    import xgboost as _xgb_lib
+    dtr = _xgb_lib.DMatrix(X_tr, label=y_tr)
+    return _xgb_lib.train(POISSON_XGB_PARAMS, dtr, num_boost_round=n_rounds,
+                          verbose_eval=False)
+
+
+def _poisson_predict(booster, X: np.ndarray) -> np.ndarray:
+    import xgboost as _xgb_lib
+    return booster.predict(_xgb_lib.DMatrix(X))
+
+
+def _prob_home_cover_from_lambdas(lam_home: np.ndarray,
+                                  lam_away: np.ndarray) -> np.ndarray:
+    """P(home_runs >= away_runs) under independent Poisson(lam_home), Poisson(lam_away)."""
+    from scipy.stats import poisson as _poisson
+    k = np.arange(_POISSON_MAX_RUNS + 1)
+    pmf_home = _poisson.pmf(k[None, :], mu=lam_home[:, None])
+    pmf_away = _poisson.pmf(k[None, :], mu=lam_away[:, None])
+    cdf_away = np.cumsum(pmf_away, axis=1)
+    return (pmf_home * cdf_away).sum(axis=1)
 
 # Fixed probability bins for calibration reliability diagrams.
 # Using pd.cut (equal-width) rather than pd.qcut (equal-frequency) so that
@@ -838,6 +892,9 @@ def _generate_oof_for_stacker(
     n = len(train_df)
     oof_probs      = np.zeros(n, dtype=float)
     oof_team_logodds = np.zeros(n, dtype=float)
+    oof_lam_home   = np.zeros(n, dtype=float)
+    oof_lam_away   = np.zeros(n, dtype=float)
+    oof_p_cover_poi = np.zeros(n, dtype=float)
     oof_labels     = train_df["f5_home_cover"].values.astype(int)
 
     # year_to_positions: integer row indices into train_df for each year
@@ -884,22 +941,44 @@ def _generate_oof_for_stacker(
 
         lo_fold = _compute_log_odds_ratio(p_h, p_a)
 
+        # ── Dual-Poisson OOF (sidecar challenger) ──────────────────────────
+        # Train two count:poisson regressors on the same features; predict val
+        # fold's home + away F5 runs. The convolved P(home >= away) and the
+        # two lambdas get passed through as stacker domain features.
+        y_hr_tr = tr["f5_home_runs"].astype(float).values
+        y_ar_tr = tr["f5_away_runs"].astype(float).values
+        bst_hr  = _train_poisson_booster(X_tr, y_hr_tr, POISSON_N_ROUNDS_HOME)
+        bst_ar  = _train_poisson_booster(X_tr, y_ar_tr, POISSON_N_ROUNDS_AWAY)
+        lam_h_fold = _poisson_predict(bst_hr, X_va)
+        lam_a_fold = _poisson_predict(bst_ar, X_va)
+        p_cov_fold = _prob_home_cover_from_lambdas(lam_h_fold, lam_a_fold)
+
         # Write both back to aligned positions in the combined OOF arrays
         pos = year_pos[val_yr]
         oof_probs[pos]        = raw
         oof_team_logodds[pos] = lo_fold
+        oof_lam_home[pos]     = lam_h_fold
+        oof_lam_away[pos]     = lam_a_fold
+        oof_p_cover_poi[pos]  = p_cov_fold
 
         auc_xgb  = roc_auc_score(y_va, raw)
         auc_team = roc_auc_score(y_va, lo_fold)   # rank-order AUC on log-odds
-        print(f"    {label}: n={len(va):,}  XGB-AUC={auc_xgb:.4f}  team-logodds-AUC={auc_team:.4f}")
+        auc_poi  = roc_auc_score(y_va, p_cov_fold)
+        print(f"    {label}: n={len(va):,}  XGB-AUC={auc_xgb:.4f}  "
+              f"team-logodds-AUC={auc_team:.4f}  poi-AUC={auc_poi:.4f}")
 
     overall_auc  = roc_auc_score(oof_labels, oof_probs)
     overall_team = roc_auc_score(oof_labels, oof_team_logodds)
-    print(f"  [OOF] Combined: n={n:,}  XGB={overall_auc:.4f}  team-logodds={overall_team:.4f}")
+    overall_poi  = roc_auc_score(oof_labels, oof_p_cover_poi)
+    print(f"  [OOF] Combined: n={n:,}  XGB={overall_auc:.4f}  "
+          f"team-logodds={overall_team:.4f}  poi={overall_poi:.4f}")
 
-    # Attach log-odds column so stacker can pick up "team_f5_log_odds"
+    # Attach stacker-facing columns so the stacker can pick them up by name.
     train_df = train_df.copy()
     train_df["team_f5_log_odds"] = oof_team_logodds
+    train_df["pois_lam_home"]    = oof_lam_home
+    train_df["pois_lam_away"]    = oof_lam_away
+    train_df["pois_p_cover"]     = oof_p_cover_poi
 
     oof_segs = _derive_segment_id(train_df)
     return oof_probs, oof_labels, train_df, oof_segs
@@ -1113,6 +1192,32 @@ def train_default(df: pd.DataFrame, feat_cols: list[str]):
     print(f"  Team log-odds on 2025: AUC={auc_team_val:.4f}  "
           f"range=[{log_odds_val.min():.2f}, {log_odds_val.max():.2f}]")
 
+    # ── Dual-Poisson sidecar: train on full 2023+2024, score 2025 val ────────
+    # Provides the three distributional stacker features: pois_lam_home,
+    # pois_lam_away, pois_p_cover. Saved boosters are used at inference by
+    # score_f5_today.py.
+    print("\n[3c2] Dual-Poisson sidecar: training on 2023+2024 → scoring 2025 …")
+    X_tr_poi = X_tr   # same feature matrix the binary XGB used
+    y_hr_tr  = train["f5_home_runs"].astype(float).values
+    y_ar_tr  = train["f5_away_runs"].astype(float).values
+    bst_hr_full = _train_poisson_booster(X_tr_poi, y_hr_tr, POISSON_N_ROUNDS_HOME)
+    bst_ar_full = _train_poisson_booster(X_tr_poi, y_ar_tr, POISSON_N_ROUNDS_AWAY)
+    lam_h_val = _poisson_predict(bst_hr_full, X_val)
+    lam_a_val = _poisson_predict(bst_ar_full, X_val)
+    p_cov_val = _prob_home_cover_from_lambdas(lam_h_val, lam_a_val)
+    val["pois_lam_home"] = lam_h_val
+    val["pois_lam_away"] = lam_a_val
+    val["pois_p_cover"]  = p_cov_val
+    auc_poi_val = roc_auc_score(y_val, p_cov_val)
+    print(f"  Poisson p_cover on 2025: AUC={auc_poi_val:.4f}  "
+          f"mean lam_home={lam_h_val.mean():.3f}  lam_away={lam_a_val.mean():.3f}")
+
+    # Persist boosters for inference (score_f5_today.py).
+    bst_hr_full.save_model(str(MODELS_DIR / "f5_pois_home.json"))
+    bst_ar_full.save_model(str(MODELS_DIR / "f5_pois_away.json"))
+    print(f"  Poisson boosters   → {MODELS_DIR / 'f5_pois_home.json'}")
+    print(f"                     → {MODELS_DIR / 'f5_pois_away.json'}")
+
     # ── Bayesian Hierarchical Stacker (Level-2) ──────────────────────────────
     print("\n[3d] Training Bayesian Hierarchical Stacker (Level-2) …")
     stacker = train_f5_stacker(oof_probs, oof_df, oof_labels, oof_segs)
@@ -1239,6 +1344,17 @@ def train_final(df: pd.DataFrame, feat_cols: list[str], with_2026: bool = False)
     json.dump(team_feat_cols, open(OUTPUT_TEAM_FEAT_COLS, "w"), indent=2)
     print(f"  Team model     → {OUTPUT_TEAM_MODEL}")
     print(f"  Team feat cols → {OUTPUT_TEAM_FEAT_COLS}")
+
+    # ── [4c] Dual-Poisson sidecar: final boosters on all data ─────────────
+    print("  [4c] Training Poisson sidecars on all data …")
+    y_hr = final_df["f5_home_runs"].astype(float).values
+    y_ar = final_df["f5_away_runs"].astype(float).values
+    bst_hr_final = _train_poisson_booster(X, y_hr, POISSON_N_ROUNDS_HOME)
+    bst_ar_final = _train_poisson_booster(X, y_ar, POISSON_N_ROUNDS_AWAY)
+    bst_hr_final.save_model(str(MODELS_DIR / "f5_pois_home.json"))
+    bst_ar_final.save_model(str(MODELS_DIR / "f5_pois_away.json"))
+    print(f"  Poisson boosters → {MODELS_DIR / 'f5_pois_home.json'}")
+    print(f"                   → {MODELS_DIR / 'f5_pois_away.json'}")
 
     return model, cal
 
