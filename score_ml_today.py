@@ -1,19 +1,19 @@
 """
-score_f5_today.py
+score_ml_today.py
 =================
-Score today's games with the full two-level F5 stack:
+Score today's games with the full two-level ML (moneyline) stack:
 
   L1: XGBoost + OOF-fitted Platt calibration
   L2: Bayesian Hierarchical Stacker
         inputs: XGB raw prob (logit), SP diffs, matchup edge,
-                MC physics, team log-odds ratio, rolling tie rate
+                bullpen diffs, team log-odds ratio, rolling ML form
 
 Outputs L1 and L2 probabilities side-by-side, and compares to actual
-F5 outcomes if actuals_2026.parquet contains today's data.
+home-win outcomes when actuals_2026.parquet contains today's data.
 
 Usage:
-  python score_f5_today.py
-  python score_f5_today.py --date 2026-04-19
+  python score_ml_today.py
+  python score_ml_today.py --date 2026-04-21
 """
 
 import argparse
@@ -32,11 +32,11 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf_8")
     import io
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
-# Import helpers from train_f5_model (stacker class, flip utils, log-odds)
+# Re-use helpers from train_ml_model (stacker class, flip utils, log-odds)
 sys.path.insert(0, str(Path(__file__).parent))
-from train_f5_model import (
-    BayesianStackerF5,
-    F5_STACKING_FEATURES,
+from train_ml_model import (
+    BayesianStackerML,
+    ML_STACKING_FEATURES,
     _compute_log_odds_ratio,
     _derive_segment_id,
     _flip_team_perspective,
@@ -50,12 +50,12 @@ DATA_DIR        = BASE_DIR / "data" / "statcast"
 MODELS_DIR      = BASE_DIR / "models"
 FEAT_MATRIX     = BASE_DIR / "feature_matrix_enriched_v2.parquet"
 
-FEAT_COLS_PATH  = MODELS_DIR / "f5_feature_cols.json"
-XGB_F5_PATH     = MODELS_DIR / "xgb_f5.json"
-XGB_CAL_PATH    = MODELS_DIR / "xgb_f5_calibrator.pkl"
-STACKER_PATH    = MODELS_DIR / "stacking_lr_f5.pkl"
-TEAM_MODEL_PATH = MODELS_DIR / "team_f5_model.json"
-TEAM_FEAT_PATH  = MODELS_DIR / "team_f5_feat_cols.json"
+FEAT_COLS_PATH  = MODELS_DIR / "ml_feature_cols.json"
+XGB_ML_PATH     = MODELS_DIR / "xgb_ml.json"
+XGB_CAL_PATH    = MODELS_DIR / "xgb_ml_calibrator.pkl"
+STACKER_PATH    = MODELS_DIR / "stacking_lr_ml.pkl"
+TEAM_MODEL_PATH = MODELS_DIR / "team_ml_model.json"
+TEAM_FEAT_PATH  = MODELS_DIR / "team_ml_feat_cols.json"
 ACTUALS_2026    = DATA_DIR   / "actuals_2026.parquet"
 
 
@@ -64,76 +64,43 @@ ACTUALS_2026    = DATA_DIR   / "actuals_2026.parquet"
 # ---------------------------------------------------------------------------
 
 def load_models():
-    """Load all model artifacts — raises clear errors if anything is missing."""
-    for p in [FEAT_COLS_PATH, XGB_F5_PATH, XGB_CAL_PATH, STACKER_PATH,
+    for p in [FEAT_COLS_PATH, XGB_ML_PATH, XGB_CAL_PATH, STACKER_PATH,
               TEAM_MODEL_PATH, TEAM_FEAT_PATH]:
         if not p.exists():
             raise FileNotFoundError(
                 f"Missing model file: {p}\n"
-                "Run: python train_f5_model.py --matrix feature_matrix_with_2026.parquet --with-2026"
+                "Run: python train_ml_model.py --matrix feature_matrix_enriched_v2.parquet --with-2026"
             )
 
     feat_cols      = json.load(open(FEAT_COLS_PATH))
     team_feat_cols = json.load(open(TEAM_FEAT_PATH))
 
     xgb_model = xgb.XGBClassifier()
-    xgb_model.load_model(str(XGB_F5_PATH))
+    xgb_model.load_model(str(XGB_ML_PATH))
 
     team_model = xgb.XGBClassifier()
     team_model.load_model(str(TEAM_MODEL_PATH))
 
     cal = pickle.load(open(XGB_CAL_PATH, "rb"))
 
-    # Stacker pickle was saved when train_f5_model was __main__, so
-    # BayesianStackerF5 is stored as __main__.BayesianStackerF5.
-    # Inject the class into __main__ before unpickling so it resolves
-    # regardless of which module is currently __main__.
-    import sys as _sys
+    # Stacker pickle may reference __main__.BayesianStackerML (if saved while
+    # train_ml_model was __main__). Inject the class before unpickling.
     import __main__ as _main
-    if not hasattr(_main, "BayesianStackerF5"):
-        _main.BayesianStackerF5 = BayesianStackerF5
+    if not hasattr(_main, "BayesianStackerML"):
+        _main.BayesianStackerML = BayesianStackerML
     stacker = pickle.load(open(STACKER_PATH, "rb"))
 
     return xgb_model, cal, feat_cols, stacker, team_model, team_feat_cols
 
 
 # ---------------------------------------------------------------------------
-# ROLLING TIE RATE
+# ROLLING ML FORM
 # ---------------------------------------------------------------------------
 
-def get_rolling_tie_rate(date_str: str) -> float:
+def compute_rolling_adj_ml_form_today(date_str: str, fm: pd.DataFrame) -> dict[str, float]:
     """
-    Compute the 30-day F5 tie rate using games BEFORE date_str (no look-ahead).
-    Falls back to historical mean (~0.095) when actuals are unavailable or sparse.
-    """
-    _FALLBACK = 0.095
-
-    if not ACTUALS_2026.exists():
-        return _FALLBACK
-
-    act = pd.read_parquet(ACTUALS_2026)
-    act["game_date"] = pd.to_datetime(act["game_date"])
-    cutoff           = pd.to_datetime(date_str)
-    window_start     = cutoff - pd.Timedelta(days=30)
-    window           = act[(act["game_date"] >= window_start) &
-                           (act["game_date"] <  cutoff)]
-
-    if len(window) < 10:
-        return _FALLBACK
-
-    if "f5_tie" in window.columns:
-        return float(window["f5_tie"].mean())
-    if "f5_home_runs" in window.columns and "f5_away_runs" in window.columns:
-        return float((window["f5_home_runs"] == window["f5_away_runs"]).mean())
-
-    return _FALLBACK
-
-
-def compute_rolling_adj_f5_form_today(date_str: str, fm: pd.DataFrame) -> dict[str, float]:
-    """
-    Compute rolling 15-game capped opp-adjusted F5 form for each team as of date_str.
-    Mirrors _compute_rolling_adj_f5_form() in train_f5_model.py.
-    Uses actuals_2026.parquet for F5 outcomes + feature matrix for MC expectations.
+    Rolling 15-game opp-adjusted ML form per team as of date_str.
+    Mirrors _compute_rolling_adj_ml_form() in train_ml_model.py.
     Returns {team: form_value}. Fallback = 0.0 (neutral).
     """
     if not ACTUALS_2026.exists():
@@ -143,12 +110,16 @@ def compute_rolling_adj_f5_form_today(date_str: str, fm: pd.DataFrame) -> dict[s
     act["game_date"] = pd.to_datetime(act["game_date"])
     cutoff = pd.to_datetime(date_str)
 
-    # Only games before today
     hist = act[act["game_date"] < cutoff].copy()
     if len(hist) == 0:
         return {}
 
-    # Get MC expectation columns from feature matrix
+    # Derive home_win from final scores
+    if "home_score_final" in hist.columns and "away_score_final" in hist.columns:
+        hist["home_win"] = (hist["home_score_final"] > hist["away_score_final"]).astype(int)
+    else:
+        return {}
+
     mc_cols = [c for c in ["game_pk", "mc_f5_home_win_pct", "mc_f5_away_win_pct"]
                if c in fm.columns]
     if len(mc_cols) == 3:
@@ -161,23 +132,19 @@ def compute_rolling_adj_f5_form_today(date_str: str, fm: pd.DataFrame) -> dict[s
     hist["mc_f5_home_win_pct"] = hist["mc_f5_home_win_pct"].fillna(0.5)
     hist["mc_f5_away_win_pct"] = hist["mc_f5_away_win_pct"].fillna(0.5)
 
-    # Per-game adj scores
-    raw_margin   = (hist["f5_home_runs"] - hist["f5_away_runs"]).astype(float)
-    capped       = raw_margin.clip(-4, 4)
-    mc_exp       = hist["mc_f5_home_win_pct"] - hist["mc_f5_away_win_pct"]
-    hist["adj_home"] = capped - mc_exp
-    hist["adj_away"] = -hist["adj_home"]
+    # Per-game adj scores (residual vs Poisson expectation)
+    adj_home = hist["home_win"].astype(float) - hist["mc_f5_home_win_pct"]
+    adj_away = (1.0 - hist["home_win"].astype(float)) - hist["mc_f5_away_win_pct"]
 
-    # Long format
     home_long = pd.DataFrame({
         "game_date": hist["game_date"],
         "team":      hist["home_team"],
-        "adj":       hist["adj_home"].values,
+        "adj":       adj_home.values,
     })
     away_long = pd.DataFrame({
         "game_date": hist["game_date"],
         "team":      hist["away_team"],
-        "adj":       hist["adj_away"].values,
+        "adj":       adj_away.values,
     })
     long_df = pd.concat([home_long, away_long], ignore_index=True)
 
@@ -189,7 +156,6 @@ def compute_rolling_adj_f5_form_today(date_str: str, fm: pd.DataFrame) -> dict[s
             result[team] = float(recent["adj"].mean())
         else:
             result[team] = global_mean
-
     return result
 
 
@@ -198,7 +164,6 @@ def compute_rolling_adj_f5_form_today(date_str: str, fm: pd.DataFrame) -> dict[s
 # ---------------------------------------------------------------------------
 
 def get_todays_games(date_str: str) -> pd.DataFrame:
-    """Load today's lineup parquet (falls back to lineups_today.parquet)."""
     lineup_path = DATA_DIR / f"lineups_{date_str}.parquet"
     if lineup_path.exists():
         lineups = pd.read_parquet(lineup_path)
@@ -230,7 +195,8 @@ def build_game_feature_row(
     """
     Build a feature vector for today's game using the most recent historical
     row for the home team, with SP features overwritten from each pitcher's
-    most recent appearance.
+    most recent appearance.  Bullpen features carry over from the base row
+    since they're pre-computed in feature_matrix_enriched_v2.parquet.
     """
     fm_sorted = fm[fm["home_team"] == home_team].sort_values("game_date")
     if len(fm_sorted) == 0:
@@ -238,7 +204,7 @@ def build_game_feature_row(
 
     base = fm_sorted.iloc[-1].copy()
 
-    # ── Home SP features ─────────────────────────────────────────────────
+    # Home SP
     if home_sp_name and not pd.isna(home_sp_name):
         sp_up = home_sp_name.upper().strip()
         rows  = fm[fm["home_starter_name"].str.upper().str.strip() == sp_up]
@@ -251,12 +217,11 @@ def build_game_feature_row(
                     if c.startswith("home_sp_") and not c.endswith("diff"):
                         base[c] = sp_row.get(c, base.get(c))
             else:
-                # SP appeared as away in the historical row — mirror away→home
                 for c in feat_cols:
                     if c.startswith("home_sp_") and not c.endswith("diff"):
                         base[c] = sp_row.get("away_sp_" + c[8:], base.get(c))
 
-    # ── Away SP features ─────────────────────────────────────────────────
+    # Away SP
     if away_sp_name and not pd.isna(away_sp_name):
         sp_up = away_sp_name.upper().strip()
         rows  = fm[fm["away_starter_name"].str.upper().str.strip() == sp_up]
@@ -269,12 +234,11 @@ def build_game_feature_row(
                     if c.startswith("away_sp_") and not c.endswith("diff"):
                         base[c] = sp_row.get(c, base.get(c))
             else:
-                # SP appeared as home — mirror home→away
                 for c in feat_cols:
                     if c.startswith("away_sp_") and not c.endswith("diff"):
                         base[c] = sp_row.get("home_sp_" + c[8:], base.get(c))
 
-    # ── Recompute SP diff features ────────────────────────────────────────
+    # Recompute SP diff features
     for dc in ["sp_k_pct_diff", "sp_xwoba_diff", "sp_xrv_diff", "sp_velo_diff",
                "sp_age_diff", "sp_kminusbb_diff", "sp_k_pct_10d_diff",
                "sp_xwoba_10d_diff", "sp_bb_pct_10d_diff"]:
@@ -286,7 +250,7 @@ def build_game_feature_row(
             except (TypeError, ValueError):
                 pass
 
-    # ── Schedule features ─────────────────────────────────────────────────
+    # Schedule features
     import datetime as _dt
     d = _dt.datetime.strptime(date_str, "%Y-%m-%d")
     if "game_month" in base.index:
@@ -308,19 +272,11 @@ def compute_team_log_odds(
     team_feat_cols: list,
 ) -> float:
     """
-    Compute team_f5_log_odds = logit(p_home) - logit(p_away).
-
-    Runs the doubled-dataset team model on:
-      - home perspective (is_home=1, original features)
-      - away perspective (is_home=0, flipped home/away features)
-
-    The log-odds difference is tie-safe: on +0.5 lines both p_home and
-    p_away are elevated by ties, but the log-odds difference cancels out
-    the tie inflation and isolates the relative home/away strength signal.
+    Compute team_ml_log_odds = logit(p_home) - logit(p_away) via the
+    doubled-dataset team model run on both perspectives.
     """
     row_df = pd.DataFrame([feat_row])
 
-    # Home perspective
     row_home = row_df.copy()
     row_home["is_home"] = 1
     for c in team_feat_cols:
@@ -330,7 +286,6 @@ def compute_team_log_odds(
         row_home[team_feat_cols].fillna(0).values.astype(np.float32)
     )[0, 1]
 
-    # Away perspective — flip home_X ↔ away_X, negate diffs
     row_flip = _flip_team_perspective(row_df, feat_cols)
     row_flip["is_home"] = 0
     for c in team_feat_cols:
@@ -348,7 +303,6 @@ def compute_team_log_odds(
 # ---------------------------------------------------------------------------
 
 def predict_games(date_str: str) -> pd.DataFrame:
-    """Score all games on date_str and print L1 + L2 predictions."""
     print(f"Loading models …")
     xgb_model, cal, feat_cols, stacker, team_model, team_feat_cols = load_models()
 
@@ -356,21 +310,23 @@ def predict_games(date_str: str) -> pd.DataFrame:
     fm = pd.read_parquet(FEAT_MATRIX)
     fm["game_date"] = pd.to_datetime(fm["game_date"])
 
-    rolling_tie = get_rolling_tie_rate(date_str)
-    print(f"Rolling 30-day F5 tie rate: {rolling_tie:.4f}")
-
-    form_dict   = compute_rolling_adj_f5_form_today(date_str, fm)
+    form_dict   = compute_rolling_adj_ml_form_today(date_str, fm)
     form_global = float(np.mean(list(form_dict.values()))) if form_dict else 0.0
-    print(f"Rolling adj F5 form: {len(form_dict)} teams  global_mean={form_global:.4f}")
+    print(f"Rolling adj ML form: {len(form_dict)} teams  global_mean={form_global:.4f}")
 
     lineups = get_todays_games(date_str)
     print(f"\n{len(lineups)} games scheduled for {date_str}\n")
 
-    # Load actual outcomes if available (for post-game comparison)
+    # Load actuals for post-game comparison
     actuals = {}
     if ACTUALS_2026.exists():
         act = pd.read_parquet(ACTUALS_2026)
-        for _, r in act[act["game_date"].astype(str).str.startswith(date_str)].iterrows():
+        act_today = act[act["game_date"].astype(str).str.startswith(date_str)].copy()
+        if "home_score_final" in act_today.columns and "away_score_final" in act_today.columns:
+            act_today["home_win"] = (
+                act_today["home_score_final"] > act_today["away_score_final"]
+            ).astype(int)
+        for _, r in act_today.iterrows():
             actuals[r["game_pk"]] = r
 
     rows = []
@@ -392,15 +348,15 @@ def predict_games(date_str: str) -> pd.DataFrame:
             })
             continue
 
-        # Inject rolling adj F5 form features
+        # Inject rolling ML form
         home_form = form_dict.get(home, form_global)
         away_form = form_dict.get(away, form_global)
         feat = feat.copy()
-        feat["home_rolling_adj_f5_form"] = home_form
-        feat["away_rolling_adj_f5_form"] = away_form
-        feat["rolling_adj_f5_form_diff"] = home_form - away_form
+        feat["home_rolling_adj_ml_form"] = home_form
+        feat["away_rolling_adj_ml_form"] = away_form
+        feat["rolling_ml_form_diff"]     = home_form - away_form
 
-        # ── L1: XGBoost + OOF-fitted Platt ───────────────────────────────
+        # ── L1 feature slice + validation ────────────────────────────────
         feat_df = pd.DataFrame([feat[feat_cols].fillna(0)], columns=feat_cols)
 
         # --- START VALIDATION BLOCK ---
@@ -410,19 +366,17 @@ def predict_games(date_str: str) -> pd.DataFrame:
         assert not feat_df[expected_cols].isnull().any().any(), "Pruning introduced unexpected NaNs."
         # --- END VALIDATION BLOCK ---
 
-        X_l1 = feat_df.values.astype(np.float32)
+        X_l1  = feat_df.values.astype(np.float32)
         raw   = xgb_model.predict_proba(X_l1)[0, 1]
         cal_p = cal.predict_proba([[raw]])[0, 1]
 
-        # ── Team log-odds (stacker domain feature) ────────────────────────
+        # ── Team log-odds (stacker domain feature) ───────────────────────
         team_lo = compute_team_log_odds(feat, feat_cols, team_model, team_feat_cols)
 
-        # ── L2: Bayesian Hierarchical Stacker ─────────────────────────────
-        # Augment the feature Series with the two stacker-only columns,
-        # then build a 1-row DataFrame for the stacker's _build_X_domain().
+        # ── L2 Bayesian Stacker ──────────────────────────────────────────
         feat_aug = feat.copy()
-        feat_aug["team_f5_log_odds"]    = team_lo
-        feat_aug["rolling_f5_tie_rate"] = rolling_tie
+        feat_aug["team_ml_log_odds"]    = team_lo
+        feat_aug["rolling_ml_form_diff"] = home_form - away_form
         feat_row_df = pd.DataFrame([feat_aug])
 
         seg   = _derive_segment_id(feat_row_df)
@@ -430,22 +384,20 @@ def predict_games(date_str: str) -> pd.DataFrame:
 
         act_row = actuals.get(gk, {})
         rows.append({
-            "home_team":           home,
-            "away_team":           away,
-            "home_sp":             home_sp,
-            "away_sp":             away_sp,
-            "xgb_l1":              round(cal_p,  3),
-            "stacker_l2":          round(stk_p,  3),
-            "team_log_odds":       round(team_lo, 3),
-            "actual_f5_home":      act_row.get("f5_home_runs"),
-            "actual_f5_away":      act_row.get("f5_away_runs"),
-            "actual_f5_win":       act_row.get("f5_home_win"),
+            "home_team":         home,
+            "away_team":         away,
+            "home_sp":           home_sp,
+            "away_sp":           away_sp,
+            "xgb_l1":            round(cal_p,  3),
+            "stacker_l2":        round(stk_p,  3),
+            "team_log_odds":     round(team_lo, 3),
+            "actual_home_win":   act_row.get("home_win"),
         })
 
     df = pd.DataFrame(rows)
 
     # ── Print table ───────────────────────────────────────────────────────
-    has_actuals = df["actual_f5_win"].notna().any()
+    has_actuals = df["actual_home_win"].notna().any()
     print(f"  {'Away':6s}  @  {'Home':6s}  {'Away SP':22s}  {'Home SP':22s}  "
           f"{'L1%':6s}  {'L2%':6s}  {'LogOdds':>8s}",
           end="  Actual\n" if has_actuals else "\n")
@@ -458,9 +410,7 @@ def predict_games(date_str: str) -> pd.DataFrame:
             print(f"  {r['away_team']:6s}  @  {r['home_team']:6s}  — no features available —")
             continue
 
-        l1 = r["xgb_l1"]
-        l2 = r["stacker_l2"]
-        lo = r["team_log_odds"]
+        l1 = r["xgb_l1"]; l2 = r["stacker_l2"]; lo = r["team_log_odds"]
         pred_l1 = "HOME" if l1 >= 0.50 else "AWAY"
         pred_l2 = "HOME" if l2 >= 0.50 else "AWAY"
 
@@ -468,17 +418,15 @@ def predict_games(date_str: str) -> pd.DataFrame:
                 f"{str(r['away_sp']):22s}  {str(r['home_sp']):22s}  "
                 f"{l1:6.1%}  {l2:6.1%}  {lo:>+8.3f}")
 
-        if has_actuals and r["actual_f5_win"] is not None:
-            hr     = int(r["actual_f5_home"])
-            ar     = int(r["actual_f5_away"])
-            covers = int(hr >= ar)   # home covers +0.5 iff home_runs >= away_runs
-            result = "HOME" if r["actual_f5_win"] == 1 else ("TIE" if hr == ar else "AWAY")
-            c1 = "+" if (pred_l1 == "HOME") == bool(covers) else "-"
-            c2 = "+" if (pred_l2 == "HOME") == bool(covers) else "-"
+        if has_actuals and r["actual_home_win"] is not None and not pd.isna(r["actual_home_win"]):
+            hw = int(r["actual_home_win"])
+            result = "HOME" if hw == 1 else "AWAY"
+            c1 = "+" if (pred_l1 == "HOME") == bool(hw) else "-"
+            c2 = "+" if (pred_l2 == "HOME") == bool(hw) else "-"
             total_games += 1
-            correct_l1  += int((pred_l1 == "HOME") == bool(covers))
-            correct_l2  += int((pred_l2 == "HOME") == bool(covers))
-            line += f"  {ar}–{hr} F5  {result:4s}  L1:{c1} L2:{c2}"
+            correct_l1  += int((pred_l1 == "HOME") == bool(hw))
+            correct_l2  += int((pred_l2 == "HOME") == bool(hw))
+            line += f"  {result:4s}  L1:{c1} L2:{c2}"
         print(line)
 
     if total_games > 0:
@@ -494,7 +442,7 @@ def predict_games(date_str: str) -> pd.DataFrame:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Score today's games with the F5 XGBoost + Bayesian Stacker"
+        description="Score today's games with the ML XGBoost + Bayesian Stacker"
     )
     parser.add_argument("--date", default=None,
                         help="Date YYYY-MM-DD (default: today)")
