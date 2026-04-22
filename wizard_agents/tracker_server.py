@@ -12,7 +12,7 @@ Endpoints:
   GET  /stats       → read_tracker_stats()
   GET  /health      → {"status": "ok"}
 
-Accepted `model` values (strict): "ML", "Totals", "Runline", "F5".
+Accepted `model` values (strict): "ML", "Totals", "Runline", "F5", "NRFI".
 Enforcement lives in AGENT6's tool schema (tools/schemas.py:AGENT6_TOOLS);
 this handler delegates validation there rather than duplicating the enum.
 Legacy labels ("MFull", "MF5i", "MF3i", "MF1i", "MBat") are no longer accepted.
@@ -31,7 +31,7 @@ from config.settings import TRACKER_PORT
 # Single source of truth for the current market vocabulary.  Validation is
 # enforced by AGENT6's schema, but we pre-check here so a bad POST returns
 # a fast, explicit error instead of the generic tool-executor wrapping.
-ALLOWED_MODELS = ("ML", "Totals", "Runline", "F5")
+ALLOWED_MODELS = ("ML", "Totals", "Runline", "F5", "NRFI")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [TRACKER] %(message)s")
 logger = logging.getLogger("wizard.tracker")

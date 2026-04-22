@@ -86,13 +86,26 @@ EXECUTION ORDER:
      f5_estimated, f3_estimated, f1_estimated,
      best_over_book, best_under_book, is_coors
 
-   REQUIRED COLUMNS — Retail implied probability (de-vigged US lines):
+   REQUIRED COLUMNS — Retail implied probability (de-vigged US lines, full-game):
      retail_ml_home_odds, retail_ml_away_odds,
      Retail_Implied_Prob_home, Retail_Implied_Prob_away,
      retail_total_line, retail_over_odds, retail_under_odds,
-     Retail_Implied_Prob_over, Retail_Implied_Prob_under
+     Retail_Implied_Prob_over, Retail_Implied_Prob_under,
+     retail_rl_home_odds, retail_rl_away_odds,
+     Retail_Implied_Prob_rl_home, Retail_Implied_Prob_rl_away
 
-   REQUIRED COLUMNS — Pinnacle sharp benchmark (de-vigged EU lines):
+   REQUIRED COLUMNS — Retail F5 (First-5-innings) markets:
+     retail_f5_ml_home_odds, retail_f5_ml_away_odds,
+     Retail_Implied_Prob_f5_home, Retail_Implied_Prob_f5_away,
+     retail_f5_total_line, retail_f5_over_odds, retail_f5_under_odds,
+     Retail_Implied_Prob_f5_over, Retail_Implied_Prob_f5_under
+
+   REQUIRED COLUMNS — retail NRFI columns (First-inning Under/Over 0.5):
+     retail_nrfi_odds (best US price for Under 0.5 = NRFI),
+     retail_yrfi_odds (paired Over 0.5 price from the same book),
+     Retail_Implied_Prob_nrfi (two-way de-vigged NRFI prob)
+
+   REQUIRED COLUMNS — Pinnacle sharp benchmark (de-vigged EU lines, full-game):
      pinnacle_ml_home, pinnacle_ml_away,
      P_true_home, P_true_away,
      pinnacle_total_line, pinnacle_over_odds, pinnacle_under_odds,
@@ -100,8 +113,25 @@ EXECUTION ORDER:
      pinnacle_rl_home_odds, pinnacle_rl_away_odds,
      P_true_rl_home, P_true_rl_away
 
+   REQUIRED COLUMNS — Pinnacle F5 sharp benchmark:
+     pinnacle_f5_ml_home, pinnacle_f5_ml_away,
+     P_true_f5_home, P_true_f5_away,
+     pinnacle_f5_total_line,
+     P_true_f5_over, P_true_f5_under
+
+   REQUIRED COLUMNS — Pinnacle NRFI columns:
+     pinnacle_nrfi_odds (Under 0.5 American price),
+     P_true_nrfi (Pinnacle two-way de-vigged NRFI prob)
+
+   STRICT LINE MATCHING (enforced by fetch_odds_api, do NOT try to override):
+     • Runlines are filtered to the standard -1.5 / +1.5 spread only — alt lines dropped.
+     • Totals (full-game + F5) use the MODAL line across books; odds are only
+       compared at that single line. Never mix totals across different points.
+
    NOTE: Pinnacle columns will be null when the EU endpoint is unreachable — this is
    expected and acceptable. Do NOT halt the pipeline for missing Pinnacle data.
+   F5 columns may also be null on days when books haven't posted F5 markets yet;
+   downstream scoring treats missing F5 retail as non-actionable rather than an error.
 
    game_label: format as "AWAY @ HOME (Away_Last vs Home_Last)"
    Example: "CWS @ CHC (Mlodzinski vs Imanaga)" — last name only for pitchers.
@@ -212,6 +242,8 @@ MARKET COVERAGE (what the tool scores):
   - Totals    : Run-dist over/under (L2: BayesianStackerTotals)      → over / under picks
   - Runline   : Run-dist home -1.5  (L2: BayesianStackerRL)          → Pinnacle-gated only
   - F5        : First-5 home cover  (L2: BayesianStackerF5)          → informational
+  - NRFI      : No-Run First Inning (L2: BayesianStackerNRFI)        → strict Three-Part Lock
+                both NRFI and YRFI sides evaluated against Pinnacle P_true_nrfi
 
   Runline and F5 are included in model_scores.csv as non-actionable by default
   because games.csv does not yet carry retail lines for those markets. Do not flag
@@ -267,11 +299,12 @@ STEP 1: Read model_scores.csv and run read_tracker_stats for current stats.
 
 STEP 2: Generate the complete HTML. The file must be self-contained (no external dependencies).
 
-MODEL VOCABULARY — model_scores.csv uses exactly these four labels in its `model` column:
+MODEL VOCABULARY — model_scores.csv uses exactly these five labels in its `model` column:
   ML       — Full-game moneyline  (home / away pick direction)
   Totals   — Run-dist over/under  (OVER / UNDER pick direction)
   Runline  — Home -1.5 / Away +1.5 (Pinnacle-gated, currently non-actionable)
   F5       — First-5 home cover   (informational, currently non-actionable)
+  NRFI     — No-Run First Inning (bet_type shows "NRFI" or "YRFI"; strict Three-Part Lock)
 
 Never invent other model names. Do not reference MFull, MF5i, MF3i, MF1i, or MBat.
 
@@ -283,14 +316,16 @@ A. HEADER
 
 B. STATS BAR (calls GET http://localhost:{TRACKER_PORT}/stats on load)
    Show: overall W-L-P, win rate %, units P/L, ROI
-   Per-model breakdown tiles for: ML, Totals, Runline, F5
+   Per-model breakdown tiles for: ML, Totals, Runline, F5, NRFI
      (tiles for Runline and F5 may show "— no graded bets yet —" until markets are wired)
 
 C. PICKS TABLE — one row per pick in model_scores.csv, grouped by `model`:
-   Render four sub-tables in this order: ML → Totals → Runline → F5.
+   Render five sub-tables in this order: ML → Totals → Runline → F5 → NRFI.
    Columns: Game | Bet | Pick | Model Prob | P_true | Edge | Retail Odds | Tier | Stake | Log Bet
    "Log Bet" button → modal (stake, line, book) → POST http://localhost:{TRACKER_PORT}/log_bet
-     with model set to the sub-table label ("ML", "Totals", "Runline", or "F5").
+     with model set to the sub-table label ("ML", "Totals", "Runline", "F5", or "NRFI").
+   For NRFI rows, bet_type in model_scores.csv is already "NRFI" or "YRFI" — render
+     that value in the Bet column verbatim.
    Visually distinguish rows where actionable == TRUE (green row, bold stake)
      from rows where actionable == FALSE (dimmed, no Log Bet button).
 
@@ -300,7 +335,7 @@ D. RESULT ENTRY — for each PENDING bet in bet_tracker.csv:
    Once recorded → freeze buttons, show result badge, refresh stats bar.
 
 E. NON-ACTIONABLE — collapsed section collecting every pick where actionable == FALSE.
-   Group by the same four models. Purely informational — no Log Bet buttons here.
+   Group by the same five models. Purely informational — no Log Bet buttons here.
 
 GRACEFUL DEGRADATION:
    If tracker server is unreachable → show:
@@ -335,7 +370,7 @@ STEP 1 — READ SCORES:
   read_csv(file_key="model_scores")
   Filter to rows where actionable == TRUE.
   Partition into TIER 1 (tier == 1) and TIER 2 (tier == 2).
-  The `model` column uses exactly: "ML", "Totals", "Runline", or "F5".
+  The `model` column uses exactly: "ML", "Totals", "Runline", "F5", or "NRFI".
   Do NOT reference legacy labels (MFull, MF5i, MF3i, MF1i, MBat).
 
 STEP 2 — COMPOSE EMAIL BODY:
@@ -366,8 +401,9 @@ STEP 2 — COMPOSE EMAIL BODY:
       --- TIER 1: STRONG EDGE (>= 3.0%) ---
 
       [Game label]
-        Model     : [ML / Totals / Runline / F5]
+        Model     : [ML / Totals / Runline / F5 / NRFI]
         Bet       : [bet_type] — [pick_direction]
+                     (for NRFI model, bet_type is "NRFI" or "YRFI")
         Model Prob: [model_prob as XX.X%]
         Pinnacle  : [P_true as XX.X%]  (sharp benchmark)
         Retail    : [Retail_Implied_Prob as XX.X%]  @ [retail_american_odds]

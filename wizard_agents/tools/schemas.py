@@ -294,7 +294,7 @@ AGENT6_TOOLS = [
             "properties": {
                 "date":        {"type": "string", "description": "YYYY-MM-DD"},
                 "game":        {"type": "string", "description": "'AWAY @ HOME'"},
-                "model":       {"type": "string", "enum": ["ML", "Totals", "Runline", "F5"]},
+                "model":       {"type": "string", "enum": ["ML", "Totals", "Runline", "F5", "NRFI"]},
                 "bet_type":    {"type": "string", "description": "e.g. 'Under 8.0'"},
                 "model_prob":  {"type": "number", "description": "Probability as float, e.g. 69.5"},
                 "market_line": {"type": "string", "description": "e.g. '-110', '+115'"},
