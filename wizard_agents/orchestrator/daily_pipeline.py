@@ -239,6 +239,23 @@ def run_daily_pipeline(force: bool = False) -> dict[str, str]:
     else:
         results["agent5"] = agent5_output
 
+    # ── ACCURACY TRACKING ─────────────────────────────────────────────────────
+    # Archive today's predictions and evaluate against completed games.
+    logger.info("▶ Archiving predictions and evaluating accuracy")
+    try:
+        import subprocess, sys
+        from pathlib import Path as PathlibPath
+        tracker_script = PathlibPath(settings.PIPELINE_DIR) / "build_nrfi_accuracy_tracker.py"
+        if tracker_script.exists():
+            subprocess.run([sys.executable, str(tracker_script)],
+                          cwd=str(settings.PIPELINE_DIR),
+                          capture_output=True, text=True)
+            logger.info("✅ Accuracy tracking complete")
+        else:
+            logger.warning(f"⚠ Tracker script not found: {tracker_script}")
+    except Exception as e:
+        logger.warning(f"⚠ Accuracy tracking failed (non-fatal): {e}")
+
     results["pipeline_status"] = "COMPLETE"
     logger.info("=" * 60)
     logger.info(f"✅ Daily pipeline complete | {TODAY}")
