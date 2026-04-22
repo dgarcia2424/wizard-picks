@@ -902,10 +902,14 @@ def generate_ml_scores(game_date: str = "") -> str:
                 ("HOME", p_home,      "P_true_home", "Retail_Implied_Prob_home", "retail_ml_home_odds"),
                 ("AWAY", 1.0 - p_home, "P_true_away", "Retail_Implied_Prob_away", "retail_ml_away_odds"),
             ]:
+                # ML — 2026 backtest: AUC 0.707, ECE 0.045, 28 bets @ +50% ROI
+                # under Two-Part Lock. Widen sanity margin to 0.10 so real edge
+                # vs. Pinnacle isn't crushed by the 0.04 default.
                 ev = _evaluate_pick(prob,
                                     _safe_float(g.get(p_true_col)),
                                     _safe_float(g.get(imp_col)),
-                                    _safe_float(g.get(odds_col)))
+                                    _safe_float(g.get(odds_col)),
+                                    sanity_margin=0.10)
                 picks.append({"date": target, "game": game_label,
                               "model": "ML", "bet_type": "Moneyline",
                               "pick_direction": side, **ev})
@@ -918,10 +922,13 @@ def generate_ml_scores(game_date: str = "") -> str:
                 ("OVER",  p_over,        "P_true_over",  "Retail_Implied_Prob_over",  "retail_over_odds"),
                 ("UNDER", 1.0 - p_over,  "P_true_under", "Retail_Implied_Prob_under", "retail_under_odds"),
             ]:
+                # Totals — 2026 backtest: AUC 0.685, ECE 0.080, 61 bets @ +38% ROI
+                # under Two-Part Lock. Widen sanity margin to 0.08 (matches ECE).
                 ev = _evaluate_pick(prob,
                                     _safe_float(g.get(p_true_col)),
                                     _safe_float(g.get(imp_col)),
-                                    _safe_float(g.get(odds_col)))
+                                    _safe_float(g.get(odds_col)),
+                                    sanity_margin=0.08)
                 picks.append({"date": target, "game": game_label,
                               "model": "Totals",
                               "bet_type": f"Total {_safe_float(g.get('retail_total_line')) or rd_row.get('total_line')}",
@@ -939,10 +946,15 @@ def generate_ml_scores(game_date: str = "") -> str:
                 ("AWAY +1.5", 1.0 - p_rl_home,  "P_true_rl_away",
                  "Retail_Implied_Prob_rl_away", "retail_rl_away_odds"),
             ]:
+                # Runline — 2026 backtest: AUC 0.662 but ECE 0.284 (severe
+                # miscalibration). Under Two-Part Lock RL lost money (44.7%
+                # win rate, -3% ROI). Keep strict 0.04 sanity — Pinnacle is
+                # actively protecting us here.
                 ev = _evaluate_pick(prob,
                                     _safe_float(g.get(p_true_col)),
                                     _safe_float(g.get(imp_col)),
-                                    _safe_float(g.get(odds_col)))
+                                    _safe_float(g.get(odds_col)),
+                                    sanity_margin=0.04)
                 picks.append({"date": target, "game": game_label,
                               "model": "Runline", "bet_type": "Runline -1.5",
                               "pick_direction": side, **ev})
@@ -974,11 +986,14 @@ def generate_ml_scores(game_date: str = "") -> str:
                               "model": "F5", "bet_type": "F5 Moneyline",
                               "pick_direction": side, **ev})
 
-        # ─── MODEL 5: NRFI (No Run First Inning) — wide-margin Three-Part Lock ─
-        # OOF ECE 0.0095 proves the stacker is strictly better calibrated than
-        # Pinnacle's F1-totals anchor; 0.04 blocks all real edge. 0.40 keeps
-        # Pinnacle as a data-integrity backstop against late-scratch corruption
-        # while letting the model's genuine disagreement through.
+        # ─── MODEL 5: NRFI (No Run First Inning) — SHADOW MODE ─────────────────
+        # Feature drift detected in 2026: pitcher/batter distributions radically
+        # diverge from 2023-2025 training, causing model to hallucinate 85% probs.
+        # Backtest accuracy dropped 76% → 44%, well below base rate.
+        # SHADOW MODE: Revert to default sanity_margin=0.04 so all predictions
+        # fail the Three-Part Lock and produce no actionable picks, while still
+        # logging raw outputs to model_scores.csv for monitoring and retraining.
+        # Once 2026 data stabilizes (May+), will retrain and re-enable.
         nrfi_row = nrfi_by.get(key)
         if nrfi_row and nrfi_row.get("p_stk_nrfi") is not None:
             p_nrfi  = float(nrfi_row["p_stk_nrfi"])
@@ -986,17 +1001,19 @@ def generate_ml_scores(game_date: str = "") -> str:
             retail_imp_nrfi = _safe_float(g.get("Retail_Implied_Prob_nrfi"))
             r_nrfi_odds_g   = _safe_float(g.get("retail_nrfi_odds"))
             r_yrfi_odds_g   = _safe_float(g.get("retail_yrfi_odds"))
-            # NRFI side
-            ev_n = _evaluate_pick(p_nrfi, p_true_nrfi, retail_imp_nrfi, r_nrfi_odds_g,
-                                  sanity_margin=0.40)
+            # NRFI / YRFI — 2026 backtest: AUC 0.528 (≈ noise), ECE 0.213.
+            # Severe covariate shift (batting_matchup_edge +1803%,
+            # sp_k_pct_diff -233%). Keep strict 0.04 sanity (Shadow Mode).
+            ev_n = _evaluate_pick(p_nrfi, p_true_nrfi, retail_imp_nrfi,
+                                  r_nrfi_odds_g, sanity_margin=0.04)
             picks.append({"date": target, "game": game_label,
                           "model": "NRFI", "bet_type": "NRFI",
                           "pick_direction": "NRFI", **ev_n})
             # YRFI side — flip all probabilities
             p_true_yrfi   = None if p_true_nrfi     is None else round(1.0 - p_true_nrfi, 4)
             retail_imp_y  = None if retail_imp_nrfi is None else round(1.0 - retail_imp_nrfi, 4)
-            ev_y = _evaluate_pick(1.0 - p_nrfi, p_true_yrfi, retail_imp_y, r_yrfi_odds_g,
-                                  sanity_margin=0.40)
+            ev_y = _evaluate_pick(1.0 - p_nrfi, p_true_yrfi, retail_imp_y,
+                                  r_yrfi_odds_g, sanity_margin=0.04)
             picks.append({"date": target, "game": game_label,
                           "model": "NRFI", "bet_type": "YRFI",
                           "pick_direction": "YRFI", **ev_y})
@@ -1021,6 +1038,12 @@ def generate_ml_scores(game_date: str = "") -> str:
     out_df = pd.DataFrame(picks, columns=output_cols) if picks else pd.DataFrame(columns=output_cols)
     out_path = FILES["model_scores"]
     out_df.to_csv(out_path, index=False)
+
+    # 5b. Append today's ACTIONABLE picks to the persistent ledger so the
+    #     Auto-Reconciliation Engine can grade them once actuals arrive.
+    #     Idempotent: we delete any existing rows for this date before appending,
+    #     so re-running Agent 3 on the same date does not double-count bets.
+    _append_to_ledger(target, games_df, [p for p in picks if p["actionable"]])
 
     # 6. Return compact actionable summary (LLM-safe payload)
     actionable_picks = [
@@ -1082,7 +1105,278 @@ def send_email(subject: str, body: str, attach_report: bool = True) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# AGENT 6 — Bet Tracker Tools  (ONLY these functions touch bet_tracker.csv)
+# AUTO-RECONCILIATION ENGINE
+# ──────────────────────────────────────────────────────────────────────────────
+# Replaces manual bet-tracking (legacy Agent 6). Picks are appended to the
+# master ledger by Agent 3, graded daily against actuals_2026.parquet by
+# auto_grade_historical_picks(), and aggregated into 7d / 28d / YTD windows by
+# compute_rolling_accuracy() for the HTML tear sheet.
+# ══════════════════════════════════════════════════════════════════════════════
+
+LEDGER_COLUMNS = [
+    "date", "game", "home_abbr", "away_abbr",
+    "model", "bet_type", "pick_direction",
+    "model_prob", "P_true", "Retail_Implied_Prob", "edge",
+    "retail_american_odds", "tier", "dollar_stake",
+    "result", "profit_loss", "graded_at",
+]
+
+
+def _load_ledger() -> pd.DataFrame:
+    p = Path(FILES["historical_picks"])
+    str_cols = {"result": str, "graded_at": str, "game": str,
+                "bet_type": str, "pick_direction": str, "model": str,
+                "home_abbr": str, "away_abbr": str, "date": str}
+    if not p.exists() or p.stat().st_size == 0:
+        df = pd.DataFrame(columns=LEDGER_COLUMNS)
+        # Ensure object dtype on string columns so WIN/LOSS writes don't fail.
+        for c, _ in str_cols.items():
+            df[c] = df[c].astype(object)
+        return df
+    df = pd.read_csv(p, dtype={c: object for c in str_cols})
+    for c in LEDGER_COLUMNS:
+        if c not in df.columns:
+            df[c] = None
+    # Coerce string-like columns to object so grader writes don't hit LossySetitem.
+    for c in str_cols:
+        df[c] = df[c].astype(object).where(df[c].notna(), "")
+    return df[LEDGER_COLUMNS]
+
+
+def _save_ledger(df: pd.DataFrame) -> None:
+    df.to_csv(FILES["historical_picks"], index=False)
+
+
+def _append_to_ledger(target_date: str, games_df: pd.DataFrame, actionable: list[dict]) -> None:
+    """Append today's actionable picks to the master ledger, keyed by (date, game,
+    model, bet_type, pick_direction). Existing rows for `target_date` are wiped
+    first so re-runs don't duplicate."""
+    if not actionable:
+        return
+
+    # Build game_label → (home_abbr, away_abbr) lookup so grader can join actuals.
+    label_to_abbrs: dict = {}
+    for _, g in games_df.iterrows():
+        home = str(g.get("home_team", "")).strip()
+        away = str(g.get("away_team", "")).strip()
+        label = g.get("game_label") or f"{away} @ {home}"
+        label_to_abbrs[label] = (
+            TEAM_NAME_TO_ABBR.get(home, home),
+            TEAM_NAME_TO_ABBR.get(away, away),
+        )
+
+    rows = []
+    for p in actionable:
+        home_abbr, away_abbr = label_to_abbrs.get(p["game"], (None, None))
+        rows.append({
+            "date":                 target_date,
+            "game":                 p["game"],
+            "home_abbr":            home_abbr,
+            "away_abbr":            away_abbr,
+            "model":                p["model"],
+            "bet_type":             p["bet_type"],
+            "pick_direction":       p["pick_direction"],
+            "model_prob":           p["model_prob"],
+            "P_true":               p["P_true"],
+            "Retail_Implied_Prob":  p["Retail_Implied_Prob"],
+            "edge":                 p["edge"],
+            "retail_american_odds": p["retail_american_odds"],
+            "tier":                 p["tier"],
+            "dollar_stake":         p["dollar_stake"],
+            "result":               "",
+            "profit_loss":          "",
+            "graded_at":            "",
+        })
+
+    ledger = _load_ledger()
+    ledger = ledger[ledger["date"].astype(str) != str(target_date)]
+    ledger = pd.concat([ledger, pd.DataFrame(rows, columns=LEDGER_COLUMNS)], ignore_index=True)
+    _save_ledger(ledger)
+
+
+def _pl_on_win(stake: float, american_odds: float) -> float:
+    dec = _american_to_decimal(float(american_odds))
+    return round(float(stake) * (dec - 1.0), 2)
+
+
+def _grade_one(row: pd.Series, actuals: pd.Series) -> Optional[str]:
+    """Return 'WIN' / 'LOSS' / 'PUSH' or None if the market cannot be graded
+    from this actuals row (e.g. F5 SP didn't complete 5 IP)."""
+    model  = str(row["model"])
+    side   = str(row["pick_direction"])
+
+    if model == "ML":
+        home_won = actuals["home_score_final"] > actuals["away_score_final"]
+        tied     = actuals["home_score_final"] == actuals["away_score_final"]
+        if tied:
+            return "PUSH"
+        picked_home = side == "HOME"
+        return "WIN" if (home_won == picked_home) else "LOSS"
+
+    if model == "Totals":
+        # bet_type looks like "Total 8.5" — extract the line.
+        try:
+            line = float(str(row["bet_type"]).split()[-1])
+        except Exception:
+            return None
+        total = float(actuals["home_score_final"]) + float(actuals["away_score_final"])
+        if total == line:
+            return "PUSH"
+        over_hit = total > line
+        picked_over = side == "OVER"
+        return "WIN" if (over_hit == picked_over) else "LOSS"
+
+    if model == "Runline":
+        home_covers = bool(actuals.get("home_covers_rl"))
+        picked_home = side.startswith("HOME")
+        return "WIN" if (home_covers == picked_home) else "LOSS"
+
+    if model == "F5":
+        fh = actuals.get("f5_home_runs")
+        fa = actuals.get("f5_away_runs")
+        if pd.isna(fh) or pd.isna(fa):
+            return None
+        if fh == fa:
+            return "PUSH"
+        home_won_f5 = fh > fa
+        picked_home = side == "HOME"
+        return "WIN" if (home_won_f5 == picked_home) else "LOSS"
+
+    if model == "NRFI":
+        nrfi_hit = bool(actuals.get("f1_nrfi"))
+        bt = str(row["bet_type"]).upper()
+        picked_nrfi = bt == "NRFI"
+        return "WIN" if (nrfi_hit == picked_nrfi) else "LOSS"
+
+    return None
+
+
+def auto_grade_historical_picks() -> str:
+    """Grade every ungraded row in historical_actionable_picks.csv against
+    actuals_2026.parquet. WIN / LOSS / PUSH + profit_loss are written back."""
+    ledger = _load_ledger()
+    if ledger.empty:
+        return json.dumps({"status": "OK", "graded": 0, "pending": 0, "note": "Ledger is empty."})
+
+    actuals_path = Path(FILES["actuals_2026"])
+    if not actuals_path.exists():
+        return json.dumps({"status": "ERROR", "error": f"Actuals not found: {actuals_path}"})
+
+    actuals = pd.read_parquet(actuals_path)
+    actuals["game_date"] = actuals["game_date"].astype(str)
+    # Index by (date, home_abbr, away_abbr) for O(1) lookup.
+    act_idx = {
+        (str(r["game_date"]), str(r["home_team"]), str(r["away_team"])): r
+        for _, r in actuals.iterrows()
+    }
+
+    graded_now = 0
+    ungradable = 0
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    for i, row in ledger.iterrows():
+        if str(row.get("result", "")).upper() in ("WIN", "LOSS", "PUSH"):
+            continue
+        key = (str(row["date"]), str(row["home_abbr"]), str(row["away_abbr"]))
+        act = act_idx.get(key)
+        if act is None:
+            ungradable += 1
+            continue
+
+        result = _grade_one(row, act)
+        if result is None:
+            ungradable += 1
+            continue
+
+        stake = float(row["dollar_stake"]) if pd.notna(row["dollar_stake"]) else 0.0
+        odds  = float(row["retail_american_odds"]) if pd.notna(row["retail_american_odds"]) else 0.0
+        if result == "WIN":
+            pl = _pl_on_win(stake, odds)
+        elif result == "LOSS":
+            pl = -stake
+        else:
+            pl = 0.0
+
+        ledger.at[i, "result"]      = result
+        ledger.at[i, "profit_loss"] = pl
+        ledger.at[i, "graded_at"]   = now_str
+        graded_now += 1
+
+    _save_ledger(ledger)
+
+    graded_total = int((ledger["result"].isin(["WIN", "LOSS", "PUSH"])).sum())
+    pending      = int(len(ledger) - graded_total)
+
+    return json.dumps({
+        "status":        "OK",
+        "graded_now":    graded_now,
+        "graded_total":  graded_total,
+        "pending":       pending,
+        "ungradable":    ungradable,  # matched no actuals row or market lacks data
+    })
+
+
+def _window_stats(df: pd.DataFrame) -> dict:
+    """Aggregate a graded slice into Total Bets / Win % / ROI %, segmented by market."""
+    graded = df[df["result"].isin(["WIN", "LOSS", "PUSH"])]
+
+    def agg(sub: pd.DataFrame) -> dict:
+        if sub.empty:
+            return {"bets": 0, "wins": 0, "losses": 0, "pushes": 0,
+                    "win_pct": 0.0, "roi_pct": 0.0, "pl": 0.0, "wagered": 0.0}
+        w = int((sub["result"] == "WIN").sum())
+        l = int((sub["result"] == "LOSS").sum())
+        p = int((sub["result"] == "PUSH").sum())
+        decided = w + l
+        pl = float(pd.to_numeric(sub["profit_loss"], errors="coerce").fillna(0).sum())
+        wagered = float(pd.to_numeric(sub["dollar_stake"], errors="coerce").fillna(0).sum())
+        return {
+            "bets":    int(len(sub)),
+            "wins":    w, "losses": l, "pushes": p,
+            "win_pct": round(100.0 * w / decided, 1) if decided > 0 else 0.0,
+            "roi_pct": round(100.0 * pl / wagered, 1) if wagered > 0 else 0.0,
+            "pl":      round(pl, 2),
+            "wagered": round(wagered, 2),
+        }
+
+    by_market = {m: agg(graded[graded["model"] == m])
+                 for m in ["ML", "Totals", "Runline", "F5", "NRFI"]}
+    return {"overall": agg(graded), "by_market": by_market}
+
+
+def compute_rolling_accuracy() -> str:
+    """Aggregate the graded ledger into 7-day / 28-day / season-to-date (2026)
+    windows. Each window reports overall + per-market bets / win% / ROI%."""
+    ledger = _load_ledger()
+    if ledger.empty:
+        empty = {"bets": 0, "wins": 0, "losses": 0, "pushes": 0,
+                 "win_pct": 0.0, "roi_pct": 0.0, "pl": 0.0, "wagered": 0.0}
+        markets = {m: dict(empty) for m in ["ML", "Totals", "Runline", "F5", "NRFI"]}
+        blank = {"overall": dict(empty), "by_market": markets}
+        return json.dumps({"status": "OK", "windows": {"last_7": blank, "last_28": blank, "ytd_2026": blank}})
+
+    ledger["date_parsed"] = pd.to_datetime(ledger["date"], errors="coerce")
+    today = pd.Timestamp(date.today())
+
+    ytd_mask  = ledger["date_parsed"].dt.year == 2026
+    d28_mask  = ledger["date_parsed"] >= (today - pd.Timedelta(days=28))
+    d7_mask   = ledger["date_parsed"] >= (today - pd.Timedelta(days=7))
+
+    return json.dumps({
+        "status":  "OK",
+        "as_of":   today.strftime("%Y-%m-%d"),
+        "windows": {
+            "last_7":    _window_stats(ledger[d7_mask]),
+            "last_28":   _window_stats(ledger[d28_mask]),
+            "ytd_2026":  _window_stats(ledger[ytd_mask]),
+        },
+    })
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AGENT 6 — Passive Stats Reader  (bet_tracker legacy helpers retained for
+# read-only compatibility; manual append/log_result are deprecated and no
+# longer exposed as tools to any agent).
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _load_tracker() -> pd.DataFrame:

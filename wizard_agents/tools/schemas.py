@@ -207,8 +207,28 @@ AGENT3_TOOLS = [
 
 AGENT4_TOOLS = [
     {
+        "name": "auto_grade_historical_picks",
+        "description": (
+            "Auto-Reconciliation Engine: grade every ungraded row in the master "
+            "ledger (historical_actionable_picks.csv) against actuals_2026.parquet. "
+            "Writes WIN/LOSS/PUSH + profit_loss back to the ledger. Call before "
+            "compute_rolling_accuracy so the tear sheet reflects fresh results."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "compute_rolling_accuracy",
+        "description": (
+            "Aggregate the graded ledger into three rolling windows — last 7 days, "
+            "last 28 days, season-to-date (2026) — each with overall and per-market "
+            "(ML/Totals/Runline/F5/NRFI) Total Bets, Win %, and ROI %. Used to render "
+            "the Rolling Accuracy Tear Sheet at the top of model_report.html."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
         "name": "read_csv",
-        "description": "Read model_scores.csv or bet_tracker.csv to build the HTML report.",
+        "description": "Read model_scores.csv to build the HTML report.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -284,47 +304,13 @@ AGENT5_TOOLS = [
 
 AGENT6_TOOLS = [
     {
-        "name": "append_bet",
+        "name": "compute_rolling_accuracy",
         "description": (
-            "Append a new bet to bet_tracker.csv with result=PENDING. "
-            "This is the ONLY function that may write new rows to bet_tracker.csv."
+            "Read-only: return rolling 7-day / 28-day / YTD accuracy windows from "
+            "the auto-graded master ledger. Agent 6 is now a passive observer — "
+            "manual bet logging has been deprecated in favor of the "
+            "Auto-Reconciliation Engine."
         ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "date":        {"type": "string", "description": "YYYY-MM-DD"},
-                "game":        {"type": "string", "description": "'AWAY @ HOME'"},
-                "model":       {"type": "string", "enum": ["ML", "Totals", "Runline", "F5", "NRFI"]},
-                "bet_type":    {"type": "string", "description": "e.g. 'Under 8.0'"},
-                "model_prob":  {"type": "number", "description": "Probability as float, e.g. 69.5"},
-                "market_line": {"type": "string", "description": "e.g. '-110', '+115'"},
-                "book":        {"type": "string", "enum": ["FD", "DK", "BET365", "BETMGM"]},
-                "units":       {"type": "number", "enum": [0.5, 1.0, 1.5]},
-                "notes":       {"type": "string", "default": ""},
-            },
-            "required": ["date", "game", "model", "bet_type", "model_prob", "market_line", "book", "units"],
-        },
-    },
-    {
-        "name": "log_result",
-        "description": (
-            "Record WIN, LOSS, or PUSH for a logged bet. Calculates profit_loss. "
-            "Freezes the row permanently — cannot be modified after this call. "
-            "REJECTS if result is already recorded."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "bet_id":       {"type": "integer", "description": "The id from bet_tracker.csv"},
-                "result":       {"type": "string", "enum": ["WIN", "LOSS", "PUSH"]},
-                "actual_total": {"type": "number", "description": "Optional actual game total"},
-            },
-            "required": ["bet_id", "result"],
-        },
-    },
-    {
-        "name": "read_tracker_stats",
-        "description": "Aggregate stats from bet_tracker.csv: overall and per-model records, win rates, P/L, ROI.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
 ]

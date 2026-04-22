@@ -18,7 +18,7 @@ from typing import Any, Callable
 from config.settings import TRACKER_PORT, EMAIL_RECIPIENTS, GMAIL_FROM
 from tools.schemas import (
     AGENT1_TOOLS, AGENT2_TOOLS, AGENT3_TOOLS,
-    AGENT4_TOOLS, AGENT5_TOOLS, AGENT6_TOOLS, AGENT7_TOOLS,
+    AGENT4_TOOLS, AGENT5_TOOLS, AGENT7_TOOLS,
 )
 from tools.implementations import (
     # Agent 1
@@ -29,8 +29,10 @@ from tools.implementations import (
     generate_ml_scores,
     # Agent 5
     send_email,
-    # Agent 6
-    append_bet, log_result, read_tracker_stats,
+    # Auto-Reconciliation Engine (replaces legacy Agent 6 manual logging)
+    auto_grade_historical_picks, compute_rolling_accuracy,
+    # Legacy — retained for backward compatibility reads only
+    read_tracker_stats,
 )
 
 
@@ -237,6 +239,12 @@ STEP 2. Inspect the returned JSON and emit the completion report (see format bel
   The tool returns ONLY the actionable picks plus gate-failure counts. It intentionally
   suppresses the full per-game DataFrame so you never burn context on bulk model output.
 
+MASTER LEDGER (automatic — no action required):
+  As a side-effect of STEP 1, every ACTIONABLE pick is appended to the persistent
+  ledger historical_actionable_picks.csv with blank result/profit_loss columns.
+  Re-running on the same date overwrites only that date's rows — the append is
+  idempotent. The Auto-Reconciliation Engine (Agent 4) grades these rows daily.
+
 MARKET COVERAGE (what the tool scores):
   - ML        : Full-game moneyline (L2: BayesianStackerML)          → home / away picks
   - Totals    : Run-dist over/under (L2: BayesianStackerTotals)      → over / under picks
@@ -295,7 +303,11 @@ AGENT4 = AgentDefinition(
 You produce model_report.html — a fully self-contained interactive HTML report.
 You do not score models, fetch data, or send emails.
 
-STEP 1: Read model_scores.csv and run read_tracker_stats for current stats.
+STEP 1 — AUTO-RECONCILE: call auto_grade_historical_picks() first. This grades
+  any new rows in historical_actionable_picks.csv against actuals_2026.parquet
+  (WIN/LOSS/PUSH + profit_loss written back to the ledger). Then call
+  compute_rolling_accuracy() to pull the 7-day / 28-day / YTD tear-sheet data.
+  Finally read_csv(file_key="model_scores") for today's picks.
 
 STEP 2: Generate the complete HTML. The file must be self-contained (no external dependencies).
 
@@ -314,28 +326,90 @@ A. HEADER
    Title: "⚾ The Wizard Report — [Today's Date]"
    Subtitle: run timestamp
 
-B. STATS BAR (calls GET http://localhost:{TRACKER_PORT}/stats on load)
-   Show: overall W-L-P, win rate %, units P/L, ROI
-   Per-model breakdown tiles for: ML, Totals, Runline, F5, NRFI
-     (tiles for Runline and F5 may show "— no graded bets yet —" until markets are wired)
+B. ROLLING ACCURACY TEAR SHEET — render FIRST, directly under the header,
+   BEFORE any other section. This is now the top-of-report performance snapshot,
+   sourced entirely from compute_rolling_accuracy() (not the legacy tracker).
 
-C. PICKS TABLE — one row per pick in model_scores.csv, grouped by `model`:
-   Render five sub-tables in this order: ML → Totals → Runline → F5 → NRFI.
-   Columns: Game | Bet | Pick | Model Prob | P_true | Edge | Retail Odds | Tier | Stake | Log Bet
+   Layout: three side-by-side columns — "Last 7 Days", "Last 28 Days",
+   "Season-to-Date (2026)". Each column contains:
+     • A large overall summary block showing: Total Bets, Win %, ROI %,
+       and signed P/L in dollars (green if positive, red if negative).
+     • A compact per-market table below the summary with one row per market
+       in this order: ML, Totals, Runline, F5, NRFI. Columns: Market | Bets
+       | Win % | ROI %. Markets with 0 bets render a muted em-dash across
+       the stat cells — do NOT omit the row (consistency matters).
+
+   Styling: clean "tear sheet" card per window with a subtle border,
+   large-font headline numbers, and a monospace per-market grid. Dark
+   background, high-contrast numbers. The user should be able to glance
+   at this ONCE and know how the models are tracking across the three
+   horizons before they scroll to today's picks.
+
+   Data shape returned by compute_rolling_accuracy():
+     {{"windows": {{"last_7": {{"overall": {{bets, win_pct, roi_pct, pl, ...}},
+                              "by_market": {{"ML": {{...}}, "Totals": {{...}}, ...}}}},
+                   "last_28": {{...}}, "ytd_2026": {{...}}}}}}
+
+C. TODAY'S STATS BAR (optional, SECONDARY — tracker_server legacy)
+   If the local tracker server at http://localhost:{TRACKER_PORT}/stats is
+   reachable on load, render a slim secondary bar. If unreachable, hide
+   the element entirely — the Rolling Accuracy Tear Sheet is authoritative.
+
+C. ACTIONABLE BETS — the hero table. TOP of the report, after the stats bar.
+   Include ONLY rows where actionable == TRUE, across ALL five models.
+   Split the table into two panes in this vertical order:
+     1. "🔥 Tier 1 Edge (≥3%)"   — rows where tier == 1
+     2. "◆ Tier 2 Edge (≥1%)"    — rows where tier == 2
+   Within each pane, sort by `edge` descending.
+   Columns, in this exact order:
+     Game | Market | Pick | Model Prob | P_true | Edge | Retail Odds | Stake | Log Bet
+   The `Market` column shows the model label from model_scores.csv
+     (one of: ML, Totals, Runline, F5, NRFI) — use colored badges
+     (ML=blue, Totals=purple, Runline=orange, F5=teal, NRFI=red) so a reader
+     can scan which market each bet is in.
+   For NRFI/YRFI rows, bet_type in model_scores.csv is already "NRFI" or "YRFI" —
+     render that value in the Pick column verbatim.
+   For F5 rows, P_true is null — render "—".
    "Log Bet" button → modal (stake, line, book) → POST http://localhost:{TRACKER_PORT}/log_bet
-     with model set to the sub-table label ("ML", "Totals", "Runline", "F5", or "NRFI").
-   For NRFI rows, bet_type in model_scores.csv is already "NRFI" or "YRFI" — render
-     that value in the Bet column verbatim.
-   Visually distinguish rows where actionable == TRUE (green row, bold stake)
-     from rows where actionable == FALSE (dimmed, no Log Bet button).
+     with model set to the model label ("ML", "Totals", "Runline", "F5", "NRFI").
+   Every row in the Actionable Bets table renders with a green-bordered row and
+     a bold stake. This is the money table. Make it visually dominant.
 
-D. RESULT ENTRY — for each PENDING bet in bet_tracker.csv:
+   DO NOT include any of the following legacy columns anywhere in the report:
+     Votes, MFull, MF5i, MF3i, MF1i, MBat, component votes, agreement counts,
+     or per-component probability breakdowns. They are not in model_scores.csv
+     and must not be invented. Only the columns listed above.
+
+D. ALPHA MARKETS — dedicated calibration-focused section directly below the
+   Actionable Bets table. This is where we showcase our two best-calibrated
+   markets (ML at ECE 0.045, Totals at ECE 0.080) against Pinnacle's closing line.
+   Two sub-tables, in this order:
+     1. "Alpha Market · Moneyline (ML)"
+     2. "Alpha Market · Totals"
+   Each sub-table includes BOTH actionable and non-actionable rows for that
+   market (no filtering by `actionable`). Rows are sorted by Retail Edge
+   descending (most positive first).
+   Columns, in this exact order and ONLY these columns:
+     Game | Pick | Model Prob | Pinnacle Prob | Retail Edge
+   `Pinnacle Prob` is the `P_true` column in model_scores.csv.
+   `Retail Edge` is the `edge` column in model_scores.csv (already
+     Model Prob − Retail Implied Prob). Render as a signed percentage to
+     two decimals (e.g. "+4.59%", "−1.12%"), with green text for positive
+     and muted/grey for negative.
+   No Log Bet buttons here. No Stake column. No Tier column. This section
+   is purely a calibration showcase — it shows the reader how far (and
+   which direction) our model drifts from Pinnacle on every game in the slate.
+
+E. RESULT ENTRY — for each PENDING bet in bet_tracker.csv:
    Show WIN | LOSS | PUSH buttons.
    On click → POST http://localhost:{TRACKER_PORT}/log_result with bet_id and result.
    Once recorded → freeze buttons, show result badge, refresh stats bar.
 
-E. NON-ACTIONABLE — collapsed section collecting every pick where actionable == FALSE.
-   Group by the same five models. Purely informational — no Log Bet buttons here.
+F. FULL PICKS TABLE — collapsed-by-default section ("Show all picks") containing
+   every row in model_scores.csv grouped by model in the order
+   ML → Totals → Runline → F5 → NRFI. Columns:
+     Game | Bet | Pick | Model Prob | P_true | Edge | Retail Odds | Tier | Stake.
+   Purely informational. No Log Bet buttons. No Votes/component columns.
 
 GRACEFUL DEGRADATION:
    If tracker server is unreachable → show:
@@ -344,12 +418,15 @@ GRACEFUL DEGRADATION:
 
 STEP 3: write_html(file_key="model_report", html_content="<complete HTML string>")
 
-END WITH: picks in report (N actionable, N non-actionable), per-model counts, file write status.""",
+END WITH: actionable counts (Tier 1, Tier 2), Alpha Markets row counts (ML, Totals),
+full-table total rows, per-model breakdown, and file write status.""",
     tools=AGENT4_TOOLS,
     tool_executor=_make_executor({
-        "read_csv":           read_csv,
-        "read_tracker_stats": read_tracker_stats,
-        "write_html":         write_html,
+        "auto_grade_historical_picks": auto_grade_historical_picks,
+        "compute_rolling_accuracy":    compute_rolling_accuracy,
+        "read_csv":                    read_csv,
+        "read_tracker_stats":          read_tracker_stats,
+        "write_html":                  write_html,
     }),
 )
 
@@ -449,55 +526,6 @@ END WITH: actionable count (Tier 1 / Tier 2), email delivered ✅/❌ with recip
     tool_executor=_make_executor({
         "read_csv":   read_csv,
         "send_email": send_email,
-    }),
-)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# AGENT 6 — Bet Tracker  (on-demand / server mode)
-# ══════════════════════════════════════════════════════════════════════════════
-
-AGENT6 = AgentDefinition(
-    name="Bet Tracker Agent",
-    system_prompt=f"""You are the Bet Tracker Agent for The Wizard Report MLB analytics pipeline.
-
-You are the SOLE write-access point to bet_tracker.csv.
-No other agent may write to this file — only you.
-
-CRITICAL RULE: bet_tracker.csv is APPEND-ONLY.
-  You NEVER delete rows.
-  You NEVER overwrite existing entries.
-  Results are permanently frozen once WIN/LOSS/PUSH is recorded.
-
-OPERATIONS:
-
-LOG NEW BET:
-  append_bet(date, game, model, bet_type, model_prob, market_line, book, units, notes="")
-  Sets result=PENDING. Auto-increments id. Appends to CSV.
-  REJECT if any required field is missing — never write partial rows.
-
-RECORD RESULT:
-  log_result(bet_id, result, actual_total=None)
-  result must be WIN | LOSS | PUSH.
-  REJECT if result is already set: "❌ Result already recorded. Cannot modify a finalized bet."
-  Calculates profit_loss:
-    WIN at -110: units × 0.909
-    WIN at other odds: from market_line
-    LOSS: -units
-    PUSH: 0
-
-GET STATS:
-  read_tracker_stats()
-  Returns overall + per-model: record, win_rate, units_pl, roi, pending count.
-
-VALIDATION:
-  Missing required fields → REJECT with clear error. Never write partial rows.
-  If CSV does not exist → it will be created with headers on first write.""",
-    tools=AGENT6_TOOLS,
-    tool_executor=_make_executor({
-        "append_bet":         append_bet,
-        "log_result":         log_result,
-        "read_tracker_stats": read_tracker_stats,
     }),
 )
 

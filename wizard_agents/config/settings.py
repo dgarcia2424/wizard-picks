@@ -21,6 +21,8 @@ FILES = {
     "model_scores":          PIPELINE_DIR / "model_scores.csv",
     "model_report":          PIPELINE_DIR / "model_report.html",
     "bet_tracker":           PIPELINE_DIR / "data/raw/bet_tracker.csv",
+    "historical_picks":      PIPELINE_DIR / "historical_actionable_picks.csv",
+    "actuals_2026":          PIPELINE_DIR / "data/statcast/actuals_2026.parquet",
     "fangraphs_pitchers":    PIPELINE_DIR / "data/raw/fangraphs_pitchers.csv",
     "fangraphs_batters":     PIPELINE_DIR / "data/raw/fangraphs_batters.csv",
     "fangraphs_team_vs_lhp": PIPELINE_DIR / "data/raw/fangraphs_team_vs_lhp.csv",

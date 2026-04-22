@@ -23,9 +23,13 @@ import time
 from datetime import date
 from pathlib import Path
 
-from agents.definitions import AGENT1, AGENT3, AGENT4, AGENT5
+from agents.definitions import AGENT1, AGENT3, AGENT5
+from config import settings
 from orchestrator.agent_loop import run_agent, PipelineHaltError
-from supabase_upload import upload_picks
+
+# Agent 4 (Report Generation) has been replaced with a deterministic
+# Python renderer — render_report.py in the pipeline root. We import it
+# directly here to avoid subprocess overhead and keep error handling tight.
 
 logging.basicConfig(
     level=logging.INFO,
@@ -160,15 +164,6 @@ def run_daily_pipeline(force: bool = False) -> dict[str, str]:
             results["agent3"] = agent3_output
             logger.info(f"✅ Agent 3 complete.\n{agent3_output[:500]}")
 
-            # Upload results to Supabase for the web dashboard
-            try:
-                from pathlib import Path as _Path
-                import os as _os
-                _pipeline_dir = _Path(_os.environ.get("PIPELINE_DIR", _Path(__file__).parent.parent.parent))
-                upload_picks(_pipeline_dir / "model_scores.csv")
-            except Exception as _e:
-                logger.warning(f"[Supabase] Upload failed (non-fatal): {_e}")
-
         except Exception as e:
             logger.error(f"❌ Agent 3 error: {e}", exc_info=True)
             results["agent3"] = f"ERROR: {e}"
@@ -176,36 +171,81 @@ def run_daily_pipeline(force: bool = False) -> dict[str, str]:
     else:
         results["agent3"] = agent3_output
 
-    # ── AGENT 4: Report Generation ────────────────────────────────────────────
+    # ── STEP 4: Report Generation (deterministic Python renderer) ─────────────
+    # Agent 4's LLM-driven HTML generation has been replaced by
+    # render_report.py, which reads model_scores.csv and writes
+    # model_report.html directly. This is ~1-2 seconds vs. ~90 seconds for
+    # the Claude call and avoids the 16k-token output ceiling that truncated
+    # the HTML. No rate-limit wait needed.
     agent4_output = None if force else _load("agent4")
 
     if agent4_output is None:
-        logger.info("Waiting 90s between agents to respect rate limits...")
-        time.sleep(90)
-        logger.info("▶ Starting Agent 4: Report Generation")
+        logger.info("▶ Starting Step 4: Report Rendering (render_report.py)")
         try:
-            agent4_output = run_agent(
-                system_prompt=AGENT4.system_prompt,
-                tools=AGENT4.tools,
-                tool_executor=AGENT4.tool_executor,
-                max_tokens=8096,
-                user_message=(
-                    f"Generate today's model_report.html for {TODAY}. "
-                    "Read model_scores.csv and current tracker stats. "
-                    "Build the complete self-contained HTML report with picks table, "
-                    "Log Bet buttons, WIN/LOSS/PUSH result entry, and live stats bar. "
-                    "Write the file when complete."
-                ),
-                context=f"Agent 3 (Scoring Engine) completed:\n{results.get('agent3', 'No output')}",
-                agent_name=AGENT4.name,
+            from pathlib import Path as _Path
+            import importlib, os as _os
+
+            _pipeline_dir = _Path(
+                _os.environ.get("PIPELINE_DIR",
+                                _Path(__file__).resolve().parent.parent.parent)
+            )
+            scores_path = _pipeline_dir / "model_scores.csv"
+            report_path = _pipeline_dir / "model_report.html"
+
+            if not scores_path.exists():
+                raise FileNotFoundError(
+                    f"model_scores.csv not found at {scores_path} — Agent 3 must run first"
+                )
+
+            # Import render_report from the pipeline root, not from
+            # wizard_agents/. Insert and then remove sys.path entry so we
+            # don't leak the pipeline root into downstream imports.
+            _added_path = False
+            if str(_pipeline_dir) not in sys.path:
+                sys.path.insert(0, str(_pipeline_dir))
+                _added_path = True
+            try:
+                if "render_report" in sys.modules:
+                    render_report = importlib.reload(sys.modules["render_report"])
+                else:
+                    render_report = importlib.import_module("render_report")
+            finally:
+                if _added_path:
+                    try:
+                        sys.path.remove(str(_pipeline_dir))
+                    except ValueError:
+                        pass
+
+            import pandas as _pd
+            df = _pd.read_csv(scores_path)
+            html = render_report.render(df)
+            report_path.write_text(html, encoding="utf-8")
+
+            if not report_path.exists() or report_path.stat().st_size < 1024:
+                raise RuntimeError(
+                    f"Render wrote {report_path} but file is missing or truncated "
+                    f"({report_path.stat().st_size if report_path.exists() else 0} bytes)"
+                )
+
+            act = df[df.get("actionable") == True]
+            tier1 = int((act.get("tier") == 1).sum()) if "tier" in act.columns else 0
+            tier2 = int((act.get("tier") == 2).sum()) if "tier" in act.columns else 0
+
+            agent4_output = (
+                f"Report rendered deterministically.\n"
+                f"  path:            {report_path}\n"
+                f"  bytes:           {report_path.stat().st_size:,}\n"
+                f"  rows:            {len(df)}\n"
+                f"  actionable:      {len(act)} (Tier 1: {tier1} | Tier 2: {tier2})"
             )
             _save("agent4", agent4_output)
             results["agent4"] = agent4_output
-            logger.info(f"✅ Agent 4 complete.\n{agent4_output[:300]}")
+            logger.info(f"✅ Report rendered.\n{agent4_output}")
 
         except Exception as e:
-            logger.error(f"❌ Agent 4 error: {e}", exc_info=True)
+            logger.error(f"❌ Report rendering error: {e}", exc_info=True)
             results["agent4"] = f"ERROR: {e}"
+            # Don't halt — email stage can still fire off model_scores.csv
     else:
         results["agent4"] = agent4_output
 
