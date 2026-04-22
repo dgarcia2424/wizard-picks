@@ -239,3 +239,133 @@ date,game,model,bet_type,pick_direction,model_prob,P_true,Retail_Implied_Prob,ed
 2026-04-21,Los Angeles Dodgers @ San Francisco Giants,F5,F5 Moneyline,AWAY,0.405,,0.6642,-0.2592,-235.0,True,False,,,False
 2026-04-21,Los Angeles Dodgers @ San Francisco Giants,NRFI,NRFI,NRFI,0.642,0.5366,0.5372,0.1048,-132.0,True,True,1.0,50.0,True
 2026-04-21,Los Angeles Dodgers @ San Francisco Giants,NRFI,YRFI,YRFI,0.358,0.4634,0.4628,-0.1048,104.0,True,True,,,False
+2026-04-22,St. Louis Cardinals @ Miami Marlins,ML,Moneyline,HOME,0.388,0.5414,0.5427,-0.1547,-130.0,False,True,,,False
+2026-04-22,St. Louis Cardinals @ Miami Marlins,ML,Moneyline,AWAY,0.612,0.4586,0.4573,0.1547,110.0,False,True,1.0,,False
+2026-04-22,St. Louis Cardinals @ Miami Marlins,Totals,Total 8.5,OVER,0.5806,0.5191,0.5077,0.0729,-112.0,True,True,1.0,50.0,True
+2026-04-22,St. Louis Cardinals @ Miami Marlins,Totals,Total 8.5,UNDER,0.4194,0.4809,0.4923,-0.0729,-105.0,True,True,,,False
+2026-04-22,St. Louis Cardinals @ Miami Marlins,Runline,Runline -1.5,HOME -1.5,0.5982,0.3689,0.3717,0.2265,159.0,False,True,1.0,,False
+2026-04-22,St. Louis Cardinals @ Miami Marlins,Runline,Runline -1.5,AWAY +1.5,0.4018,0.6311,0.6283,-0.2265,-188.0,False,True,,,False
+2026-04-22,St. Louis Cardinals @ Miami Marlins,F5,F5 Moneyline,HOME,0.619,,0.5361,0.0829,-125.0,True,True,1.0,50.0,True
+2026-04-22,St. Louis Cardinals @ Miami Marlins,F5,F5 Moneyline,AWAY,0.381,,0.4639,-0.0829,108.0,True,True,,,False
+2026-04-22,St. Louis Cardinals @ Miami Marlins,NRFI,NRFI,NRFI,0.803,0.4856,0.4958,0.3072,-111.0,False,True,1.0,,False
+2026-04-22,St. Louis Cardinals @ Miami Marlins,NRFI,YRFI,YRFI,0.197,0.5144,0.5042,-0.3072,-115.0,False,True,,,False
+2026-04-22,Cincinnati Reds @ Tampa Bay Rays,ML,Moneyline,HOME,0.705,0.5543,0.5594,0.1456,-138.0,False,True,1.0,,False
+2026-04-22,Cincinnati Reds @ Tampa Bay Rays,ML,Moneyline,AWAY,0.295,0.4457,0.4406,-0.1456,119.0,False,True,,,False
+2026-04-22,Cincinnati Reds @ Tampa Bay Rays,Totals,Total 8.5,OVER,0.5477,0.5046,0.5022,0.0455,-110.0,True,True,1.0,25.0,True
+2026-04-22,Cincinnati Reds @ Tampa Bay Rays,Totals,Total 8.5,UNDER,0.4523,0.4954,0.4978,-0.0455,-108.0,True,True,,,False
+2026-04-22,Cincinnati Reds @ Tampa Bay Rays,Runline,Runline -1.5,HOME -1.5,0.6749,0.378,0.3875,0.2874,150.0,False,True,1.0,,False
+2026-04-22,Cincinnati Reds @ Tampa Bay Rays,Runline,Runline -1.5,AWAY +1.5,0.3251,0.622,0.6125,-0.2874,-172.0,False,True,,,False
+2026-04-22,Cincinnati Reds @ Tampa Bay Rays,F5,F5 Moneyline,HOME,0.551,,0.5468,0.0042,-135.0,True,True,,,False
+2026-04-22,Cincinnati Reds @ Tampa Bay Rays,F5,F5 Moneyline,AWAY,0.449,,0.4532,-0.0042,110.0,True,True,,,False
+2026-04-22,Cincinnati Reds @ Tampa Bay Rays,NRFI,NRFI,NRFI,0.642,0.4978,0.4812,0.1608,-104.0,False,True,1.0,,False
+2026-04-22,Cincinnati Reds @ Tampa Bay Rays,NRFI,YRFI,YRFI,0.358,0.5022,0.5188,-0.1608,-122.0,False,True,,,False
+2026-04-22,Houston Astros @ Cleveland Guardians,ML,Moneyline,HOME,0.494,0.5683,0.5606,-0.0666,-138.0,True,True,,,False
+2026-04-22,Houston Astros @ Cleveland Guardians,ML,Moneyline,AWAY,0.506,0.4317,0.4394,0.0666,120.0,True,True,1.0,47.0,True
+2026-04-22,Houston Astros @ Cleveland Guardians,Totals,Total 8.0,OVER,0.4778,0.5023,0.4944,-0.0166,-105.0,True,True,,,False
+2026-04-22,Houston Astros @ Cleveland Guardians,Totals,Total 8.0,UNDER,0.5222,0.4977,0.5056,0.0166,-110.0,True,True,2.0,,False
+2026-04-22,Houston Astros @ Cleveland Guardians,Runline,Runline -1.5,HOME -1.5,0.6411,0.3866,0.378,0.2631,155.0,False,True,1.0,,False
+2026-04-22,Houston Astros @ Cleveland Guardians,Runline,Runline -1.5,AWAY +1.5,0.3589,0.6134,0.622,-0.2631,-182.0,False,True,,,False
+2026-04-22,Houston Astros @ Cleveland Guardians,F5,F5 Moneyline,HOME,0.697,,0.5491,0.1479,-135.0,True,True,1.0,50.0,True
+2026-04-22,Houston Astros @ Cleveland Guardians,F5,F5 Moneyline,AWAY,0.303,,0.4509,-0.1479,112.0,True,True,,,False
+2026-04-22,Houston Astros @ Cleveland Guardians,NRFI,NRFI,NRFI,0.348,0.5111,0.5331,-0.1851,-130.0,False,True,,,False
+2026-04-22,Houston Astros @ Cleveland Guardians,NRFI,YRFI,YRFI,0.652,0.4889,0.4669,0.1851,102.0,False,True,1.0,,False
+2026-04-22,Baltimore Orioles @ Kansas City Royals,ML,Moneyline,HOME,0.694,0.5455,0.5463,0.1477,-130.0,False,True,1.0,,False
+2026-04-22,Baltimore Orioles @ Kansas City Royals,ML,Moneyline,AWAY,0.306,0.4545,0.4537,-0.1477,113.0,False,True,,,False
+2026-04-22,Baltimore Orioles @ Kansas City Royals,Totals,Total 9.5,OVER,0.2389,0.4839,0.4802,-0.2413,100.0,False,True,,,False
+2026-04-22,Baltimore Orioles @ Kansas City Royals,Totals,Total 9.5,UNDER,0.7611,0.5161,0.5198,0.2413,-118.0,False,True,1.0,,False
+2026-04-22,Baltimore Orioles @ Kansas City Royals,Runline,Runline -1.5,HOME -1.5,0.8145,0.3776,0.378,0.4365,155.0,False,True,1.0,,False
+2026-04-22,Baltimore Orioles @ Kansas City Royals,Runline,Runline -1.5,AWAY +1.5,0.1855,0.6224,0.622,-0.4365,-182.0,False,True,,,False
+2026-04-22,Baltimore Orioles @ Kansas City Royals,F5,F5 Moneyline,HOME,0.659,,0.5537,0.1053,-138.0,True,True,1.0,50.0,True
+2026-04-22,Baltimore Orioles @ Kansas City Royals,F5,F5 Moneyline,AWAY,0.341,,0.4463,-0.1053,114.0,True,True,,,False
+2026-04-22,Baltimore Orioles @ Kansas City Royals,NRFI,NRFI,NRFI,0.756,0.5077,0.4761,0.2799,-102.0,False,True,1.0,,False
+2026-04-22,Baltimore Orioles @ Kansas City Royals,NRFI,YRFI,YRFI,0.244,0.4923,0.5239,-0.2799,-125.0,False,True,,,False
+2026-04-22,Toronto Blue Jays @ Los Angeles Angels,ML,Moneyline,HOME,0.627,0.5831,0.5882,0.0388,-155.0,True,True,1.0,24.0,True
+2026-04-22,Toronto Blue Jays @ Los Angeles Angels,ML,Moneyline,AWAY,0.373,0.4169,0.4118,-0.0388,135.0,True,True,,,False
+2026-04-22,Toronto Blue Jays @ Los Angeles Angels,Totals,Total 8.0,OVER,0.1692,0.4954,0.5089,-0.3397,-112.0,False,True,,,False
+2026-04-22,Toronto Blue Jays @ Los Angeles Angels,Totals,Total 8.0,UNDER,0.8308,0.5046,0.4911,0.3397,-104.0,False,True,1.0,,False
+2026-04-22,Toronto Blue Jays @ Los Angeles Angels,Runline,Runline -1.5,HOME -1.5,0.7985,0.4045,0.4112,0.3873,135.0,False,True,1.0,,False
+2026-04-22,Toronto Blue Jays @ Los Angeles Angels,Runline,Runline -1.5,AWAY +1.5,0.2015,0.5955,0.5888,-0.3873,-156.0,False,True,,,False
+2026-04-22,Toronto Blue Jays @ Los Angeles Angels,F5,F5 Moneyline,HOME,0.631,,0.614,0.017,-175.0,True,True,2.0,,False
+2026-04-22,Toronto Blue Jays @ Los Angeles Angels,F5,F5 Moneyline,AWAY,0.369,,0.386,-0.017,150.0,True,True,,,False
+2026-04-22,Toronto Blue Jays @ Los Angeles Angels,NRFI,NRFI,NRFI,0.708,0.5134,0.5,0.208,-113.0,False,True,1.0,,False
+2026-04-22,Toronto Blue Jays @ Los Angeles Angels,NRFI,YRFI,YRFI,0.292,0.4866,0.5,-0.208,-113.0,False,True,,,False
+2026-04-22,Milwaukee Brewers @ Detroit Tigers,ML,Moneyline,HOME,0.801,0.5503,0.553,0.248,-134.0,False,True,1.0,,False
+2026-04-22,Milwaukee Brewers @ Detroit Tigers,ML,Moneyline,AWAY,0.199,0.4497,0.447,-0.248,116.0,False,True,,,False
+2026-04-22,Milwaukee Brewers @ Detroit Tigers,Totals,Total 7.5,OVER,0.4891,0.4885,0.5242,-0.0351,-120.0,True,True,,,False
+2026-04-22,Milwaukee Brewers @ Detroit Tigers,Totals,Total 7.5,UNDER,0.5109,0.5115,0.4758,0.0351,102.0,True,True,1.0,16.0,True
+2026-04-22,Milwaukee Brewers @ Detroit Tigers,Runline,Runline -1.5,HOME -1.5,0.6052,0.3703,0.3734,0.2318,159.0,False,True,1.0,,False
+2026-04-22,Milwaukee Brewers @ Detroit Tigers,Runline,Runline -1.5,AWAY +1.5,0.3948,0.6297,0.6266,-0.2318,-184.0,False,True,,,False
+2026-04-22,Milwaukee Brewers @ Detroit Tigers,F5,F5 Moneyline,HOME,0.635,,0.5491,0.0859,-135.0,True,True,1.0,50.0,True
+2026-04-22,Milwaukee Brewers @ Detroit Tigers,F5,F5 Moneyline,AWAY,0.365,,0.4509,-0.0859,112.0,True,True,,,False
+2026-04-22,Milwaukee Brewers @ Detroit Tigers,NRFI,NRFI,NRFI,0.754,0.5122,0.5306,0.2234,-130.0,False,True,1.0,,False
+2026-04-22,Milwaukee Brewers @ Detroit Tigers,NRFI,YRFI,YRFI,0.246,0.4878,0.4694,-0.2234,100.0,False,True,,,False
+2026-04-22,Atlanta Braves @ Washington Nationals,ML,Moneyline,HOME,0.356,0.4317,0.4335,-0.0775,124.0,True,True,,,False
+2026-04-22,Atlanta Braves @ Washington Nationals,ML,Moneyline,AWAY,0.644,0.5683,0.5665,0.0775,-140.0,True,True,1.0,50.0,True
+2026-04-22,Atlanta Braves @ Washington Nationals,Totals,Total 9.0,OVER,0.6758,0.4931,0.4944,0.1814,-105.0,False,True,1.0,,False
+2026-04-22,Atlanta Braves @ Washington Nationals,Totals,Total 9.0,UNDER,0.3242,0.5069,0.5056,-0.1814,-110.0,False,True,,,False
+2026-04-22,Atlanta Braves @ Washington Nationals,Runline,Runline -1.5,HOME -1.5,0.5018,,,,,False,False,,,False
+2026-04-22,Atlanta Braves @ Washington Nationals,Runline,Runline -1.5,AWAY +1.5,0.4982,,,,,False,False,,,False
+2026-04-22,Atlanta Braves @ Washington Nationals,F5,F5 Moneyline,HOME,0.625,,0.462,0.163,106.0,True,True,1.0,50.0,True
+2026-04-22,Atlanta Braves @ Washington Nationals,F5,F5 Moneyline,AWAY,0.375,,0.538,-0.163,-130.0,True,True,,,False
+2026-04-22,Atlanta Braves @ Washington Nationals,NRFI,NRFI,NRFI,0.425,0.4724,0.4812,-0.0562,-104.0,False,True,,,False
+2026-04-22,Atlanta Braves @ Washington Nationals,NRFI,YRFI,YRFI,0.575,0.5276,0.5188,0.0562,-122.0,False,True,1.0,,False
+2026-04-22,New York Yankees @ Boston Red Sox,ML,Moneyline,HOME,0.177,0.4362,0.4335,-0.2565,124.0,False,True,,,False
+2026-04-22,New York Yankees @ Boston Red Sox,ML,Moneyline,AWAY,0.823,0.5638,0.5665,0.2565,-140.0,False,True,1.0,,False
+2026-04-22,New York Yankees @ Boston Red Sox,Totals,Total 7.5,OVER,0.3353,0.5069,0.5198,-0.1845,-118.0,False,True,,,False
+2026-04-22,New York Yankees @ Boston Red Sox,Totals,Total 7.5,UNDER,0.6647,0.4931,0.4802,0.1845,100.0,False,True,1.0,,False
+2026-04-22,New York Yankees @ Boston Red Sox,Runline,Runline -1.5,HOME -1.5,0.437,,,,,False,False,,,False
+2026-04-22,New York Yankees @ Boston Red Sox,Runline,Runline -1.5,AWAY +1.5,0.563,,,,,False,False,,,False
+2026-04-22,New York Yankees @ Boston Red Sox,F5,F5 Moneyline,HOME,0.289,,0.438,-0.149,120.0,True,True,,,False
+2026-04-22,New York Yankees @ Boston Red Sox,F5,F5 Moneyline,AWAY,0.711,,0.562,0.149,-140.0,True,True,1.0,50.0,True
+2026-04-22,New York Yankees @ Boston Red Sox,NRFI,NRFI,NRFI,0.293,0.5487,0.5408,-0.2478,-135.0,False,True,,,False
+2026-04-22,New York Yankees @ Boston Red Sox,NRFI,YRFI,YRFI,0.707,0.4513,0.4592,0.2478,105.0,False,True,1.0,,False
+2026-04-22,Minnesota Twins @ New York Mets,ML,Moneyline,HOME,0.519,0.5898,0.59,-0.071,-158.0,True,True,,,False
+2026-04-22,Minnesota Twins @ New York Mets,ML,Moneyline,AWAY,0.481,0.4102,0.41,0.071,135.0,True,True,1.0,48.0,True
+2026-04-22,Minnesota Twins @ New York Mets,Totals,Total 8.0,OVER,0.2146,0.5,0.5056,-0.291,-110.0,False,True,,,False
+2026-04-22,Minnesota Twins @ New York Mets,Totals,Total 8.0,UNDER,0.7854,0.5,0.4944,0.291,-105.0,False,True,1.0,,False
+2026-04-22,Minnesota Twins @ New York Mets,Runline,Runline -1.5,HOME -1.5,0.6378,0.4077,0.3961,0.2417,146.0,False,True,1.0,,False
+2026-04-22,Minnesota Twins @ New York Mets,Runline,Runline -1.5,AWAY +1.5,0.3622,0.5923,0.6039,-0.2417,-163.0,False,True,,,False
+2026-04-22,Minnesota Twins @ New York Mets,F5,F5 Moneyline,HOME,0.661,,0.5811,0.0799,-152.0,True,True,1.0,50.0,True
+2026-04-22,Minnesota Twins @ New York Mets,F5,F5 Moneyline,AWAY,0.339,,0.4189,-0.0799,130.0,True,True,,,False
+2026-04-22,Minnesota Twins @ New York Mets,NRFI,NRFI,NRFI,0.421,0.5045,0.5331,-0.1121,-130.0,False,True,,,False
+2026-04-22,Minnesota Twins @ New York Mets,NRFI,YRFI,YRFI,0.579,0.4955,0.4669,0.1121,102.0,False,True,1.0,,False
+2026-04-22,Philadelphia Phillies @ Chicago Cubs,ML,Moneyline,HOME,0.811,0.6093,0.6097,0.2013,-174.0,False,True,1.0,,False
+2026-04-22,Philadelphia Phillies @ Chicago Cubs,ML,Moneyline,AWAY,0.189,0.3907,0.3903,-0.2013,146.0,False,True,,,False
+2026-04-22,Philadelphia Phillies @ Chicago Cubs,Totals,Total 8.0,OVER,0.3219,0.4977,0.5056,-0.1837,-110.0,False,True,,,False
+2026-04-22,Philadelphia Phillies @ Chicago Cubs,Totals,Total 8.0,UNDER,0.6781,0.5023,0.4944,0.1837,-105.0,False,True,1.0,,False
+2026-04-22,Philadelphia Phillies @ Chicago Cubs,Runline,Runline -1.5,HOME -1.5,0.8191,0.4267,0.4251,0.394,126.0,False,True,1.0,,False
+2026-04-22,Philadelphia Phillies @ Chicago Cubs,Runline,Runline -1.5,AWAY +1.5,0.1809,0.5733,0.5749,-0.394,-149.0,False,True,,,False
+2026-04-22,Philadelphia Phillies @ Chicago Cubs,F5,F5 Moneyline,HOME,0.619,,0.6201,-0.0011,-188.0,True,True,,,False
+2026-04-22,Philadelphia Phillies @ Chicago Cubs,F5,F5 Moneyline,AWAY,0.381,,0.3799,0.0011,150.0,True,True,,,False
+2026-04-22,Philadelphia Phillies @ Chicago Cubs,NRFI,NRFI,NRFI,0.819,0.5349,0.5306,0.2884,-130.0,False,True,1.0,,False
+2026-04-22,Philadelphia Phillies @ Chicago Cubs,NRFI,YRFI,YRFI,0.181,0.4651,0.4694,-0.2884,100.0,False,True,,,False
+2026-04-22,Pittsburgh Pirates @ Texas Rangers,ML,Moneyline,HOME,0.588,0.4976,0.493,0.095,-102.0,True,True,1.0,50.0,True
+2026-04-22,Pittsburgh Pirates @ Texas Rangers,ML,Moneyline,AWAY,0.412,0.5024,0.507,-0.095,-108.0,True,True,,,False
+2026-04-22,Pittsburgh Pirates @ Texas Rangers,Totals,Total 8.0,OVER,0.2661,0.5023,0.5022,-0.2361,-110.0,False,True,,,False
+2026-04-22,Pittsburgh Pirates @ Texas Rangers,Totals,Total 8.0,UNDER,0.7339,0.4977,0.4978,0.2361,-108.0,False,True,1.0,,False
+2026-04-22,Pittsburgh Pirates @ Texas Rangers,Runline,Runline -1.5,HOME -1.5,0.6004,,,,,False,False,,,False
+2026-04-22,Pittsburgh Pirates @ Texas Rangers,Runline,Runline -1.5,AWAY +1.5,0.3996,,,,,False,False,,,False
+2026-04-22,Pittsburgh Pirates @ Texas Rangers,F5,F5 Moneyline,HOME,0.386,,0.488,-0.102,-104.0,True,True,,,False
+2026-04-22,Pittsburgh Pirates @ Texas Rangers,F5,F5 Moneyline,AWAY,0.614,,0.512,0.102,-115.0,True,True,1.0,50.0,True
+2026-04-22,Pittsburgh Pirates @ Texas Rangers,NRFI,NRFI,NRFI,0.446,0.537,0.5082,-0.0622,-118.0,False,True,,,False
+2026-04-22,Pittsburgh Pirates @ Texas Rangers,NRFI,YRFI,YRFI,0.554,0.463,0.4918,0.0622,-110.0,False,True,1.0,,False
+2026-04-22,San Diego Padres @ Colorado Rockies,ML,Moneyline,HOME,0.401,0.4159,0.4139,-0.0129,136.0,True,True,,,False
+2026-04-22,San Diego Padres @ Colorado Rockies,ML,Moneyline,AWAY,0.599,0.5841,0.5861,0.0129,-150.0,True,True,2.0,,False
+2026-04-22,San Diego Padres @ Colorado Rockies,Totals,Total 12.0,OVER,0.393,0.5125,0.5108,-0.1178,-115.0,False,True,,,False
+2026-04-22,San Diego Padres @ Colorado Rockies,Totals,Total 12.0,UNDER,0.607,0.4875,0.4892,0.1178,-105.0,False,True,1.0,,False
+2026-04-22,San Diego Padres @ Colorado Rockies,Runline,Runline -1.5,HOME -1.5,0.4492,,,,,False,False,,,False
+2026-04-22,San Diego Padres @ Colorado Rockies,Runline,Runline -1.5,AWAY +1.5,0.5508,,,,,False,False,,,False
+2026-04-22,San Diego Padres @ Colorado Rockies,F5,F5 Moneyline,HOME,0.601,,0.4663,0.1347,106.0,True,True,1.0,50.0,True
+2026-04-22,San Diego Padres @ Colorado Rockies,F5,F5 Moneyline,AWAY,0.399,,0.5337,-0.1347,-125.0,True,True,,,False
+2026-04-22,San Diego Padres @ Colorado Rockies,NRFI,NRFI,NRFI,0.294,0.3845,0.4007,-0.1067,135.0,False,True,,,False
+2026-04-22,San Diego Padres @ Colorado Rockies,NRFI,YRFI,YRFI,0.706,0.6155,0.5993,0.1067,-175.0,False,True,1.0,,False
+2026-04-22,Los Angeles Dodgers @ San Francisco Giants,ML,Moneyline,HOME,0.483,0.3351,0.342,0.141,184.0,False,True,1.0,,False
+2026-04-22,Los Angeles Dodgers @ San Francisco Giants,ML,Moneyline,AWAY,0.517,0.6649,0.658,-0.141,-210.0,False,True,,,False
+2026-04-22,Los Angeles Dodgers @ San Francisco Giants,Totals,Total 7.5,OVER,0.2416,0.4852,0.5169,-0.2753,-115.0,False,True,,,False
+2026-04-22,Los Angeles Dodgers @ San Francisco Giants,Totals,Total 7.5,UNDER,0.7584,0.5148,0.4831,0.2753,100.0,False,True,1.0,,False
+2026-04-22,Los Angeles Dodgers @ San Francisco Giants,Runline,Runline -1.5,HOME -1.5,0.7523,,,,,False,False,,,False
+2026-04-22,Los Angeles Dodgers @ San Francisco Giants,Runline,Runline -1.5,AWAY +1.5,0.2477,,,,,False,False,,,False
+2026-04-22,Los Angeles Dodgers @ San Francisco Giants,F5,F5 Moneyline,HOME,0.503,,0.3578,0.1452,165.0,True,True,1.0,50.0,True
+2026-04-22,Los Angeles Dodgers @ San Francisco Giants,F5,F5 Moneyline,AWAY,0.497,,0.6422,-0.1452,-210.0,True,True,,,False
+2026-04-22,Los Angeles Dodgers @ San Francisco Giants,NRFI,NRFI,NRFI,0.608,0.537,0.5372,0.0708,-132.0,False,True,1.0,,False
+2026-04-22,Los Angeles Dodgers @ San Francisco Giants,NRFI,YRFI,YRFI,0.392,0.463,0.4628,-0.0708,104.0,False,True,,,False

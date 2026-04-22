@@ -10,6 +10,7 @@ by tool name. Claude decides WHEN to call them — you just implement WHAT they 
 from __future__ import annotations
 
 import json
+import logging
 import smtplib
 from datetime import date, datetime, timedelta
 from email.mime.application import MIMEApplication
@@ -27,6 +28,23 @@ from config.settings import (
     ODDS_API_US_BOOKMAKERS, ODDS_API_EU_BOOKMAKERS,
     GMAIL_FROM, GMAIL_PASSWORD, EMAIL_RECIPIENTS,
 )
+
+logger = logging.getLogger("wizard.daily")
+
+# ── Legacy sklearn pickle compat ──────────────────────────────────────────────
+# The stacker/calibrator pickles in models/ were saved with sklearn 1.8.0 where
+# LogisticRegression's `multi_class` attribute was removed. In the current env
+# (sklearn 1.7.2), predict_proba still reads self.multi_class and throws
+# AttributeError. Setting a class-level default lets old pickles fall through
+# to the class attribute while fresh pickles continue to override via __dict__.
+try:
+    from sklearn.linear_model import LogisticRegression as _LR
+    if "multi_class" not in _LR.__dict__:
+        _LR.multi_class = "auto"
+except Exception as _e:  # sklearn missing or unexpected error — don't block imports
+    logging.getLogger("wizard.daily").warning(
+        f"sklearn LR multi_class compat patch skipped: {type(_e).__name__}: {_e}"
+    )
 
 # ── Ballpark coordinates ──────────────────────────────────────────────────────
 # Full name → abbreviation mapping (Odds API returns full names)
@@ -267,16 +285,6 @@ def _best_totals_at_line(totals: dict, line: Optional[float]) -> tuple:
 
 
 def fetch_odds_api(game_date: str = "") -> str:
-    # ── STAGED-TEST STUB ──────────────────────────────────────────────────────
-    # Bypasses The Odds API entirely. Returns an OK-but-empty payload so Agent 1
-    # does not HALT, and leaves the existing games.csv on disk untouched.
-    return json.dumps({
-        "status": "OK",
-        "message": "STUB: API call bypassed. Using existing games.csv.",
-        "games_fetched": 0,
-        "games": [],
-    })
-    # ── end stub ──────────────────────────────────────────────────────────────
     """
     Dual-region odds ingestion (two-phase, because The Odds API only exposes F5
     markets through the per-event endpoint).
@@ -506,16 +514,6 @@ def fetch_odds_api(game_date: str = "") -> str:
 
 
 def fetch_mlb_starters(game_date: str = "") -> str:
-    # ── STAGED-TEST STUB ──────────────────────────────────────────────────────
-    # Bypasses the MLB Stats API. Returns empty starter dict — games.csv on
-    # disk already has starters from a prior live run.
-    return json.dumps({
-        "status": "OK",
-        "message": "STUB: MLB API bypassed.",
-        "confirmed_games": 0,
-        "starters": {},
-    })
-    # ── end stub ──────────────────────────────────────────────────────────────
     target = game_date or date.today().isoformat()
     url    = "https://statsapi.mlb.com/api/v1/schedule"
     params = {
@@ -860,26 +858,6 @@ def generate_ml_scores(game_date: str = "") -> str:
       failed_sanity, failed_odds_floor, failed_edge,
       actionable_picks (list of ≤N compact dicts)
     """
-    # ── STAGED-TEST STUB ──────────────────────────────────────────────────────
-    # Bypasses the BayesianStacker ML inference. Returns a summary based on the
-    # existing model_scores.csv so Step 4 can render without re-scoring.
-    _scores_path = Path(FILES["model_scores"])
-    if not _scores_path.exists():
-        return json.dumps({"status": "ERROR", "error": f"STUB: model_scores.csv not found at {_scores_path}"})
-    _df = pd.read_csv(_scores_path)
-    _act = _df[_df.get("actionable") == True] if "actionable" in _df.columns else _df.iloc[0:0]
-    _t1 = int((_act.get("tier") == 1).sum()) if "tier" in _act.columns else 0
-    _t2 = int((_act.get("tier") == 2).sum()) if "tier" in _act.columns else 0
-    return json.dumps({
-        "status": "OK",
-        "message": "STUB: ML inference bypassed. Using existing model_scores.csv.",
-        "total_rows": int(len(_df)),
-        "actionable": int(len(_act)),
-        "tier_1": _t1,
-        "tier_2": _t2,
-    })
-    # ── end stub ──────────────────────────────────────────────────────────────
-
     target = game_date or date.today().isoformat()
 
     # 1. Games + market context
@@ -1114,37 +1092,84 @@ def generate_ml_scores(game_date: str = "") -> str:
 # AGENT 5 — Notification Tool
 # ══════════════════════════════════════════════════════════════════════════════
 
-def send_email(subject: str, body: str, attach_report: bool = True) -> str:
-    # ── STAGED-TEST STUB ──────────────────────────────────────────────────────
-    # Writes the would-be email to ./test_email.txt and returns success without
-    # opening an SMTP connection. Remove this block to restore live delivery.
-    with open("test_email.txt", "w", encoding="utf-8") as f:
-        f.write(f"Subject: {subject}\n\n{body}")
-    return json.dumps({"status": "OK", "message": "STUB: Email written to test_email.txt"})
-    # ── end stub ──────────────────────────────────────────────────────────────
+def _render_report_pdf(html_path: Path, pdf_path: Path) -> bool:
+    """Render an HTML file to PDF via playwright/chromium. Returns True on success."""
+    logger.info(f"[PDF] rendering {html_path.name} → {pdf_path.name}")
+    try:
+        from playwright.sync_api import sync_playwright
+        url = html_path.resolve().as_uri()
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            page.goto(url, wait_until="networkidle")
+            page.pdf(
+                path=str(pdf_path),
+                format="Letter",
+                print_background=True,
+                margin={"top": "0.4in", "bottom": "0.4in", "left": "0.3in", "right": "0.3in"},
+            )
+            browser.close()
+        size = pdf_path.stat().st_size if pdf_path.exists() else 0
+        logger.info(f"[PDF] rendered {size:,} bytes")
+        return pdf_path.exists() and size > 1024
+    except Exception as e:
+        logger.warning(f"[PDF] render failed: {type(e).__name__}: {e}", exc_info=True)
+        return False
 
-    msg           = MIMEMultipart()
+
+def send_email(subject: str, body: str, attach_report: bool = True) -> str:
+    """
+    Send the Wizard Picks email.
+
+    BODY is the rendered HTML report itself (model_report.html), not the `body`
+    argument — Agent 5's composed summary is ignored for delivery content. A
+    PDF rendered from the same HTML is attached.
+
+    The `body` parameter is preserved in the signature for schema compatibility
+    and is appended as a short plaintext fallback for non-HTML mail clients.
+    """
+    report_path = Path(FILES["model_report"])
+    pdf_path    = report_path.with_suffix(".pdf")
+
+    # ── Build MIME envelope ────────────────────────────────────────────────
+    msg           = MIMEMultipart("mixed")
     msg["From"]   = GMAIL_FROM
     msg["To"]     = ", ".join(EMAIL_RECIPIENTS)
     msg["Subject"]= subject
-    msg.attach(MIMEText(body, "plain"))
 
-    if attach_report:
-        rp = FILES.get("model_report")
-        if rp and Path(rp).exists():
-            with open(rp, "rb") as f:
-                part = MIMEApplication(f.read(), Name="model_report.html")
-            part["Content-Disposition"] = 'attachment; filename="model_report.html"'
+    # multipart/alternative: plaintext fallback + full HTML report as body
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText(body or "The Wizard Report is attached (HTML body + PDF).", "plain"))
+    if report_path.exists():
+        html_content = report_path.read_text(encoding="utf-8")
+        alt.attach(MIMEText(html_content, "html", _charset="utf-8"))
+    msg.attach(alt)
+
+    # ── PDF attachment ─────────────────────────────────────────────────────
+    pdf_ok = False
+    if attach_report and report_path.exists():
+        pdf_ok = _render_report_pdf(report_path, pdf_path)
+        if pdf_ok:
+            with open(pdf_path, "rb") as f:
+                part = MIMEApplication(f.read(), _subtype="pdf", Name="model_report.pdf")
+            part["Content-Disposition"] = 'attachment; filename="model_report.pdf"'
             msg.attach(part)
 
+    # ── SMTP send ──────────────────────────────────────────────────────────
     last_err = None
     for attempt in range(1, 3):
         try:
             with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
                 s.login(GMAIL_FROM, GMAIL_PASSWORD)
                 s.sendmail(GMAIL_FROM, EMAIL_RECIPIENTS, msg.as_string())
-            return json.dumps({"status": "OK", "recipients": EMAIL_RECIPIENTS,
-                               "subject": subject, "attempt": attempt})
+            return json.dumps({
+                "status":     "OK",
+                "recipients": EMAIL_RECIPIENTS,
+                "subject":    subject,
+                "attempt":    attempt,
+                "body":       "html-report-embedded",
+                "pdf":        "attached" if pdf_ok else "skipped",
+            })
         except Exception as e:
             last_err = str(e)
 

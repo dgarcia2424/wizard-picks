@@ -32,12 +32,18 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from agents.definitions import AGENT1, AGENT3, AGENT5
+from agents.definitions import AGENT3
 from config import settings
 from config.settings import FILES, PIPELINE_DIR
 from orchestrator.agent_loop import run_agent, PipelineHaltError
 from render_report import render
-from tools.implementations import auto_grade_historical_picks
+from tools.implementations import (
+    auto_grade_historical_picks,
+    fetch_odds_api,
+    fetch_mlb_starters,
+    fetch_weather,
+    write_csv,
+)
 
 # Agent 4 (Report Generation) has been replaced with a deterministic
 # Python renderer — render_report.py in the pipeline root. Grading is
@@ -114,37 +120,115 @@ def run_daily_pipeline(force: bool = False) -> dict[str, str]:
         logger.info("⚠️  force=True — ignoring all checkpoints")
     logger.info("=" * 60)
 
-    # ── AGENT 1: Data Ingestion ───────────────────────────────────────────────
-    logger.info("▶ Starting Agent 1: Data Ingestion")
-
+    # ── STEP 1: Data Ingestion (deterministic Python ETL) ─────────────────────
+    # Agent 1's LLM-driven ingestion has been replaced by a direct Python
+    # pipeline: fetch odds (HALT if zero games) → fetch starters → fetch
+    # weather → write games.csv. No Claude call, no tool dispatch — just the
+    # same underlying tool functions called in order. Downstream scorers read
+    # starters/weather from their own parquet sources, so games.csv is the
+    # odds API output as before.
+    logger.info("▶ Starting Step 1: Data Ingestion (deterministic ETL)")
     agent1_output = None if force else _load("agent1")
 
     if agent1_output is None:
         try:
-            agent1_output = run_agent(
-                system_prompt=AGENT1.system_prompt,
-                tools=AGENT1.tools,
-                tool_executor=AGENT1.tool_executor,
-                user_message=(
-                    f"Run the full data ingestion workflow for today ({TODAY}). "
-                    "Check stale files, fetch confirmed starters, fetch DK/FD lines, "
-                    "fetch ballpark weather, and write games.csv. "
-                    "HALT immediately if The Odds API returns zero lines."
-                ),
-                agent_name=AGENT1.name,
+            # 1) Odds — HALT on zero games
+            odds_raw = fetch_odds_api()
+            odds     = json.loads(odds_raw)
+            if odds.get("status") == "HALT":
+                raise PipelineHaltError(
+                    f"Odds API returned no games: {odds.get('error', 'unknown')}"
+                )
+            games = odds.get("games", []) or []
+            if not games:
+                raise PipelineHaltError("fetch_odds_api returned an empty games list.")
+            logger.info(f"[Ingest] odds: {len(games)} games fetched "
+                        f"(us_err={odds.get('us_error')}, eu_err={odds.get('eu_error')})")
+
+            # 2) Starters
+            starters_raw = fetch_mlb_starters()
+            starters     = json.loads(starters_raw)
+            logger.info(
+                f"[Ingest] starters: confirmed={starters.get('confirmed_games', 0)}, "
+                f"excluded={len(starters.get('excluded_games', []) or [])} "
+                f"(status={starters.get('status')})"
             )
+
+            # 3) Weather — pass minimal game shape the tool expects
+            weather_in = json.dumps([
+                {"home_team": g.get("home_team", ""),
+                 "game_id":   g.get("game_id", g.get("home_team", ""))}
+                for g in games
+            ])
+            weather_raw = fetch_weather(weather_in)
+            weather     = json.loads(weather_raw).get("weather", {}) or {}
+
+            # 4) Build human-readable "Enriched Weather" strings — logged for now.
+            def _cardinal(deg):
+                if deg is None:
+                    return "—"
+                try:
+                    d = float(deg) % 360.0
+                except Exception:
+                    return "—"
+                dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+                return dirs[int((d + 22.5) // 45) % 8]
+
+            enriched_weather: list[str] = []
+            for g in games:
+                gid  = g.get("game_id", g.get("home_team", ""))
+                home = g.get("home_team", "")
+                w    = weather.get(gid, {}) or {}
+                if "error" in w:
+                    enriched_weather.append(f"{home}: weather unavailable ({w.get('error')})")
+                    continue
+                t   = w.get("temperature_f")
+                ws  = w.get("wind_speed_mph")
+                wd  = _cardinal(w.get("wind_direction"))
+                pp  = w.get("precipitation_probability")
+                pp_s = f", Precip {pp}%" if pp is not None else ""
+                enriched_weather.append(
+                    f"{home}: {t}°F, Wind {ws}mph {wd}{pp_s}"
+                )
+            for line in enriched_weather:
+                logger.info(f"[Weather] {line}")
+
+            # 5) Write games.csv — odds API output is the canonical shape.
+            # TODO: join `enriched_weather` into a `weather_context` column on
+            # games.csv once downstream consumers are ready to read it. For now
+            # starter info lives in `lineups_{date}.parquet` and weather is
+            # logged only — games.csv stays 1:1 with fetch_odds_api output.
+            write_result = json.loads(write_csv(
+                file_key="games",
+                records_json=json.dumps(games),
+                mode="w",
+            ))
+            if write_result.get("status") != "OK":
+                raise RuntimeError(f"write_csv(games) failed: {write_result}")
+            logger.info(f"[Ingest] games.csv written: {write_result.get('rows_written')} rows "
+                        f"→ {write_result.get('file')}")
+
+            agent1_output = json.dumps({
+                "status":           "OK",
+                "games_written":    write_result.get("rows_written"),
+                "confirmed_starters": starters.get("confirmed_games", 0),
+                "weather_reports":  sum(1 for w in weather.values() if "error" not in w),
+                "us_error":         odds.get("us_error"),
+                "eu_error":         odds.get("eu_error"),
+                "enriched_weather": enriched_weather,
+            }, ensure_ascii=False)
             _save("agent1", agent1_output)
             results["agent1"] = agent1_output
-            logger.info(f"✅ Agent 1 complete.\n{agent1_output[:500]}")
+            logger.info(f"✅ Step 1 complete.\n{agent1_output[:500]}")
 
         except PipelineHaltError as e:
-            logger.error(f"❌ PIPELINE HALTED by Agent 1: {e}")
+            logger.error(f"❌ PIPELINE HALTED by Step 1: {e}")
             results["agent1"] = f"HALT: {e}"
             results["pipeline_status"] = "HALTED"
             return results
 
         except Exception as e:
-            logger.error(f"❌ Agent 1 unexpected error: {e}", exc_info=True)
+            logger.error(f"❌ Step 1 (Data Ingestion) error: {e}", exc_info=True)
             results["agent1"] = f"ERROR: {e}"
             results["pipeline_status"] = "FAILED"
             return results
@@ -155,8 +239,7 @@ def run_daily_pipeline(force: bool = False) -> dict[str, str]:
     agent3_output = None if force else _load("agent3")
 
     if agent3_output is None:
-        logger.info("Waiting 90s between agents to respect rate limits...")
-        time.sleep(90)
+        # Step 1 is now deterministic Python (no LLM call) — no rate-limit wait needed.
         logger.info("▶ Starting Agent 3: Scoring Engine")
         try:
             agent3_output = run_agent(
@@ -241,35 +324,65 @@ def run_daily_pipeline(force: bool = False) -> dict[str, str]:
     else:
         results["agent4"] = agent4_output
 
-    # ── AGENT 5: Notification ─────────────────────────────────────────────────
-    agent5_output = None if force else _load("agent5")
+    # ── STEP 5: Notification (deterministic Python sender) ────────────────────
+    # Agent 5's LLM-driven email composition has been replaced by a direct
+    # Python call to send_email(). The body is the full rendered HTML report
+    # (model_report.html) embedded inline, plus a plaintext summary fallback
+    # and a PDF attachment — all produced by send_email itself. No Claude call,
+    # no inter-agent sleep, no token cost.
+    logger.info("▶ Starting Step 5: Notification (deterministic send_email)")
+    try:
+        from tools.implementations import send_email
 
-    if agent5_output is None:
-        logger.info("Waiting 60s between agents to respect rate limits...")
-        time.sleep(60)
-        logger.info("▶ Starting Agent 5: Notification")
-        try:
-            agent5_output = run_agent(
-                system_prompt=AGENT5.system_prompt,
-                tools=AGENT5.tools,
-                tool_executor=AGENT5.tool_executor,
-                user_message=(
-                    f"Generate today's picks summary from model_scores.csv and send the daily email. "
-                    f"Subject: 'Wizard Picks — {TODAY}'. "
-                    "Flag any picks at 72%+ as high conviction. Attach model_report.html."
-                ),
-                context=f"Agent 4 (Report Generation) completed:\n{results.get('agent4', 'No output')}",
-                agent_name=AGENT5.name,
-            )
-            _save("agent5", agent5_output)
-            results["agent5"] = agent5_output
-            logger.info(f"✅ Agent 5 complete.\n{agent5_output[:300]}")
+        scores_path = PIPELINE_DIR / FILES["model_scores"]
+        df_all = pd.read_csv(scores_path)
+        df_act = df_all[df_all.get("actionable") == True].copy()
 
-        except Exception as e:
-            logger.error(f"❌ Agent 5 error: {e}", exc_info=True)
-            results["agent5"] = f"ERROR: {e}"
-    else:
-        results["agent5"] = agent5_output
+        n_total = len(df_act)
+        n_tier1 = int((df_act.get("tier") == 1).sum()) if "tier" in df_act.columns else 0
+        n_tier2 = int((df_act.get("tier") == 2).sum()) if "tier" in df_act.columns else 0
+
+        def _fmt_pick(r) -> str:
+            game  = r.get("game", "")
+            model = r.get("model", "")
+            pick  = r.get("pick_direction", "")
+            btype = r.get("bet_type", "")
+            odds  = r.get("retail_american_odds", "")
+            stake = r.get("dollar_stake", "")
+            prob  = r.get("model_prob", None)
+            prob_s = f"{prob*100:.1f}%" if isinstance(prob, (int, float)) else ""
+            odds_s = f"{int(odds):+d}" if pd.notna(odds) else ""
+            return (f"  • {game} — {model} {btype} {pick}  "
+                    f"| prob {prob_s} | odds {odds_s} | stake ${stake}")
+
+        lines: list[str] = [
+            "=" * 60,
+            f"WIZARD REPORT | {TODAY}",
+            "=" * 60,
+            f"Actionable edges: {n_total}  (Tier 1: {n_tier1}  |  Tier 2: {n_tier2})",
+            "",
+        ]
+        if n_tier1:
+            lines.append("--- TIER 1 (Strong Edge ≥ 3.0%) ---")
+            for _, r in df_act[df_act["tier"] == 1].iterrows():
+                lines.append(_fmt_pick(r))
+            lines.append("")
+        if n_tier2:
+            lines.append("--- TIER 2 (Medium Edge 1.0–2.9%) ---")
+            for _, r in df_act[df_act["tier"] == 2].iterrows():
+                lines.append(_fmt_pick(r))
+            lines.append("")
+        lines.append("See attached HTML body and PDF for full detail.")
+        body = "\n".join(lines)
+
+        subject = f"WIZARD REPORT: {n_total} Actionable Edges — {TODAY}"
+        send_result = send_email(subject=subject, body=body, attach_report=True)
+        results["agent5"] = send_result
+        logger.info(f"✅ Step 5 complete.\n{send_result[:400]}")
+
+    except Exception as e:
+        logger.error(f"❌ Step 5 (Notification) error: {e}", exc_info=True)
+        results["agent5"] = f"ERROR: {e}"
 
     # ── ACCURACY TRACKING ─────────────────────────────────────────────────────
     # Archive today's predictions and evaluate against completed games.

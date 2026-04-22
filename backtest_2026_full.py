@@ -61,6 +61,19 @@ import pandas as pd
 
 warnings.filterwarnings("ignore")
 
+# ── Legacy sklearn pickle compat ──────────────────────────────────────────────
+# Models in models/ were saved with sklearn 1.8.0 where LogisticRegression's
+# `multi_class` attribute was removed. In the current env (1.7.2), predict_proba
+# still reads self.multi_class and throws AttributeError. Setting a class-level
+# default lets old pickles fall through to the class attribute. Mirrors the
+# patch in wizard_agents/tools/implementations.py.
+try:
+    from sklearn.linear_model import LogisticRegression as _LR
+    if "multi_class" not in _LR.__dict__:
+        _LR.multi_class = "auto"
+except Exception:
+    pass
+
 # ---------------------------------------------------------------------------
 # CONSTANTS — mirrors tools/implementations.py
 # ---------------------------------------------------------------------------
