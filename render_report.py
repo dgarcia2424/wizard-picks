@@ -189,14 +189,6 @@ def _render_summary_tiles(stats: dict) -> str:
         "<div class='l'>Actionable Picks</div>"
         f"<div class='v'>{stats['n_actionable']}</div>"
         "</div>"
-        "<div class='stat-tile'>"
-        "<div class='l'>Total Risked</div>"
-        f"<div class='v'>${stats['total_risked']:,.0f}</div>"
-        "</div>"
-        "<div class='stat-tile'>"
-        "<div class='l'>Daily EV</div>"
-        f"<div class='v {ev_cls}'>{ev_sign}${ev_abs:,.2f}</div>"
-        "</div>"
         "</div>"
     )
 
@@ -774,44 +766,59 @@ def render_actionable(df: pd.DataFrame) -> str:
     )
 
 
+def _tier_bucket(prob, tiers: dict | None) -> str | None:
+    """Return 'opt' / 'mid' / 'avoid' / None based on which 2026 cutoff tier
+    this model_prob clears."""
+    if not tiers:
+        return None
+    try:
+        p = float(prob)
+    except (TypeError, ValueError):
+        return None
+    opt = (tiers.get("optimal") or {}).get("cutoff")
+    mid = (tiers.get("mid")     or {}).get("cutoff")
+    avd = (tiers.get("avoid")   or {}).get("cutoff")
+    if opt is not None and p >= float(opt):   return "opt"
+    if mid is not None and p >= float(mid):   return "mid"
+    if avd is not None and p >= float(avd):   return "avoid"
+    return None
+
+
 def _tier_marker(prob, tiers: dict | None) -> str:
     """Return an HTML span marking which 2026 cutoff tier this prob clears:
        ★ (green) = clears optimal · ● (yellow) = clears mid · ✗ (red) = clears
        avoid-floor only · "" = below all cutoffs."""
-    if not tiers:
-        return ""
-    try:
-        p = float(prob)
-    except (TypeError, ValueError):
-        return ""
-    opt = (tiers.get("optimal") or {}).get("cutoff")
-    mid = (tiers.get("mid")     or {}).get("cutoff")
-    avd = (tiers.get("avoid")   or {}).get("cutoff")
-    if opt is not None and p >= float(opt):
+    b = _tier_bucket(prob, tiers)
+    if b == "opt":
         return " <span class='tier-mark tier-opt' title='Clears 2026 optimal cutoff'>★</span>"
-    if mid is not None and p >= float(mid):
+    if b == "mid":
         return " <span class='tier-mark tier-mid' title='Clears 2026 less-optimal cutoff'>●</span>"
-    if avd is not None and p >= float(avd):
+    if b == "avoid":
         return " <span class='tier-mark tier-avoid' title='Only clears stay-away floor'>✗</span>"
     return ""
 
 
 def render_alpha(df: pd.DataFrame) -> str:
-    """Alpha Markets calibration showcase — ML + Totals only.
-
-    Rows are sorted by model_prob (desc). Each pick gets a tier marker based
-    on where its model_prob falls in the 2026 cutoff sweep:
-      ★ = clears optimal · ● = clears mid · ✗ = only clears stay-away floor.
+    """Calibration Showcase across every market (ML · Totals · Runline · F5 ·
+    NRFI). Only picks clearing at least the stay-away floor are shown, ordered
+    green → yellow → red within each market.
     """
     tiers_2026 = _compute_cutoffs_2026_tiers(last_n_days=None)
+    _TIER_ORDER = {"opt": 0, "mid": 1, "avoid": 2}
 
     def _sub(market: str, subtitle: str) -> str:
         sub = df[df["model"] == market].copy()
         if len(sub) == 0:
-            return f"<h3>{market}</h3><p class='muted'>No rows.</p>"
-        sub = sub.sort_values("model_prob", ascending=False)
+            return ""
 
         tinfo = tiers_2026.get(market)
+        sub["_tier"] = sub["model_prob"].map(lambda p: _tier_bucket(p, tinfo))
+        sub = sub[sub["_tier"].notna()].copy()
+        if sub.empty:
+            return ""
+        sub["_tier_rank"] = sub["_tier"].map(_TIER_ORDER)
+        sub = sub.sort_values(["_tier_rank", "model_prob"], ascending=[True, False])
+
         rows = []
         for _, r in sub.iterrows():
             mark = _tier_marker(r["model_prob"], tinfo)
@@ -844,16 +851,30 @@ def render_alpha(df: pd.DataFrame) -> str:
             + cutoff_note
         )
 
+    sections = [
+        _sub("ML",      "Moneyline (ML)"),
+        _sub("Totals",  "Totals"),
+        _sub("Runline", "Runline (-1.5 / +1.5)"),
+        _sub("F5",      "F5 Moneyline"),
+        _sub("NRFI",    "NRFI (no run 1st inning)"),
+    ]
+    # Drop markets that had no qualifying rows today.
+    sections = [s for s in sections if s]
+    if not sections:
+        inner = "<p class='muted'>No picks clear the 2026 cutoff floors today.</p>"
+    else:
+        inner = "".join(sections)
+
     return (
         "<section class='card'>"
         "<h2>📐 Alpha Markets — Calibration Showcase</h2>"
-        "<p class='muted'>Best-calibrated markets vs. Pinnacle closing line "
-        "(ML ECE 0.045, Totals ECE 0.080). Sorted by Model Prob. Tier markers: "
-        "<span class='tier-opt'>★ optimal</span> · "
-        "<span class='tier-mid'>● less optimal</span> · "
-        "<span class='tier-avoid'>✗ stay away</span>.</p>"
-        + _sub("ML", "Moneyline (ML)")
-        + _sub("Totals", "Totals")
+        "<p class='muted'>Every pick that clears a 2026 cutoff tier, grouped by "
+        "market and ordered "
+        "<span class='tier-opt'>★ optimal</span> → "
+        "<span class='tier-mid'>● less optimal</span> → "
+        "<span class='tier-avoid'>✗ stay away</span>. "
+        "Rows below the stay-away floor are hidden.</p>"
+        + inner
         + "</section>"
     )
 
@@ -1115,10 +1136,10 @@ def render(df: pd.DataFrame) -> str:
         + accuracy_html
         + cutoff_html
         + render_alpha(df)
-        + _generate_cards_html(df)
+        # Pending Results moved to the bottom; Actionable Bets card grid and
+        # Full Picks Table removed per user request.
         + "<section class='card'><h2>📝 Pending Results</h2>"
-        "<div id='pending'><p class='muted'>Loading…</p></div></section>"
-        + render_full_table(df)
+          "<div id='pending'><p class='muted'>Loading…</p></div></section>"
     )
 
     js = JS_TEMPLATE.replace("__PORT__", str(TRACKER_PORT))
