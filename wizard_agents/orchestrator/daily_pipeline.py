@@ -38,10 +38,12 @@ from config.settings import FILES, PIPELINE_DIR
 from orchestrator.agent_loop import run_agent, PipelineHaltError
 from render_report import render
 from tools.implementations import (
+    archive_model_scores,
     auto_grade_historical_picks,
     fetch_odds_api,
     fetch_mlb_starters,
     fetch_weather,
+    rebuild_live_predictions_log,
     write_csv,
 )
 
@@ -260,6 +262,11 @@ def run_daily_pipeline(force: bool = False) -> dict[str, str]:
             results["agent3"] = agent3_output
             logger.info(f"✅ Agent 3 complete.\n{agent3_output[:500]}")
 
+            # Archive today's model_scores.csv so rolling cutoff stats can
+            # grow forward without re-running the sterile backtest.
+            archive_status = archive_model_scores(DATE_KEY)
+            logger.info(f"[Archive] model_scores: {archive_status}")
+
         except Exception as e:
             logger.error(f"❌ Agent 3 error: {e}", exc_info=True)
             results["agent3"] = f"ERROR: {e}"
@@ -291,6 +298,13 @@ def run_daily_pipeline(force: bool = False) -> dict[str, str]:
             # latest graded results. Zero-arg, returns a JSON status string.
             grading_result = auto_grade_historical_picks()
             logger.info(f"[AutoGrade] {str(grading_result)[:300]}")
+
+            # Rebuild the forward-working live predictions log (union of all
+            # archived model_scores joined against actuals_2026.parquet). The
+            # renderer's _compute_cutoffs_2026 union-reads this + the sterile
+            # backtest so the Optimal Cutoff table updates each day.
+            livelog_result = rebuild_live_predictions_log()
+            logger.info(f"[LiveLog] {str(livelog_result)[:300]}")
 
             df = pd.read_csv(scores_path)
             html = render(df)

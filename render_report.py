@@ -97,15 +97,34 @@ def _badge(market: str) -> str:
 
 
 def _pick_label(row) -> str:
-    """Human-readable pick label for the Pick column."""
-    m = row["model"]
-    bet = row.get("bet_type", "")
-    side = row.get("pick_direction", "")
+    """Human-readable pick label for the Pick column.
+
+    Shows the actual team name the model is backing (instead of just HOME/AWAY)
+    so the full picks table reads like "Detroit Tigers" rather than "HOME".
+    For Totals/NRFI, returns the OVER/UNDER line or NRFI label as before.
+    """
+    m    = row["model"]
+    bet  = row.get("bet_type", "")
+    side = str(row.get("pick_direction", "")).strip().upper()
+    game = str(row.get("game", ""))
+
     if m == "NRFI":
         return _html.escape(str(bet))
     if m == "Totals":
-        return f"{_html.escape(str(side))} {_html.escape(str(bet))}"
-    return _html.escape(str(side))
+        # e.g. "OVER Total 8.5"
+        return f"{_html.escape(side)} {_html.escape(str(bet))}"
+
+    # ML / Runline / F5 — show the team name being backed.
+    if "@" in game:
+        away_nm, home_nm = [p.strip() for p in game.split("@", 1)]
+        team = home_nm if side == "HOME" else away_nm if side == "AWAY" else ""
+        if team:
+            # For Runline, append -1.5 / +1.5 so it's unambiguous.
+            if m == "Runline":
+                suffix = " -1.5" if side == "HOME" else " +1.5"
+                return f"{_html.escape(team)}<span class='muted'>{_html.escape(suffix)}</span>"
+            return _html.escape(team)
+    return _html.escape(side)
 
 
 # ─── Summary stats (static, derived from today's scores) ────────────────────
@@ -273,6 +292,285 @@ def _generate_cards_html(df: pd.DataFrame) -> str:
         f"<h2>🎯 Actionable Bets &middot; {len(act)} total "
         f"<span class='muted'>(Tier 1: {t1} · Tier 2: {t2})</span></h2>"
         f"<div class='card-grid'>{''.join(cards)}</div>"
+        "</section>"
+    )
+
+
+# ─── Optimal probability cutoff per market (2025 OOF / 2026 / last-30d) ─────
+
+_CUTOFF_THRESHOLDS = [0.50, 0.55, 0.58, 0.60, 0.62, 0.65, 0.68, 0.70, 0.75, 0.80]
+_CUTOFF_MIN_N      = 20   # require at least this many games to call a cutoff
+
+_CUTOFF_ROOT = Path(__file__).resolve().parent
+
+# (market_label, label_shown, 2025_source_csv, 2025_prob_col, 2025_truth_col)
+_CUTOFF_2025_SOURCES = [
+    ("ML",      "ML",      "ml_val_predictions.csv",    "stacker_ml",       "home_win"),
+    ("F5",      "F5",      "f5_val_predictions.csv",    "stacker_f5_cover", "f5_home_cover"),
+    ("Runline", "Runline", "eval_predictions.csv",      "rl_stacked",       "home_covers_rl"),
+    ("NRFI",    "NRFI",    "nrfi_val_predictions.csv",  "stacker_nrfi",     "f1_nrfi"),
+]
+
+# 2026 all-markets come from backtest_full_all_predictions.csv; key = market code in that file.
+_CUTOFF_2026_MARKETS = {"ML": "ML", "Totals": "TOT", "Runline": "RL", "F5": "F5", "NRFI": "NR"}
+
+# Cache computed cutoffs across renders (2025 numbers are historical & never change).
+_CUTOFF_CACHE: dict[str, dict] = {}
+
+
+def _sweep_cutoff(probs: pd.Series, truths: pd.Series) -> dict | None:
+    """Find the probability cutoff with best hit rate subject to n >= _CUTOFF_MIN_N."""
+    if probs is None or probs.empty or truths is None or truths.empty:
+        return None
+    pair = pd.DataFrame({"p": probs, "y": truths}).dropna()
+    if pair.empty:
+        return None
+    best = None
+    for t in _CUTOFF_THRESHOLDS:
+        s = pair[pair["p"] >= t]
+        n = len(s)
+        if n < _CUTOFF_MIN_N:
+            continue
+        hits = int((s["y"] == 1).sum())
+        win_pct = 100.0 * hits / n
+        if best is None or win_pct > best["win_pct"]:
+            best = {"cutoff": t, "n": n, "wins": hits, "win_pct": win_pct}
+    return best
+
+
+def _sweep_cutoff_tiers(probs: pd.Series, truths: pd.Series) -> dict | None:
+    """Return three cutoff tiers for the sweep:
+       * optimal  — highest hit-rate cutoff that meets min-n (take these)
+       * mid      — middle hit-rate cutoff (less optimal / marginal edge)
+       * avoid    — lowest hit-rate cutoff in the sweep (stay away)
+    Tiers are the same cutoff when fewer than three valid rows exist."""
+    if probs is None or probs.empty or truths is None or truths.empty:
+        return None
+    pair = pd.DataFrame({"p": probs, "y": truths}).dropna()
+    if pair.empty:
+        return None
+    rows: list[dict] = []
+    for t in _CUTOFF_THRESHOLDS:
+        s = pair[pair["p"] >= t]
+        n = len(s)
+        if n < _CUTOFF_MIN_N:
+            continue
+        hits = int((s["y"] == 1).sum())
+        rows.append({"cutoff": t, "n": n, "wins": hits, "win_pct": 100.0 * hits / n})
+    if not rows:
+        return None
+    ranked = sorted(rows, key=lambda r: r["win_pct"], reverse=True)
+    optimal = ranked[0]
+    avoid   = ranked[-1]
+    mid     = ranked[len(ranked) // 2]
+    return {"optimal": optimal, "mid": mid, "avoid": avoid}
+
+
+def _derive_2025_totals_cutoff() -> dict | None:
+    """
+    2025 val file stored a regression (`tot_pred` = predicted runs), not a
+    calibrated OVER probability. We derive P(OVER) = 1 - Phi((close - tot_pred)/sigma)
+    where sigma is the empirical std of residuals across the full season.
+
+    Fitting sigma on the same data we evaluate introduces a tiny bias on a
+    single scalar, which is acceptable for a cutoff sweep. Pushes (actual ==
+    close_total) are dropped so the outcome is binary.
+    """
+    import math
+    path = _CUTOFF_ROOT / "xgb_val_predictions.csv"
+    if not path.exists():
+        return None
+    try:
+        df = pd.read_csv(path, usecols=["close_total", "actual_game_total", "tot_pred"])
+    except (ValueError, KeyError):
+        return None
+    df = df.dropna()
+    if df.empty:
+        return None
+    resid = df["actual_game_total"] - df["tot_pred"]
+    sigma = float(resid.std())
+    if not (sigma and sigma > 0):
+        return None
+    # Standard-normal CDF via erf (no scipy dependency).
+    def _phi(z):
+        return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+    z = (df["close_total"] - df["tot_pred"]) / sigma
+    df = df.copy()
+    df["p_over"]     = 1.0 - z.map(_phi)
+    df["over_truth"] = (df["actual_game_total"] > df["close_total"]).astype(int)
+    # Drop pushes — binary outcome only.
+    df = df[df["actual_game_total"] != df["close_total"]]
+    if df.empty:
+        return None
+    return _sweep_cutoff(df["p_over"], df["over_truth"])
+
+
+def _compute_cutoffs_2025() -> dict[str, dict | None]:
+    if "2025" in _CUTOFF_CACHE:
+        return _CUTOFF_CACHE["2025"]
+    out: dict[str, dict | None] = {}
+    for mkt, _label, fname, pcol, ycol in _CUTOFF_2025_SOURCES:
+        path = _CUTOFF_ROOT / fname
+        if not path.exists():
+            out[mkt] = None
+            continue
+        try:
+            df = pd.read_csv(path, usecols=[pcol, ycol])
+        except (ValueError, KeyError):
+            out[mkt] = None
+            continue
+        out[mkt] = _sweep_cutoff(df[pcol], df[ycol])
+    # Totals 2025: derive OVER probability from regression residuals.
+    out["Totals"] = _derive_2025_totals_cutoff()
+    _CUTOFF_CACHE["2025"] = out
+    return out
+
+
+def _compute_cutoffs_2026(last_n_days: int | None = None) -> dict[str, dict | None]:
+    """
+    Pull from backtest_full_all_predictions.csv (the sterile 2026 backtest) and
+    union any forward-working rows persisted to live_predictions_2026.csv by
+    the daily pipeline. last_n_days=None = full 2026.
+    """
+    key = f"2026_{last_n_days or 'all'}"
+    if key in _CUTOFF_CACHE:
+        return _CUTOFF_CACHE[key]
+    out: dict[str, dict | None] = {m: None for m in _CUTOFF_2026_MARKETS}
+
+    frames: list[pd.DataFrame] = []
+    for fname in ("backtest_full_all_predictions.csv", "live_predictions_2026.csv"):
+        src = _CUTOFF_ROOT / fname
+        if not src.exists():
+            continue
+        try:
+            frames.append(pd.read_csv(src, usecols=["market", "model_prob", "actual", "game_date"]))
+        except (ValueError, KeyError):
+            continue
+    if not frames:
+        _CUTOFF_CACHE[key] = out
+        return out
+    df = pd.concat(frames, ignore_index=True)
+
+    if last_n_days is not None and not df.empty:
+        df["game_date"] = pd.to_datetime(df["game_date"], errors="coerce")
+        cutoff_date    = df["game_date"].max() - pd.Timedelta(days=last_n_days)
+        df = df[df["game_date"] >= cutoff_date]
+    for mkt_label, mkt_code in _CUTOFF_2026_MARKETS.items():
+        sub = df[df["market"] == mkt_code]
+        out[mkt_label] = _sweep_cutoff(sub["model_prob"], sub["actual"])
+    _CUTOFF_CACHE[key] = out
+    return out
+
+
+def _compute_cutoffs_2026_tiers(last_n_days: int | None = None) -> dict[str, dict | None]:
+    """Same source as _compute_cutoffs_2026 but returns 3-tier info per market."""
+    key = f"2026_tiers_{last_n_days or 'all'}"
+    if key in _CUTOFF_CACHE:
+        return _CUTOFF_CACHE[key]
+    out: dict[str, dict | None] = {m: None for m in _CUTOFF_2026_MARKETS}
+
+    frames: list[pd.DataFrame] = []
+    for fname in ("backtest_full_all_predictions.csv", "live_predictions_2026.csv"):
+        src = _CUTOFF_ROOT / fname
+        if not src.exists():
+            continue
+        try:
+            frames.append(pd.read_csv(src, usecols=["market", "model_prob", "actual", "game_date"]))
+        except (ValueError, KeyError):
+            continue
+    if not frames:
+        _CUTOFF_CACHE[key] = out
+        return out
+    df = pd.concat(frames, ignore_index=True)
+
+    if last_n_days is not None and not df.empty:
+        df["game_date"] = pd.to_datetime(df["game_date"], errors="coerce")
+        cutoff_date    = df["game_date"].max() - pd.Timedelta(days=last_n_days)
+        df = df[df["game_date"] >= cutoff_date]
+    for mkt_label, mkt_code in _CUTOFF_2026_MARKETS.items():
+        sub = df[df["market"] == mkt_code]
+        out[mkt_label] = _sweep_cutoff_tiers(sub["model_prob"], sub["actual"])
+    _CUTOFF_CACHE[key] = out
+    return out
+
+
+def _build_cutoff_html() -> str:
+    markets_order = ["ML", "Totals", "Runline", "F5", "NRFI"]
+    row_2025       = _compute_cutoffs_2025()
+    row_2026_tiers = _compute_cutoffs_2026_tiers(last_n_days=None)
+    row_l30_tiers  = _compute_cutoffs_2026_tiers(last_n_days=30)
+
+    def _cell_single(d: dict | None) -> str:
+        """2025 column — single best cutoff."""
+        if not d:
+            return "<td class='cutoff-cell'><span class='muted'>—</span></td>"
+        return (
+            "<td class='cutoff-cell'>"
+            f"<div class='cutoff-hd'>prob ≥ <b>{int(d['cutoff']*100)}%</b></div>"
+            f"<div class='winpct'><b>{d['win_pct']:.1f}%</b> "
+            f"<span class='muted'>({d['wins']}/{d['n']})</span></div>"
+            "</td>"
+        )
+
+    def _tier_row(label: str, cls: str, d: dict | None) -> str:
+        if not d:
+            return ""
+        return (
+            f"<div class='tier-row tier-{cls}'>"
+            f"<span class='tier-label'>{label}</span> "
+            f"prob ≥ <b>{int(d['cutoff']*100)}%</b> &rarr; "
+            f"<b>{d['win_pct']:.1f}%</b> "
+            f"<span class='muted'>({d['wins']}/{d['n']})</span>"
+            "</div>"
+        )
+
+    def _cell_tiers(t: dict | None) -> str:
+        if not t:
+            return "<td class='cutoff-cell'><span class='muted'>—</span></td>"
+        opt, mid, avd = t.get("optimal"), t.get("mid"), t.get("avoid")
+        # Collapse rows that are identical (same cutoff) so we don't repeat.
+        seen_cuts = set()
+        def _take(d):
+            if not d: return None
+            c = d["cutoff"]
+            if c in seen_cuts: return None
+            seen_cuts.add(c)
+            return d
+        html = (
+            _tier_row("★ Optimal",     "opt",  _take(opt)) +
+            _tier_row("● Less optimal","mid",  _take(mid)) +
+            _tier_row("✗ Stay away",   "avoid",_take(avd))
+        )
+        return f"<td class='cutoff-cell tiered'>{html}</td>"
+
+    body_rows = []
+    for mkt in markets_order:
+        color, tag = MARKET_BADGE.get(mkt, ("#555", mkt))
+        badge = (
+            f"<span class='mkt-badge' style='background:{color}'>{tag}</span> "
+            f"<span class='mkt-name'>{mkt}</span>"
+        )
+        body_rows.append(
+            f"<tr><td>{badge}</td>"
+            f"{_cell_single(row_2025.get(mkt))}"
+            f"{_cell_tiers(row_2026_tiers.get(mkt))}"
+            f"{_cell_tiers(row_l30_tiers.get(mkt))}"
+            "</tr>"
+        )
+
+    return (
+        "<section class='card'>"
+        "<h2>🎯 Optimal Probability Cutoff — per Market</h2>"
+        "<p class='muted'>For 2025 the single best cutoff is shown. For 2026 and Last 30 Days "
+        f"we show three tiers (min n={_CUTOFF_MIN_N}): "
+        "<span class='tier-opt'>★ Optimal</span> = highest hit rate, "
+        "<span class='tier-mid'>● Less optimal</span> = middle tier, "
+        "<span class='tier-avoid'>✗ Stay away</span> = lowest hit rate. "
+        "Numbers under the win% show <i>hits / games</i>.</p>"
+        "<table class='tbl acc-tbl'>"
+        "<thead><tr><th>Market</th><th>2025 OOF</th><th>2026 STD</th><th>Last 30 Days</th></tr></thead>"
+        f"<tbody>{''.join(body_rows)}</tbody>"
+        "</table>"
         "</section>"
     )
 
@@ -476,25 +774,66 @@ def render_actionable(df: pd.DataFrame) -> str:
     )
 
 
+def _tier_marker(prob, tiers: dict | None) -> str:
+    """Return an HTML span marking which 2026 cutoff tier this prob clears:
+       ★ (green) = clears optimal · ● (yellow) = clears mid · ✗ (red) = clears
+       avoid-floor only · "" = below all cutoffs."""
+    if not tiers:
+        return ""
+    try:
+        p = float(prob)
+    except (TypeError, ValueError):
+        return ""
+    opt = (tiers.get("optimal") or {}).get("cutoff")
+    mid = (tiers.get("mid")     or {}).get("cutoff")
+    avd = (tiers.get("avoid")   or {}).get("cutoff")
+    if opt is not None and p >= float(opt):
+        return " <span class='tier-mark tier-opt' title='Clears 2026 optimal cutoff'>★</span>"
+    if mid is not None and p >= float(mid):
+        return " <span class='tier-mark tier-mid' title='Clears 2026 less-optimal cutoff'>●</span>"
+    if avd is not None and p >= float(avd):
+        return " <span class='tier-mark tier-avoid' title='Only clears stay-away floor'>✗</span>"
+    return ""
+
+
 def render_alpha(df: pd.DataFrame) -> str:
-    """Alpha Markets calibration showcase — ML + Totals only."""
+    """Alpha Markets calibration showcase — ML + Totals only.
+
+    Rows are sorted by model_prob (desc). Each pick gets a tier marker based
+    on where its model_prob falls in the 2026 cutoff sweep:
+      ★ = clears optimal · ● = clears mid · ✗ = only clears stay-away floor.
+    """
+    tiers_2026 = _compute_cutoffs_2026_tiers(last_n_days=None)
 
     def _sub(market: str, subtitle: str) -> str:
         sub = df[df["model"] == market].copy()
         if len(sub) == 0:
             return f"<h3>{market}</h3><p class='muted'>No rows.</p>"
-        sub = sub.sort_values("edge", ascending=False)
+        sub = sub.sort_values("model_prob", ascending=False)
+
+        tinfo = tiers_2026.get(market)
         rows = []
         for _, r in sub.iterrows():
+            mark = _tier_marker(r["model_prob"], tinfo)
             rows.append(
                 f"<tr>"
-                f"<td>{_html.escape(str(r['game']))}</td>"
+                f"<td>{_html.escape(str(r['game']))}{mark}</td>"
                 f"<td>{_pick_label(r)}</td>"
                 f"<td class='num'>{_fmt_prob(r['model_prob'])}</td>"
                 f"<td class='num'>{_fmt_prob(r['P_true'])}</td>"
                 f"<td class='num {_edge_class(r['edge'])}'>{_fmt_edge(r['edge'])}</td>"
                 f"</tr>"
             )
+        cutoff_note = ""
+        if tinfo:
+            opt = tinfo.get("optimal") or {}
+            mid = tinfo.get("mid")     or {}
+            avd = tinfo.get("avoid")   or {}
+            parts = []
+            if opt: parts.append(f"<span class='tier-opt'>★ ≥{int(opt['cutoff']*100)}% → {opt['win_pct']:.1f}%</span>")
+            if mid: parts.append(f"<span class='tier-mid'>● ≥{int(mid['cutoff']*100)}% → {mid['win_pct']:.1f}%</span>")
+            if avd: parts.append(f"<span class='tier-avoid'>✗ ≥{int(avd['cutoff']*100)}% → {avd['win_pct']:.1f}%</span>")
+            cutoff_note = f"<p class='muted' style='margin:6px 0 0'>2026 cutoffs: {' · '.join(parts)}</p>"
         return (
             f"<h3>Alpha Market · {subtitle}</h3>"
             "<table class='tbl alpha-tbl'><thead><tr>"
@@ -502,13 +841,17 @@ def render_alpha(df: pd.DataFrame) -> str:
             "<th>Pinnacle Prob</th><th>Retail Edge</th>"
             "</tr></thead><tbody>"
             + "".join(rows) + "</tbody></table>"
+            + cutoff_note
         )
 
     return (
         "<section class='card'>"
         "<h2>📐 Alpha Markets — Calibration Showcase</h2>"
         "<p class='muted'>Best-calibrated markets vs. Pinnacle closing line "
-        "(ML ECE 0.045, Totals ECE 0.080). Sorted by Retail Edge.</p>"
+        "(ML ECE 0.045, Totals ECE 0.080). Sorted by Model Prob. Tier markers: "
+        "<span class='tier-opt'>★ optimal</span> · "
+        "<span class='tier-mid'>● less optimal</span> · "
+        "<span class='tier-avoid'>✗ stay away</span>.</p>"
         + _sub("ML", "Moneyline (ML)")
         + _sub("Totals", "Totals")
         + "</section>"
@@ -517,20 +860,23 @@ def render_alpha(df: pd.DataFrame) -> str:
 
 def render_full_table(df: pd.DataFrame) -> str:
     order = ["ML", "Totals", "Runline", "F5", "NRFI"]
+    tiers_2026 = _compute_cutoffs_2026_tiers(last_n_days=None)
     blocks = []
     for mkt in order:
         sub = df[df["model"] == mkt].copy()
         if len(sub) == 0:
             continue
         sub = sub.sort_values(["actionable", "edge"], ascending=[False, False])
+        tinfo = tiers_2026.get(mkt)
         rows = []
         for _, r in sub.iterrows():
-            cls = "act-row" if bool(r["actionable"]) else "na-row"
+            cls  = "act-row" if bool(r["actionable"]) else "na-row"
+            mark = _tier_marker(r["model_prob"], tinfo)
             rows.append(
                 f"<tr class='{cls}'>"
-                f"<td>{_html.escape(str(r['game']))}</td>"
+                f"<td>{_html.escape(str(r['game']))}{mark}</td>"
                 f"<td>{_html.escape(str(r['bet_type']))}</td>"
-                f"<td>{_html.escape(str(r['pick_direction']))}</td>"
+                f"<td>{_pick_label(r)}</td>"
                 f"<td class='num'>{_fmt_prob(r['model_prob'])}</td>"
                 f"<td class='num'>{_fmt_prob(r['P_true'])}</td>"
                 f"<td class='num {_edge_class(r['edge'])}'>{_fmt_edge(r['edge'])}</td>"
@@ -560,21 +906,24 @@ def render_full_table(df: pd.DataFrame) -> str:
 CSS = """
 *{box-sizing:border-box}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-     background:#0f1115;color:#e4e7eb;line-height:1.45}
+     background:#0f1115;color:#ffffff;line-height:1.45}
+body,.card,.tbl,.tbl td,.tbl th,.acc-tbl,.acc-tbl td,.acc-tbl th,
+.stat,.stat-tile,.stat .v,.stat-tile .v,.stat .l,.stat-tile .l,
+header h1,header .sub,.card h2,.card h3,p,div,span,td,th,li,a{color:#ffffff}
 .container{max-width:1200px;margin:0 auto;padding:24px 16px}
 header{margin-bottom:24px}
 header h1{margin:0 0 6px;font-size:28px}
-header .sub{color:#9ca3af;font-size:13px}
+header .sub{color:#ffffff;font-size:13px}
 .card{background:#1a1d24;border:1px solid #262a33;border-radius:12px;
       padding:20px;margin-bottom:18px}
 .card h2{margin:0 0 12px;font-size:20px}
-.card h3{margin:18px 0 8px;font-size:15px;color:#cbd2da}
+.card h3{margin:18px 0 8px;font-size:15px;color:#ffffff}
 .hero{border:1px solid #2a5b3a;background:linear-gradient(180deg,#13241a,#1a1d24)}
 .hero h2{color:#4ade80}
-.muted{color:#6b7280;font-size:13px}
+.muted{color:#ffffff;font-size:13px}
 .tbl{width:100%;border-collapse:collapse;font-size:13px}
 .tbl th,.tbl td{padding:8px 10px;text-align:left;border-bottom:1px solid #262a33}
-.tbl th{background:#14161c;color:#9ca3af;font-weight:600;text-transform:uppercase;
+.tbl th{background:#14161c;color:#ffffff;font-weight:600;text-transform:uppercase;
         font-size:11px;letter-spacing:.05em}
 .tbl .num{text-align:right;font-variant-numeric:tabular-nums}
 .tbl tr:hover{background:#1f232b}
@@ -583,14 +932,30 @@ header .sub{color:#9ca3af;font-size:13px}
 .na-row{opacity:.55}
 .stake{color:#4ade80;font-weight:600}
 .edge-pos{color:#4ade80}
-.edge-neg{color:#9ca3af}
+.edge-neg{color:#ffffff}
 .edge-neg-strong{color:#f87171}
-.edge-zero{color:#6b7280}
-.acc-tbl td,.acc-tbl th{vertical-align:top}
-.acc-cell .winpct{font-size:13px;font-weight:600}
-.acc-cell .roi-sub{font-size:11px;margin-top:2px;letter-spacing:.02em}
+.edge-zero{color:#ffffff}
+.acc-tbl td,.acc-tbl th{vertical-align:top;color:#ffffff}
+.acc-cell{color:#ffffff}
+.acc-cell .winpct{font-size:14px;font-weight:700;color:#ffffff}
+.acc-cell .winpct .muted{color:#ffffff;font-weight:400}
+.acc-cell .roi-sub{font-size:11px;margin-top:2px;letter-spacing:.02em;color:#ffffff}
+.acc-cell.muted{color:#ffffff}
+.alpha-star{color:#fbbf24;font-weight:700;margin-left:4px}
+.cutoff-cell.tiered{font-size:12px;line-height:1.5}
+.cutoff-cell.tiered .tier-row{padding:3px 0;border-bottom:1px dashed rgba(255,255,255,.08)}
+.cutoff-cell.tiered .tier-row:last-child{border-bottom:0}
+.cutoff-cell.tiered .tier-label{font-weight:700;letter-spacing:.02em;margin-right:4px}
+.tier-opt,.cutoff-cell.tiered .tier-opt .tier-label{color:#4ade80}
+.tier-mid,.cutoff-cell.tiered .tier-mid .tier-label{color:#fbbf24}
+.tier-avoid,.cutoff-cell.tiered .tier-avoid .tier-label{color:#f87171}
+.tier-mark{font-weight:700;margin-left:4px;font-size:14px}
+.cutoff-cell{vertical-align:top}
+.cutoff-cell .cutoff-hd{font-size:11px;color:#ffffff;letter-spacing:.03em;margin-bottom:2px;font-weight:600}
+.cutoff-cell .winpct{font-size:14px;font-weight:700;color:#e4e7eb}
+.cutoff-cell .winpct .muted{color:#ffffff;font-weight:400}
 .acc-overall td{background:#14161c;border-top:2px solid #262a33}
-.mkt-name{margin-left:4px;color:#cbd2da;font-size:12px}
+.mkt-name{margin-left:4px;color:#ffffff;font-size:12px}
 .mkt-badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;
            font-weight:700;color:#fff;letter-spacing:.03em}
 .tier-hdr{display:flex;align-items:center;gap:8px}
@@ -602,7 +967,7 @@ header .sub{color:#9ca3af;font-size:13px}
 .stats-bar{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
            gap:10px;margin-bottom:18px}
 .stat{background:#1a1d24;border:1px solid #262a33;border-radius:10px;padding:12px}
-.stat .l{font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.05em}
+.stat .l{font-size:11px;color:#ffffff;text-transform:uppercase;letter-spacing:.05em}
 .stat .v{font-size:20px;font-weight:700;margin-top:4px}
 details summary{cursor:pointer;list-style:none}
 details summary::-webkit-details-marker{display:none}
@@ -610,7 +975,7 @@ details summary::-webkit-details-marker{display:none}
 /* ── Summary stat tiles (static, derived from today's scores) ─────────────── */
 .stat-tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px}
 .stat-tile{background:#1a1d24;border:1px solid #262a33;border-radius:10px;padding:14px 16px}
-.stat-tile .l{font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.05em}
+.stat-tile .l{font-size:11px;color:#ffffff;text-transform:uppercase;letter-spacing:.05em}
 .stat-tile .v{font-size:22px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
 .stat-tile .v.ev-pos{color:#4ade80}
 .stat-tile .v.ev-neg{color:#f87171}
@@ -627,19 +992,19 @@ details summary::-webkit-details-marker{display:none}
 .bet-card.tier-2-card{border-left-color:#f5b301}
 .bc-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:4px}
 .bc-match{font-weight:600;font-size:14px;color:#e4e7eb}
-.bc-tier{font-size:10px;letter-spacing:.08em;color:#9ca3af;border:1px solid #262a33;
+.bc-tier{font-size:10px;letter-spacing:.08em;color:#ffffff;border:1px solid #262a33;
          border-radius:4px;padding:2px 6px;background:#14161c;white-space:nowrap}
 .tier-1-card .bc-tier{color:#4ade80;border-color:#4ade80}
 .tier-2-card .bc-tier{color:#f5b301;border-color:#f5b301}
-.bc-sub{color:#9ca3af;font-size:12px;margin-bottom:10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.bc-sub{color:#ffffff;font-size:12px;margin-bottom:10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .bc-sub .bc-sep{color:#374151}
-.bc-sub .bc-market{color:#cbd2da}
+.bc-sub .bc-market{color:#ffffff}
 .bc-sub .bc-pick{color:#e4e7eb;font-weight:600}
 .bc-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px 14px}
 .bc-stat{display:flex;flex-direction:column;gap:2px}
-.bc-l{font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.04em}
+.bc-l{font-size:10px;color:#ffffff;text-transform:uppercase;letter-spacing:.04em}
 .bc-v{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;color:#e4e7eb}
-.bc-v.subtle{color:#9ca3af;font-weight:500}
+.bc-v.subtle{color:#ffffff;font-weight:500}
 .bc-v.stake{color:#4ade80}
 .bc-action{grid-column:1 / -1;margin-top:4px}
 .bc-action .btn-log{width:100%}
@@ -704,7 +1069,7 @@ async function loadPending(){
       `<div>`+
       `<button class='btn-log' data-id='${b.id}' data-r='WIN'>WIN</button> `+
       `<button class='btn-log' data-id='${b.id}' data-r='LOSS' style='background:#b91c1c'>LOSS</button> `+
-      `<button class='btn-log' data-id='${b.id}' data-r='PUSH' style='background:#6b7280'>PUSH</button>`+
+      `<button class='btn-log' data-id='${b.id}' data-r='PUSH' style='background:#ffffff'>PUSH</button>`+
       `</div></div>`
     ).join('');
     box.querySelectorAll('button').forEach(btn=>{
@@ -735,6 +1100,8 @@ def render(df: pd.DataFrame) -> str:
     summary_stats = _calculate_summary_stats(df)
     summary_html  = _render_summary_tiles(summary_stats)
 
+    cutoff_html = _build_cutoff_html()
+
     body = (
         "<header>"
         f"<h1>⚾ The Wizard Report — {title_date}</h1>"
@@ -742,9 +1109,13 @@ def render(df: pd.DataFrame) -> str:
         "</header>"
         + summary_html
         + "<div id='stats' class='stats-bar'></div>"
-        + _generate_cards_html(df)
+        # New order per user: overall accuracy first, then optimal cutoff table,
+        # THEN the Alpha Markets picks list (calibration showcase), then
+        # actionable bets detail, pending results, full table.
         + accuracy_html
+        + cutoff_html
         + render_alpha(df)
+        + _generate_cards_html(df)
         + "<section class='card'><h2>📝 Pending Results</h2>"
         "<div id='pending'><p class='muted'>Loading…</p></div></section>"
         + render_full_table(df)

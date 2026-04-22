@@ -96,6 +96,183 @@ BET_TRACKER_COLUMNS = [
 # AGENT 1 — Data Ingestion Tools
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ── Forward-working archival (Task 1/2 of the Hardened Production refactor) ──
+# Daily snapshots so the rolling-accuracy tear sheet can grow forward without
+# ever needing a retroactive Pinnacle backfill. We write:
+#   * data/statcast/odds_snapshot_{date}.parquet  — full games list w/ F5+NRFI
+#   * data/predictions/model_scores_{date}.csv    — today's raw stacker outputs
+#   * live_predictions_2026.csv                   — rolling union graded vs actuals
+
+_ARCHIVE_DIR_ODDS  = PIPELINE_DIR / "data" / "statcast"
+_ARCHIVE_DIR_PREDS = PIPELINE_DIR / "data" / "predictions"
+_ACTUALS_PARQUET   = PIPELINE_DIR / "data" / "statcast" / "actuals_2026.parquet"
+_LIVE_LOG          = PIPELINE_DIR / "live_predictions_2026.csv"
+
+
+def _archive_odds_snapshot(games: list, target_date: str) -> None:
+    """Persist today's full odds snapshot (incl. F5/NRFI) as parquet.
+    Silent on failure — archival is best-effort and never blocks ingest."""
+    try:
+        if not games:
+            return
+        _ARCHIVE_DIR_ODDS.mkdir(parents=True, exist_ok=True)
+        out = _ARCHIVE_DIR_ODDS / f"odds_snapshot_{target_date}.parquet"
+        pd.DataFrame(games).to_parquet(out, index=False)
+        logger.info(f"[Archive] odds snapshot -> {out.name} ({len(games)} games)")
+    except Exception as e:
+        logger.warning(f"[Archive] odds snapshot failed (non-fatal): {e}")
+
+
+def archive_model_scores(target_date: str = "") -> str:
+    """Copy today's model_scores.csv into data/predictions/model_scores_{date}.csv.
+    Idempotent: overwrites if rerun. Returns JSON status."""
+    target = target_date or date.today().isoformat()
+    try:
+        src = PIPELINE_DIR / FILES["model_scores"]
+        if not src.exists():
+            return json.dumps({"status": "SKIP", "reason": "model_scores.csv missing"})
+        _ARCHIVE_DIR_PREDS.mkdir(parents=True, exist_ok=True)
+        dst = _ARCHIVE_DIR_PREDS / f"model_scores_{target}.csv"
+        df = pd.read_csv(src)
+        df["archive_date"] = target
+        df.to_csv(dst, index=False)
+        return json.dumps({"status": "OK", "rows": len(df), "file": str(dst.name)})
+    except Exception as e:
+        logger.warning(f"[Archive] model_scores archival failed: {e}")
+        return json.dumps({"status": "ERROR", "error": str(e)})
+
+
+def rebuild_live_predictions_log() -> str:
+    """
+    Union every archived model_scores_*.csv, join with actuals_2026.parquet,
+    and write live_predictions_2026.csv with one row per (market × direction)
+    carrying model_prob + realized `actual` (0/1).
+
+    The resulting schema mirrors the columns `render_report._compute_cutoffs_2026`
+    reads from backtest_full_all_predictions.csv: market, model_prob, actual,
+    game_date. Rows still pending (no actual yet) are dropped.
+    """
+    try:
+        if not _ARCHIVE_DIR_PREDS.exists():
+            return json.dumps({"status": "SKIP", "reason": "no predictions archive"})
+        files = sorted(_ARCHIVE_DIR_PREDS.glob("model_scores_*.csv"))
+        if not files:
+            return json.dumps({"status": "SKIP", "reason": "no archived scores"})
+
+        frames = []
+        for fp in files:
+            try:
+                frames.append(pd.read_csv(fp))
+            except Exception as e:
+                logger.warning(f"[LiveLog] skip {fp.name}: {e}")
+        if not frames:
+            return json.dumps({"status": "SKIP", "reason": "all archive files unreadable"})
+        preds = pd.concat(frames, ignore_index=True)
+
+        if not _ACTUALS_PARQUET.exists():
+            return json.dumps({"status": "SKIP", "reason": "actuals_2026.parquet missing"})
+        actuals = pd.read_parquet(_ACTUALS_PARQUET)
+
+        # `game` string in model_scores is "Away @ Home" (full names). Actuals
+        # store abbrev codes. Join on (date, home_abbr, away_abbr) via reverse
+        # lookup so historical and live agree.
+        def _split_game(s):
+            if not isinstance(s, str) or "@" not in s:
+                return (None, None)
+            a, h = [x.strip() for x in s.split("@", 1)]
+            return (TEAM_NAME_TO_ABBR.get(a), TEAM_NAME_TO_ABBR.get(h))
+
+        preds[["away_abbr", "home_abbr"]] = preds["game"].apply(
+            lambda s: pd.Series(_split_game(s))
+        )
+        preds["game_date"] = preds.get("date", preds.get("archive_date"))
+
+        actuals = actuals.rename(columns={"home_team": "home_abbr", "away_team": "away_abbr"})
+        actuals["game_date"] = pd.to_datetime(actuals["game_date"]).dt.strftime("%Y-%m-%d")
+
+        merged = preds.merge(
+            actuals[["game_date", "home_abbr", "away_abbr",
+                     "home_score_final", "away_score_final",
+                     "f5_home_win", "f1_nrfi", "home_covers_rl"]],
+            on=["game_date", "home_abbr", "away_abbr"], how="left",
+        )
+
+        # Derive binary `actual` per (model, pick_direction).
+        def _actual(r):
+            m   = str(r.get("model", "")).strip()
+            d   = str(r.get("pick_direction", "")).strip().upper()
+            hs  = r.get("home_score_final")
+            as_ = r.get("away_score_final")
+            if pd.isna(hs) or pd.isna(as_):
+                return pd.NA
+            if m == "ML":
+                home_win = 1 if hs > as_ else 0
+                return home_win if d == "HOME" else (1 - home_win)
+            if m == "Totals":
+                tot = hs + as_
+                line = r.get("total_line")
+                if pd.isna(line):
+                    # fall back: parse from bet_type "Total 8.5"
+                    bt = str(r.get("bet_type", ""))
+                    try:
+                        line = float(bt.split()[-1])
+                    except Exception:
+                        return pd.NA
+                if tot == line:
+                    return pd.NA  # push
+                over_hit = 1 if tot > line else 0
+                return over_hit if d == "OVER" else (1 - over_hit)
+            if m == "Runline":
+                rl = r.get("home_covers_rl")
+                if pd.isna(rl):
+                    return pd.NA
+                rl = int(rl)
+                return rl if d == "HOME" else (1 - rl)
+            if m == "F5":
+                f5w = r.get("f5_home_win")
+                if pd.isna(f5w):
+                    return pd.NA
+                f5w = int(f5w)
+                return f5w if d == "HOME" else (1 - f5w)
+            if m == "NRFI":
+                nr = r.get("f1_nrfi")
+                if pd.isna(nr):
+                    return pd.NA
+                return int(nr)  # NRFI pick is always the UNDER — no direction flip
+            return pd.NA
+
+        merged["actual"] = merged.apply(_actual, axis=1)
+
+        _MODEL_TO_CODE = {"ML": "ML", "Totals": "TOT", "Runline": "RL", "F5": "F5", "NRFI": "NR"}
+        merged["market"] = merged["model"].map(_MODEL_TO_CODE)
+
+        keep_cols = ["game_date", "market", "model_prob", "actual",
+                     "home_abbr", "away_abbr", "model", "pick_direction",
+                     "retail_american_odds", "edge"]
+        for c in keep_cols:
+            if c not in merged.columns:
+                merged[c] = pd.NA
+        log = merged[keep_cols].dropna(subset=["actual", "model_prob", "market"]).copy()
+
+        # Dedupe on (game_date, market, home_abbr, away_abbr, pick_direction) —
+        # keep the latest archive_date if the same pick reappears.
+        log = log.drop_duplicates(
+            subset=["game_date", "market", "home_abbr", "away_abbr", "pick_direction"],
+            keep="last",
+        )
+        log.to_csv(_LIVE_LOG, index=False)
+        return json.dumps({
+            "status": "OK",
+            "rows_written": len(log),
+            "file": str(_LIVE_LOG.name),
+            "markets": {m: int((log["market"] == c).sum())
+                        for m, c in _MODEL_TO_CODE.items()},
+        })
+    except Exception as e:
+        logger.warning(f"[LiveLog] rebuild failed: {e}", exc_info=True)
+        return json.dumps({"status": "ERROR", "error": str(e)})
+
+
 def check_stale_files(threshold_days: int = STALE_THRESHOLD_DAYS) -> str:
     cutoff = datetime.now() - timedelta(days=threshold_days)
     results, stale, missing = {}, [], []
@@ -503,6 +680,10 @@ def fetch_odds_api(game_date: str = "") -> str:
             "pinnacle_nrfi_odds":          p_nrfi_u,
             "P_true_nrfi":                 p_imp_nrfi,
         })
+
+    # Forward-working archival: persist the full games list (with F5+NRFI odds)
+    # as a daily parquet so the rolling-accuracy tear sheet can grow forward.
+    _archive_odds_snapshot(games, target)
 
     return json.dumps({
         "status":        "OK",
