@@ -267,6 +267,16 @@ def _best_totals_at_line(totals: dict, line: Optional[float]) -> tuple:
 
 
 def fetch_odds_api(game_date: str = "") -> str:
+    # ── STAGED-TEST STUB ──────────────────────────────────────────────────────
+    # Bypasses The Odds API entirely. Returns an OK-but-empty payload so Agent 1
+    # does not HALT, and leaves the existing games.csv on disk untouched.
+    return json.dumps({
+        "status": "OK",
+        "message": "STUB: API call bypassed. Using existing games.csv.",
+        "games_fetched": 0,
+        "games": [],
+    })
+    # ── end stub ──────────────────────────────────────────────────────────────
     """
     Dual-region odds ingestion (two-phase, because The Odds API only exposes F5
     markets through the per-event endpoint).
@@ -496,6 +506,16 @@ def fetch_odds_api(game_date: str = "") -> str:
 
 
 def fetch_mlb_starters(game_date: str = "") -> str:
+    # ── STAGED-TEST STUB ──────────────────────────────────────────────────────
+    # Bypasses the MLB Stats API. Returns empty starter dict — games.csv on
+    # disk already has starters from a prior live run.
+    return json.dumps({
+        "status": "OK",
+        "message": "STUB: MLB API bypassed.",
+        "confirmed_games": 0,
+        "starters": {},
+    })
+    # ── end stub ──────────────────────────────────────────────────────────────
     target = game_date or date.today().isoformat()
     url    = "https://statsapi.mlb.com/api/v1/schedule"
     params = {
@@ -840,6 +860,26 @@ def generate_ml_scores(game_date: str = "") -> str:
       failed_sanity, failed_odds_floor, failed_edge,
       actionable_picks (list of ≤N compact dicts)
     """
+    # ── STAGED-TEST STUB ──────────────────────────────────────────────────────
+    # Bypasses the BayesianStacker ML inference. Returns a summary based on the
+    # existing model_scores.csv so Step 4 can render without re-scoring.
+    _scores_path = Path(FILES["model_scores"])
+    if not _scores_path.exists():
+        return json.dumps({"status": "ERROR", "error": f"STUB: model_scores.csv not found at {_scores_path}"})
+    _df = pd.read_csv(_scores_path)
+    _act = _df[_df.get("actionable") == True] if "actionable" in _df.columns else _df.iloc[0:0]
+    _t1 = int((_act.get("tier") == 1).sum()) if "tier" in _act.columns else 0
+    _t2 = int((_act.get("tier") == 2).sum()) if "tier" in _act.columns else 0
+    return json.dumps({
+        "status": "OK",
+        "message": "STUB: ML inference bypassed. Using existing model_scores.csv.",
+        "total_rows": int(len(_df)),
+        "actionable": int(len(_act)),
+        "tier_1": _t1,
+        "tier_2": _t2,
+    })
+    # ── end stub ──────────────────────────────────────────────────────────────
+
     target = game_date or date.today().isoformat()
 
     # 1. Games + market context
@@ -1075,6 +1115,14 @@ def generate_ml_scores(game_date: str = "") -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def send_email(subject: str, body: str, attach_report: bool = True) -> str:
+    # ── STAGED-TEST STUB ──────────────────────────────────────────────────────
+    # Writes the would-be email to ./test_email.txt and returns success without
+    # opening an SMTP connection. Remove this block to restore live delivery.
+    with open("test_email.txt", "w", encoding="utf-8") as f:
+        f.write(f"Subject: {subject}\n\n{body}")
+    return json.dumps({"status": "OK", "message": "STUB: Email written to test_email.txt"})
+    # ── end stub ──────────────────────────────────────────────────────────────
+
     msg           = MIMEMultipart()
     msg["From"]   = GMAIL_FROM
     msg["To"]     = ", ".join(EMAIL_RECIPIENTS)
@@ -1341,7 +1389,80 @@ def _window_stats(df: pd.DataFrame) -> dict:
 
     by_market = {m: agg(graded[graded["model"] == m])
                  for m in ["ML", "Totals", "Runline", "F5", "NRFI"]}
-    return {"overall": agg(graded), "by_market": by_market}
+    return {"overall": agg(graded), "by_market": by_market,
+            "alpha_sgp": _alpha_sgp_stats(graded)}
+
+
+# ── Alpha SGP (Beta): joint ML+Totals parlay in the validated sweet-spot band.
+#    Sweet spot (from 2026 backtest + walk-forward test):
+#      0.65 ≤ p_ml_pick ≤ 0.72  AND  p_tot_pick ≥ 0.62
+#    One ticket per (date, game) pair; $1 unit stake; parlay pays dec_ml * dec_tot.
+_SGP_ML_LO, _SGP_ML_HI = 0.65, 0.72
+_SGP_TOT_MIN           = 0.62
+_SGP_UNIT              = 1.0
+
+
+def _alpha_sgp_stats(graded: pd.DataFrame) -> dict:
+    empty = {"bets": 0, "wins": 0, "losses": 0, "pushes": 0,
+             "win_pct": 0.0, "roi_pct": 0.0, "pl": 0.0, "wagered": 0.0}
+    if graded.empty:
+        return dict(empty)
+
+    g = graded.copy()
+    g["model_prob"] = pd.to_numeric(g["model_prob"], errors="coerce")
+    g["retail_american_odds"] = pd.to_numeric(g["retail_american_odds"], errors="coerce")
+
+    ml_legs  = g[g["model"] == "ML"]
+    tot_legs = g[g["model"] == "Totals"]
+    if ml_legs.empty or tot_legs.empty:
+        return dict(empty)
+
+    # Highest-conviction leg per (date, game) per market.
+    ml_best  = (ml_legs.sort_values("model_prob", ascending=False)
+                       .drop_duplicates(subset=["date", "game"], keep="first"))
+    tot_best = (tot_legs.sort_values("model_prob", ascending=False)
+                        .drop_duplicates(subset=["date", "game"], keep="first"))
+
+    pairs = ml_best.merge(tot_best, on=["date", "game"], suffixes=("_ml", "_tot"))
+    if pairs.empty:
+        return dict(empty)
+
+    mask = (pairs["model_prob_ml"].between(_SGP_ML_LO, _SGP_ML_HI, inclusive="both")
+            & (pairs["model_prob_tot"] >= _SGP_TOT_MIN))
+    qual = pairs[mask]
+    if qual.empty:
+        return dict(empty)
+
+    wins = losses = pushes = 0
+    pl_sum = 0.0
+    wagered = 0.0
+    for _, r in qual.iterrows():
+        res_ml, res_tot = str(r["result_ml"]).upper(), str(r["result_tot"]).upper()
+        dec_ml  = _american_to_decimal(float(r["retail_american_odds_ml"]))  if pd.notna(r["retail_american_odds_ml"])  else None
+        dec_tot = _american_to_decimal(float(r["retail_american_odds_tot"])) if pd.notna(r["retail_american_odds_tot"]) else None
+        if dec_ml is None or dec_tot is None:
+            continue
+        wagered += _SGP_UNIT
+        if res_ml == "LOSS" or res_tot == "LOSS":
+            losses += 1
+            pl_sum -= _SGP_UNIT
+        elif res_ml == "WIN" and res_tot == "WIN":
+            wins += 1
+            pl_sum += _SGP_UNIT * (dec_ml * dec_tot - 1.0)
+        else:
+            # Any PUSH without a LOSS → treat the joint as a PUSH (rare).
+            pushes += 1
+
+    decided = wins + losses
+    bets = wins + losses + pushes
+    return {
+        "bets":    int(bets),
+        "wins":    int(wins), "losses": int(losses), "pushes": int(pushes),
+        "win_pct": round(100.0 * wins / decided, 1) if decided > 0 else 0.0,
+        "roi_pct": round(100.0 * pl_sum / wagered, 1) if wagered > 0 else 0.0,
+        "pl":      round(pl_sum, 2),
+        "wagered": round(wagered, 2),
+    }
 
 
 def compute_rolling_accuracy() -> str:
@@ -1352,7 +1473,7 @@ def compute_rolling_accuracy() -> str:
         empty = {"bets": 0, "wins": 0, "losses": 0, "pushes": 0,
                  "win_pct": 0.0, "roi_pct": 0.0, "pl": 0.0, "wagered": 0.0}
         markets = {m: dict(empty) for m in ["ML", "Totals", "Runline", "F5", "NRFI"]}
-        blank = {"overall": dict(empty), "by_market": markets}
+        blank = {"overall": dict(empty), "by_market": markets, "alpha_sgp": dict(empty)}
         return json.dumps({"status": "OK", "windows": {"last_7": blank, "last_28": blank, "ytd_2026": blank}})
 
     ledger["date_parsed"] = pd.to_datetime(ledger["date"], errors="coerce")

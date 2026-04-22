@@ -23,13 +23,26 @@ import time
 from datetime import date
 from pathlib import Path
 
+import pandas as pd
+
+# render_report.py lives at the project root, one level above wizard_agents/.
+# Put that root on sys.path BEFORE the top-level `from render_report import render`
+# so the deterministic renderer is a plain import — no importlib dance inside Step 4.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 from agents.definitions import AGENT1, AGENT3, AGENT5
 from config import settings
+from config.settings import FILES, PIPELINE_DIR
 from orchestrator.agent_loop import run_agent, PipelineHaltError
+from render_report import render
+from tools.implementations import auto_grade_historical_picks
 
 # Agent 4 (Report Generation) has been replaced with a deterministic
-# Python renderer — render_report.py in the pipeline root. We import it
-# directly here to avoid subprocess overhead and keep error handling tight.
+# Python renderer — render_report.py in the pipeline root. Grading is
+# refreshed via auto_grade_historical_picks() before each render so the
+# rolling-accuracy matrix reflects the latest graded results.
 
 logging.basicConfig(
     level=logging.INFO,
@@ -180,45 +193,24 @@ def run_daily_pipeline(force: bool = False) -> dict[str, str]:
     agent4_output = None if force else _load("agent4")
 
     if agent4_output is None:
-        logger.info("▶ Starting Step 4: Report Rendering (render_report.py)")
+        logger.info("▶ Starting Step 4: Report Rendering (render_report.render)")
         try:
-            from pathlib import Path as _Path
-            import importlib, os as _os
-
-            _pipeline_dir = _Path(
-                _os.environ.get("PIPELINE_DIR",
-                                _Path(__file__).resolve().parent.parent.parent)
-            )
-            scores_path = _pipeline_dir / "model_scores.csv"
-            report_path = _pipeline_dir / "model_report.html"
+            scores_path = PIPELINE_DIR / FILES["model_scores"]
+            report_path = PIPELINE_DIR / FILES["model_report"]
 
             if not scores_path.exists():
                 raise FileNotFoundError(
                     f"model_scores.csv not found at {scores_path} — Agent 3 must run first"
                 )
 
-            # Import render_report from the pipeline root, not from
-            # wizard_agents/. Insert and then remove sys.path entry so we
-            # don't leak the pipeline root into downstream imports.
-            _added_path = False
-            if str(_pipeline_dir) not in sys.path:
-                sys.path.insert(0, str(_pipeline_dir))
-                _added_path = True
-            try:
-                if "render_report" in sys.modules:
-                    render_report = importlib.reload(sys.modules["render_report"])
-                else:
-                    render_report = importlib.import_module("render_report")
-            finally:
-                if _added_path:
-                    try:
-                        sys.path.remove(str(_pipeline_dir))
-                    except ValueError:
-                        pass
+            # Refresh the master ledger's WIN/LOSS/PUSH grades BEFORE rendering
+            # so the rolling-accuracy matrix inside render() reflects today's
+            # latest graded results. Zero-arg, returns a JSON status string.
+            grading_result = auto_grade_historical_picks()
+            logger.info(f"[AutoGrade] {str(grading_result)[:300]}")
 
-            import pandas as _pd
-            df = _pd.read_csv(scores_path)
-            html = render_report.render(df)
+            df = pd.read_csv(scores_path)
+            html = render(df)
             report_path.write_text(html, encoding="utf-8")
 
             if not report_path.exists() or report_path.stat().st_size < 1024:

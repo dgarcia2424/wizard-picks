@@ -108,6 +108,175 @@ def _pick_label(row) -> str:
     return _html.escape(str(side))
 
 
+# ─── Summary stats (static, derived from today's scores) ────────────────────
+
+def _american_profit_multiplier(american) -> float:
+    """Profit-per-$1 for a given American odds value. NaN → 0.0."""
+    if pd.isna(american):
+        return 0.0
+    a = float(american)
+    if a == 0:
+        return 0.0
+    return a / 100.0 if a > 0 else 100.0 / -a
+
+
+def _calculate_summary_stats(df: pd.DataFrame) -> dict:
+    """
+    Header-tile stats derived purely from today's model_scores.csv.
+
+    Returns:
+        n_actionable : count of actionable rows
+        total_risked : sum(dollar_stake) across actionable rows
+        daily_ev     : sum over actionable rows of
+                         (model_prob * potential_profit)
+                         - ((1 - model_prob) * dollar_stake)
+                       where potential_profit = dollar_stake * profit_multiplier,
+                       and profit_multiplier is derived from retail_american_odds.
+    """
+    if "actionable" not in df.columns:
+        return {"n_actionable": 0, "total_risked": 0.0, "daily_ev": 0.0}
+
+    act = df[df["actionable"] == True].copy()
+    total_risked = float(act["dollar_stake"].fillna(0).sum())
+
+    daily_ev = 0.0
+    for _, r in act.iterrows():
+        stake = r.get("dollar_stake")
+        prob  = r.get("model_prob")
+        odds  = r.get("retail_american_odds")
+        if pd.isna(stake) or pd.isna(prob) or pd.isna(odds) or float(stake) <= 0:
+            continue
+        stake = float(stake)
+        prob  = float(prob)
+        potential_profit = stake * _american_profit_multiplier(odds)
+        daily_ev += (prob * potential_profit) - ((1.0 - prob) * stake)
+
+    return {
+        "n_actionable": int(len(act)),
+        "total_risked": total_risked,
+        "daily_ev":     daily_ev,
+    }
+
+
+def _render_summary_tiles(stats: dict) -> str:
+    """Static tiles for Actionable / Total Risked / Daily EV — sits above the live stats bar."""
+    ev = stats["daily_ev"]
+    ev_cls   = "ev-pos" if ev >= 0 else "ev-neg"
+    ev_sign  = "+" if ev >= 0 else "−"
+    ev_abs   = abs(ev)
+    return (
+        "<div class='stat-tiles'>"
+        "<div class='stat-tile'>"
+        "<div class='l'>Actionable Picks</div>"
+        f"<div class='v'>{stats['n_actionable']}</div>"
+        "</div>"
+        "<div class='stat-tile'>"
+        "<div class='l'>Total Risked</div>"
+        f"<div class='v'>${stats['total_risked']:,.0f}</div>"
+        "</div>"
+        "<div class='stat-tile'>"
+        "<div class='l'>Daily EV</div>"
+        f"<div class='v {ev_cls}'>{ev_sign}${ev_abs:,.2f}</div>"
+        "</div>"
+        "</div>"
+    )
+
+
+# ─── Actionable card grid ────────────────────────────────────────────────────
+
+def _generate_cards_html(df: pd.DataFrame) -> str:
+    """
+    Responsive card-grid view of actionable picks — replaces the prior
+    render_actionable() table. Tier 1 and Tier 2 share a single grid;
+    tier is distinguished by left-border color (green for T1, gold for T2).
+    """
+    if "actionable" not in df.columns:
+        return ("<section class='card hero'><h2>🎯 Actionable Bets</h2>"
+                "<p class='muted'>model_scores.csv missing 'actionable' column.</p></section>")
+
+    act = df[df["actionable"] == True].copy()
+    if len(act) == 0:
+        return ("<section class='card hero'><h2>🎯 Actionable Bets</h2>"
+                "<p class='muted'>No actionable bets today.</p></section>")
+
+    # Sort: Tier 1 first, then by descending edge within tier.
+    act["_tier_sort"] = act["tier"].fillna(9).astype(float)
+    act = act.sort_values(["_tier_sort", "edge"], ascending=[True, False]).drop(columns="_tier_sort")
+
+    cards = []
+    for _, r in act.iterrows():
+        tier = None if pd.isna(r.get("tier")) else int(r["tier"])
+        if tier == 1:
+            tier_cls, tier_lbl = "bet-card tier-1-card", "TIER 1"
+        elif tier == 2:
+            tier_cls, tier_lbl = "bet-card tier-2-card", "TIER 2"
+        else:
+            tier_cls, tier_lbl = "bet-card", ""
+
+        payload = {
+            "date":                 r["date"],
+            "game":                 r["game"],
+            "model":                r["model"],
+            "bet_type":             r["bet_type"],
+            "pick_direction":       r["pick_direction"],
+            "model_prob":           None if pd.isna(r["model_prob"]) else float(r["model_prob"]),
+            "market_line":          r["bet_type"],
+            "retail_american_odds": None if pd.isna(r["retail_american_odds"]) else int(r["retail_american_odds"]),
+            "stake":                None if pd.isna(r["dollar_stake"]) else int(r["dollar_stake"]),
+        }
+        payload_json = _html.escape(json.dumps(payload), quote=True)
+
+        cards.append(
+            f"<article class='{tier_cls}'>"
+              "<header class='bc-head'>"
+                f"<span class='bc-match'>{_html.escape(str(r['game']))}</span>"
+                f"<span class='bc-tier'>{tier_lbl}</span>"
+              "</header>"
+              "<div class='bc-sub'>"
+                f"{_badge(r['model'])}"
+                f"<span class='bc-market'>{_html.escape(str(r['bet_type']))}</span>"
+                "<span class='bc-sep'>·</span>"
+                f"<span class='bc-pick'>{_pick_label(r)}</span>"
+              "</div>"
+              "<div class='bc-grid'>"
+                "<div class='bc-stat'>"
+                  "<span class='bc-l'>Model</span>"
+                  f"<span class='bc-v'>{_fmt_prob(r['model_prob'])}</span>"
+                "</div>"
+                "<div class='bc-stat'>"
+                  "<span class='bc-l'>Pinnacle</span>"
+                  f"<span class='bc-v subtle'>{_fmt_prob(r['P_true'])}</span>"
+                "</div>"
+                "<div class='bc-stat'>"
+                  "<span class='bc-l'>Edge</span>"
+                  f"<span class='bc-v {_edge_class(r['edge'])}'>{_fmt_edge(r['edge'])}</span>"
+                "</div>"
+                "<div class='bc-stat'>"
+                  "<span class='bc-l'>Odds</span>"
+                  f"<span class='bc-v'>{_fmt_odds(r['retail_american_odds'])}</span>"
+                "</div>"
+                "<div class='bc-stat'>"
+                  "<span class='bc-l'>Stake</span>"
+                  f"<span class='bc-v stake'>{_fmt_stake(r['dollar_stake'])}</span>"
+                "</div>"
+                "<div class='bc-stat bc-action'>"
+                  f"<button class='btn-log' data-pick='{payload_json}'>Log Bet</button>"
+                "</div>"
+              "</div>"
+            "</article>"
+        )
+
+    t1 = int((act["tier"] == 1).sum())
+    t2 = int((act["tier"] == 2).sum())
+    return (
+        "<section class='card hero'>"
+        f"<h2>🎯 Actionable Bets &middot; {len(act)} total "
+        f"<span class='muted'>(Tier 1: {t1} · Tier 2: {t2})</span></h2>"
+        f"<div class='card-grid'>{''.join(cards)}</div>"
+        "</section>"
+    )
+
+
 # ─── Rolling accuracy matrix ─────────────────────────────────────────────────
 
 _ACCURACY_MARKETS = ["ML", "Totals", "Runline", "F5", "NRFI"]
@@ -183,6 +352,31 @@ def _build_accuracy_html(windows: dict | None) -> str:
                 "</td>"
             )
         body_rows.append(f"<tr>{''.join(cells)}</tr>")
+
+    # Alpha SGP (Beta) — joint ML+Totals parlay in the validated sweet-spot band.
+    sgp_cells = ["<td>🔗 <span class='mkt-name'>Alpha SGP (Beta)</span></td>"]
+    for wkey, _ in _ACCURACY_WINDOWS:
+        win = windows.get(wkey) or {}
+        sg  = win.get("alpha_sgp") or {}
+        bets    = int(sg.get("bets", 0) or 0)
+        win_pct = float(sg.get("win_pct", 0.0) or 0.0)
+        roi_pct = sg.get("roi_pct", 0.0)
+        try:
+            roi_val = float(roi_pct)
+        except (TypeError, ValueError):
+            roi_val = float("nan")
+        if bets == 0:
+            sgp_cells.append("<td class='acc-cell muted'>— <div class='roi-sub'>no bets</div></td>")
+            continue
+        roi_txt = "—" if pd.isna(roi_val) else f"{roi_val:+.1f}%"
+        roi_cls = _roi_class(roi_val)
+        sgp_cells.append(
+            "<td class='acc-cell'>"
+            f"<div class='winpct'>{win_pct:.1f}% <span class='muted'>({bets} bets)</span></div>"
+            f"<div class='roi-sub {roi_cls}'>ROI {roi_txt}</div>"
+            "</td>"
+        )
+    body_rows.append(f"<tr>{''.join(sgp_cells)}</tr>")
 
     # Overall footer row (across all markets, per window)
     foot_cells = ["<td><b>Overall</b></td>"]
@@ -412,6 +606,47 @@ header .sub{color:#9ca3af;font-size:13px}
 .stat .v{font-size:20px;font-weight:700;margin-top:4px}
 details summary{cursor:pointer;list-style:none}
 details summary::-webkit-details-marker{display:none}
+
+/* ── Summary stat tiles (static, derived from today's scores) ─────────────── */
+.stat-tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px}
+.stat-tile{background:#1a1d24;border:1px solid #262a33;border-radius:10px;padding:14px 16px}
+.stat-tile .l{font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.05em}
+.stat-tile .v{font-size:22px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
+.stat-tile .v.ev-pos{color:#4ade80}
+.stat-tile .v.ev-neg{color:#f87171}
+@media (max-width:720px){
+  .stat-tiles{grid-template-columns:1fr}
+}
+
+/* ── Responsive card grid for actionable picks ────────────────────────────── */
+.card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin-top:6px}
+.bet-card{background:#1a1d24;border:1px solid #262a33;border-left:4px solid #374151;
+          border-radius:10px;padding:14px 16px;transition:transform .08s ease,border-color .08s ease}
+.bet-card:hover{transform:translateY(-1px)}
+.bet-card.tier-1-card{border-left-color:#4ade80}
+.bet-card.tier-2-card{border-left-color:#f5b301}
+.bc-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:4px}
+.bc-match{font-weight:600;font-size:14px;color:#e4e7eb}
+.bc-tier{font-size:10px;letter-spacing:.08em;color:#9ca3af;border:1px solid #262a33;
+         border-radius:4px;padding:2px 6px;background:#14161c;white-space:nowrap}
+.tier-1-card .bc-tier{color:#4ade80;border-color:#4ade80}
+.tier-2-card .bc-tier{color:#f5b301;border-color:#f5b301}
+.bc-sub{color:#9ca3af;font-size:12px;margin-bottom:10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.bc-sub .bc-sep{color:#374151}
+.bc-sub .bc-market{color:#cbd2da}
+.bc-sub .bc-pick{color:#e4e7eb;font-weight:600}
+.bc-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px 14px}
+.bc-stat{display:flex;flex-direction:column;gap:2px}
+.bc-l{font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.04em}
+.bc-v{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;color:#e4e7eb}
+.bc-v.subtle{color:#9ca3af;font-weight:500}
+.bc-v.stake{color:#4ade80}
+.bc-action{grid-column:1 / -1;margin-top:4px}
+.bc-action .btn-log{width:100%}
+@media (max-width:480px){
+  .bc-grid{grid-template-columns:repeat(2,1fr)}
+  .bc-action{grid-column:1 / -1}
+}
 """
 
 JS_TEMPLATE = """
@@ -497,14 +732,18 @@ def render(df: pd.DataFrame) -> str:
     accuracy_windows = _fetch_accuracy_stats()
     accuracy_html    = _build_accuracy_html(accuracy_windows)
 
+    summary_stats = _calculate_summary_stats(df)
+    summary_html  = _render_summary_tiles(summary_stats)
+
     body = (
         "<header>"
         f"<h1>⚾ The Wizard Report — {title_date}</h1>"
         f"<div class='sub'>Generated {ts}</div>"
         "</header>"
-        "<div id='stats' class='stats-bar'></div>"
+        + summary_html
+        + "<div id='stats' class='stats-bar'></div>"
+        + _generate_cards_html(df)
         + accuracy_html
-        + render_actionable(df)
         + render_alpha(df)
         + "<section class='card'><h2>📝 Pending Results</h2>"
         "<div id='pending'><p class='muted'>Loading…</p></div></section>"
