@@ -1,0 +1,62 @@
+{
+  "train_season": 2024,
+  "test_season": 2025,
+  "n_train": 2395,
+  "n_test": 2398,
+  "totals_rmse_v1": 4.483695366891151,
+  "totals_rmse_v2": 4.480614134275498,
+  "ml_auc_v1": 0.5804209133618128,
+  "ml_auc_v2": 0.5839104213618577,
+  "ml_logloss_v1": 0.7704566873722407,
+  "ml_logloss_v2": 0.7622187560840312,
+  "alpha_gain_totals": [
+    {
+      "feature": "bullpen_xfip_diff",
+      "gain": 60.66,
+      "gain_pct": 0.87
+    },
+    {
+      "feature": "thermal_aging",
+      "gain": 50.26,
+      "gain_pct": 0.72
+    },
+    {
+      "feature": "wind_vector_out",
+      "gain": 44.54,
+      "gain_pct": 0.64
+    },
+    {
+      "feature": "days_since_opening_day",
+      "gain": 31.12,
+      "gain_pct": 0.44
+    }
+  ],
+  "alpha_gain_ml": [
+    {
+      "feature": "bullpen_xfip_diff",
+      "gain": 7.84,
+      "gain_pct": 1.04
+    },
+    {
+      "feature": "days_since_opening_day",
+      "gain": 3.51,
+      "gain_pct": 0.46
+    },
+    {
+      "feature": "wind_vector_out",
+      "gain": 3.34,
+      "gain_pct": 0.44
+    },
+    {
+      "feature": "thermal_aging",
+      "gain": 3.09,
+      "gain_pct": 0.41
+    }
+  ],
+  "alpha_features": [
+    "wind_vector_out",
+    "thermal_aging",
+    "bullpen_xfip_diff",
+    "days_since_opening_day"
+  ]
+}

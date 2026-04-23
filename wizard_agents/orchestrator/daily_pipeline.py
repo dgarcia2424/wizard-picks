@@ -466,6 +466,29 @@ def run_daily_pipeline(force: bool = False) -> dict[str, str]:
             if e >= 0.01: return 1
             return 0
 
+        # ── Signal Correlation Audit + Risk Scale-Back ────────────────────────
+        # Group actionable picks by signal_flags. If a single signal carries
+        # > 5U of aggregate exposure, every pick sharing that flag is scaled
+        # down by 25% — prevents one miscalibrated driver (e.g. a bad wind
+        # forecast) from tanking multiple correlated bets at once.
+        SIGNAL_EXPOSURE_CAP = 5.0
+        SCALE_BACK_FACTOR   = 0.75
+
+        df_act["_base_units"] = df_act["edge"].map(_units_from_edge).astype(float)
+        # Flags are single-token strings ("" when none). Empty flag → no group.
+        df_act["_flag"] = df_act.get("signal_flags", "").fillna("").astype(str)
+        exposure = (df_act[df_act["_flag"] != ""]
+                    .groupby("_flag")["_base_units"].sum().to_dict())
+        scaled_flags = {f: tot for f, tot in exposure.items() if tot > SIGNAL_EXPOSURE_CAP}
+
+        def _final_units(row) -> float:
+            u = row["_base_units"]
+            if row["_flag"] in scaled_flags:
+                return round(u * SCALE_BACK_FACTOR, 2)
+            return u
+
+        df_act["_units_final"] = df_act.apply(_final_units, axis=1)
+
         def _fmt_pick(r) -> str:
             game  = r.get("game", "")
             model = r.get("model", "")
@@ -476,14 +499,17 @@ def run_daily_pipeline(force: bool = False) -> dict[str, str]:
             prob  = r.get("model_prob", None)
             edge  = r.get("edge", None)
             flags = r.get("signal_flags", "") or ""
-            units = _units_from_edge(edge)
+            base_u  = int(r.get("_base_units", 0))
+            final_u = r.get("_units_final", base_u)
             prob_s = f"{prob*100:.1f}%" if isinstance(prob, (int, float)) else ""
             odds_s = f"{int(odds):+d}" if pd.notna(odds) else ""
-            edge_s = f"{edge*100:.1f}%" if isinstance(edge, (int, float)) else ""
+            edge_s = f"{edge*100:+.1f}%" if isinstance(edge, (int, float)) and not pd.isna(edge) else ""
             flag_s = f" [{flags}]" if flags else ""
+            scaled_s = f" (scaled from {base_u}U)" if final_u != base_u else ""
+            units_s  = f"{final_u}U" if isinstance(final_u, float) and final_u != int(final_u) else f"{int(final_u)}U"
             return (f"  • {game} — {model} {btype} {pick}  "
                     f"| prob {prob_s} | edge {edge_s} | odds {odds_s} "
-                    f"| {units}U (${stake}){flag_s}")
+                    f"| {units_s} (${stake}){flag_s}{scaled_s}")
 
         lines: list[str] = [
             "=" * 60,
@@ -501,6 +527,12 @@ def run_daily_pipeline(force: bool = False) -> dict[str, str]:
             lines.append("--- TIER 2 (Medium Edge 1.0–2.9%) ---")
             for _, r in df_act[df_act["tier"] == 2].iterrows():
                 lines.append(_fmt_pick(r))
+            lines.append("")
+        if exposure:
+            lines.append("--- SIGNAL CORRELATION AUDIT ---")
+            for flag, total in sorted(exposure.items(), key=lambda x: -x[1]):
+                mark = "  ⚠ SCALED 25%" if flag in scaled_flags else ""
+                lines.append(f"  • {flag}: {int(total) if total == int(total) else total}U total exposure{mark}")
             lines.append("")
         lines.append("See attached HTML body and PDF for full detail.")
         body = "\n".join(lines)

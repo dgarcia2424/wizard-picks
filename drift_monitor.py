@@ -18,9 +18,11 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
+import requests
 
 _ROOT     = Path(__file__).resolve().parent
 _ACTUALS  = _ROOT / "data" / "statcast" / "actuals_2026.parquet"
@@ -35,6 +37,75 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 log = logging.getLogger("drift")
+
+
+_MLB_SCHEDULE = "https://statsapi.mlb.com/api/v1/schedule"
+
+
+def refresh_actuals(target_date: str | None = None) -> int:
+    """Fetch MLB box scores for `target_date` (default: yesterday) from the
+    Stats API and upsert into actuals_2026.parquet.
+
+    Returns the number of rows written for the target date. Idempotent: rows
+    for that date are replaced, older rows preserved.
+    """
+    d = target_date or (date.today() - timedelta(days=1)).isoformat()
+    params = {
+        "sportId":  1,
+        "date":     d,
+        "hydrate":  "linescore,team",
+    }
+    try:
+        resp = requests.get(_MLB_SCHEDULE, params=params, timeout=15)
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception as e:
+        log.warning(f"[Actuals] MLB API fetch failed for {d}: {e}")
+        return 0
+
+    rows: list[dict] = []
+    for day in payload.get("dates", []):
+        for g in day.get("games", []):
+            status = (g.get("status") or {}).get("abstractGameState")
+            if status != "Final":
+                continue
+            teams = g.get("teams") or {}
+            home  = (teams.get("home") or {})
+            away  = (teams.get("away") or {})
+            hs    = home.get("score")
+            as_   = away.get("score")
+            if hs is None or as_ is None:
+                continue
+            rows.append({
+                "game_pk":          g.get("gamePk"),
+                "game_date":        d,
+                "home_team":        (home.get("team") or {}).get("abbreviation")
+                                    or (home.get("team") or {}).get("name"),
+                "away_team":        (away.get("team") or {}).get("abbreviation")
+                                    or (away.get("team") or {}).get("name"),
+                "home_score_final": int(hs),
+                "away_score_final": int(as_),
+            })
+    if not rows:
+        log.info(f"[Actuals] no Final games found for {d}.")
+        return 0
+
+    new_df = pd.DataFrame(rows)
+    _ACTUALS.parent.mkdir(parents=True, exist_ok=True)
+    if _ACTUALS.exists():
+        try:
+            existing = pd.read_parquet(_ACTUALS)
+            existing = existing[existing.get("game_date").astype(str) != d]
+            combined = pd.concat([existing, new_df], ignore_index=True, sort=False)
+        except Exception as e:
+            log.warning(f"[Actuals] could not read existing parquet ({e}); overwriting.")
+            combined = new_df
+    else:
+        combined = new_df
+    combined.to_parquet(_ACTUALS, index=False)
+    log.info(f"[Actuals] wrote {len(new_df)} Final rows for {d} → {_ACTUALS.name} "
+             f"(total rows: {len(combined)})")
+    return len(new_df)
 
 
 def _load_scored_totals() -> pd.DataFrame:
@@ -92,6 +163,7 @@ def _load_actuals() -> pd.DataFrame:
 
 
 def compute_drift(window: int = 10) -> dict:
+    refresh_actuals()  # pull yesterday's box scores before evaluating.
     preds = _load_scored_totals()
     acts  = _load_actuals()
     if preds.empty or acts.empty:

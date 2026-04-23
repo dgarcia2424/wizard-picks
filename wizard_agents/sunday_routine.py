@@ -30,9 +30,14 @@ STATIC_SPECS: list[tuple[str, list[str], int, int | None, int | None]] = [
     ("savant_pitchers",       ["woba", "est_woba", "xera", "era"],  50, None, 200),
     ("savant_batters",        ["woba", "est_woba", "est_ba"],       100, 100, None),
     ("fangraphs_pitchers",    ["Name", "Team", "ERA", "xFIP", "FIP", "WAR"], 100, None, None),
-    ("fangraphs_batters",     ["Name", "Team", "wOBA", "xwOBA"],    100, None, None),
-    ("fangraphs_team_vs_lhp", ["Tm", "wOBA"],                        30, None, None),
-    ("fangraphs_team_vs_rhp", ["Tm", "wOBA"],                        30, None, None),
+    # SO% / PA added for the Monte Carlo K-prop engine: per-batter K-rate
+    # drives Log5 matchup math against the pitcher's K-rate. File ships this
+    # column labelled "K%"; "SO%" is the semantic synonym — we require K%.
+    ("fangraphs_batters",     ["Name", "Team", "wOBA", "xwOBA", "K%", "PA"], 100, None, None),
+    # K% / BB% on the team-vs-handedness tables give the 9-man lineup proxy
+    # when confirmed batting orders are not yet published.
+    ("fangraphs_team_vs_lhp", ["Tm", "wOBA", "K%", "BB%"],           30, None, None),
+    ("fangraphs_team_vs_rhp", ["Tm", "wOBA", "K%", "BB%"],           30, None, None),
     ("fangraphs_bullpen",     ["Team", "ERA", "xFIP", "WAR"],        30, None, None),
 ]
 

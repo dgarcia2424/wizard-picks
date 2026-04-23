@@ -64,12 +64,16 @@ DATA_DIR    = BASE_DIR / "data" / "statcast"
 MODELS_DIR  = BASE_DIR / "models"
 FEAT_MATRIX = BASE_DIR / "feature_matrix_enriched_v2.parquet"
 
-FEAT_COLS_PATH       = MODELS_DIR / "run_dist_feature_cols.json"
-DC_PATH              = MODELS_DIR / "dc_model_run_dist.pkl"
-XGB_LAM_HOME_PATH    = MODELS_DIR / "xgb_run_dist_lam_home.json"
-XGB_LAM_AWAY_PATH    = MODELS_DIR / "xgb_run_dist_lam_away.json"
-STACKER_TOTALS_PATH  = MODELS_DIR / "stacker_totals.pkl"
-STACKER_RL_PATH      = MODELS_DIR / "stacker_rl.pkl"
+# ── v2 stack promoted to production (2026-04-23) — alpha physics ──────────
+# Trained on feature_matrix_v2alpha.parquet (2024-25 augmented with
+# wind_vector_out, thermal_aging, bullpen_xfip_diff, days_since_opening_day).
+# v1 artifacts remain on disk without the _v2 suffix for rollback.
+FEAT_COLS_PATH       = MODELS_DIR / "run_dist_feature_cols_v2.json"
+DC_PATH              = MODELS_DIR / "dc_model_run_dist_v2.pkl"
+XGB_LAM_HOME_PATH    = MODELS_DIR / "xgb_run_dist_lam_home_v2.json"
+XGB_LAM_AWAY_PATH    = MODELS_DIR / "xgb_run_dist_lam_away_v2.json"
+STACKER_TOTALS_PATH  = MODELS_DIR / "stacker_totals_v2.pkl"
+STACKER_RL_PATH      = MODELS_DIR / "stacker_rl_v2.pkl"
 ACTUALS_2026         = DATA_DIR   / "actuals_2026.parquet"
 
 
@@ -221,29 +225,17 @@ def predict_games(date_str: str) -> pd.DataFrame:
         lam_h_raw = float(np.clip(m_home.predict(X)[0], 0.1, 15.0))
         lam_a_raw = float(np.clip(m_away.predict(X)[0], 0.1, 15.0))
 
-        # ── Alpha Bridge: Late-Inning Environmental Multiplier ─────────
-        # FB% proxy = 1 - GB% - (league-avg LD% ≈ 0.20). Conservative —
-        # triggers only on pitchers with GB% < 0.40, i.e. top-quartile flyball.
-        wind_vec   = wind_by_team.get(home)
-        home_gb    = feat.get("home_sp_gb_pct", np.nan)
-        away_gb    = feat.get("away_sp_gb_pct", np.nan)
-        home_fb    = (1.0 - float(home_gb) - 0.20) if pd.notna(home_gb) else np.nan
-        away_fb    = (1.0 - float(away_gb) - 0.20) if pd.notna(away_gb) else np.nan
-        env_trigger_h = (wind_vec is not None and wind_vec > ENV_WIND_THRESHOLD
-                         and pd.notna(home_fb) and home_fb > ENV_FB_THRESHOLD)
-        env_trigger_a = (wind_vec is not None and wind_vec > ENV_WIND_THRESHOLD
-                         and pd.notna(away_fb) and away_fb > ENV_FB_THRESHOLD)
-        mult_h = ENV_MULTIPLIER if env_trigger_h else 1.0
-        mult_a = ENV_MULTIPLIER if env_trigger_a else 1.0
-        lam_h  = float(np.clip(lam_h_raw * mult_h, 0.1, 15.0))
-        lam_a  = float(np.clip(lam_a_raw * mult_a, 0.1, 15.0))
-        if env_trigger_h or env_trigger_a:
-            print(f"[AlphaBridge] {home} vs {away}: "
-                  f"wind_out={wind_vec:+.1f}mph, "
-                  f"home_fb={home_fb:.2f} → x{mult_h}, "
-                  f"away_fb={away_fb:.2f} → x{mult_a} | "
-                  f"raw total {lam_h_raw + lam_a_raw:.2f} → "
-                  f"adj total {lam_h + lam_a:.2f}")
+        # ── Alpha Bridge RETIRED (v2 physics promotion, 2026-04-23) ────
+        # The 1.05x env multiplier is deprecated — v2 run-distribution
+        # model now learns wind_vector_out natively (gain 44.5, rank #3
+        # among alpha features). Keeping a manual +5% on top double-counts
+        # and introduced ~7x over-projection on wind-out games (partial-
+        # dependence showed the trained weight is ~+0.7%, not +5%).
+        # Manual override is now a no-op; columns kept for ledger schema.
+        mult_h = 1.0
+        mult_a = 1.0
+        lam_h  = lam_h_raw
+        lam_a  = lam_a_raw
 
         # ── Vegas total line ────────────────────────────────────────────
         total_line = _resolve_total_line_for_game(gk, date_str, fm)

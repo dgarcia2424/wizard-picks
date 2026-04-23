@@ -50,12 +50,15 @@ DATA_DIR        = BASE_DIR / "data" / "statcast"
 MODELS_DIR      = BASE_DIR / "models"
 FEAT_MATRIX     = BASE_DIR / "feature_matrix_enriched_v2.parquet"
 
-FEAT_COLS_PATH  = MODELS_DIR / "ml_feature_cols.json"
-XGB_ML_PATH     = MODELS_DIR / "xgb_ml.json"
-XGB_CAL_PATH    = MODELS_DIR / "xgb_ml_calibrator.pkl"
-STACKER_PATH    = MODELS_DIR / "stacking_lr_ml.pkl"
-TEAM_MODEL_PATH = MODELS_DIR / "team_ml_model.json"
-TEAM_FEAT_PATH  = MODELS_DIR / "team_ml_feat_cols.json"
+# ── v2 ML stack promoted to production (2026-04-23) ──────────────────────
+# Trained on feature_matrix_v2alpha.parquet with bullpen_xfip_diff and
+# thermal_aging learned natively. v1 artifacts retained for rollback.
+FEAT_COLS_PATH  = MODELS_DIR / "ml_feature_cols_v2.json"
+XGB_ML_PATH     = MODELS_DIR / "xgb_ml_v2.json"
+XGB_CAL_PATH    = MODELS_DIR / "xgb_ml_calibrator_v2.pkl"
+STACKER_PATH    = MODELS_DIR / "stacking_lr_ml_v2.pkl"
+TEAM_MODEL_PATH = MODELS_DIR / "team_ml_model_v2.json"
+TEAM_FEAT_PATH  = MODELS_DIR / "team_ml_feat_cols_v2.json"
 ACTUALS_2026    = DATA_DIR   / "actuals_2026.parquet"
 
 
@@ -473,30 +476,19 @@ def predict_games(date_str: str) -> pd.DataFrame:
         except Exception:
             pass
 
-        if "stacker_l2" in df.columns and "bullpen_xfip_diff" in df.columns:
-            base  = pd.to_numeric(df["stacker_l2"], errors="coerce")
-            diff  = pd.to_numeric(df["bullpen_xfip_diff"], errors="coerce").fillna(0.0)
-            # Thermal penalty — effective diff is halved when home_temp < 46°F.
-            # Uses abbr-or-fullname key set in bullpen_features by joining temp_by_home.
-            temp = df["home_team"].map(temp_by_home) if "home_team" in df.columns else pd.Series([None] * len(df))
-            temp = pd.to_numeric(temp, errors="coerce")
-            cold = temp.fillna(99.0) < 46.0
-            eff_diff = diff.where(~cold, diff * 0.5)
-            df["bullpen_thermal_penalty"] = cold.astype(int)
-            df["bullpen_xfip_diff_effective"] = eff_diff.round(3)
-
-            adj = base.copy()
-            adj = adj.where(~(eff_diff < -0.45), base + 0.015)
-            adj = adj.where(~(eff_diff >  0.45), base - 0.015)
-            df["adj_home_win_prob"] = adj.clip(lower=0.01, upper=0.99).round(4)
-
-            applied = (eff_diff.abs() > 0.45)
-            df["signal_flags"] = applied.map(lambda v: "BULLPEN_ML_ADJ" if v else "")
-            n_up   = int((eff_diff < -0.45).sum())
-            n_down = int((eff_diff >  0.45).sum())
-            n_cold = int(cold.sum())
-            print(f"[BullpenAdj] adj_home_win_prob: +1.5pp on {n_up} games, "
-                  f"-1.5pp on {n_down} games | thermal-halved on {n_cold} games (temp<46°F)")
+        # ── Bullpen Pivot RETIRED (v2 physics promotion, 2026-04-23) ───
+        # The ±1.5pp manual bullpen bridge is deprecated — v2 ML stacker
+        # now learns bullpen_xfip_diff natively (gain 7.84, rank #1 among
+        # alpha features). Keeping a manual pivot on top double-counts
+        # the signal. adj_home_win_prob is now identity with stacker_l2;
+        # downstream ledger keeps the column for schema compatibility.
+        if "stacker_l2" in df.columns:
+            base = pd.to_numeric(df["stacker_l2"], errors="coerce")
+            df["adj_home_win_prob"]         = base.clip(lower=0.01, upper=0.99).round(4)
+            df["bullpen_thermal_penalty"]   = 0
+            df["bullpen_xfip_diff_effective"] = pd.to_numeric(
+                df.get("bullpen_xfip_diff", 0.0), errors="coerce").fillna(0.0).round(3)
+            df["signal_flags"] = ""
     except Exception as e:
         print(f"[BullpenAdj] failed: {e}")
 
