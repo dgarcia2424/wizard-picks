@@ -91,8 +91,8 @@ BIAS_DAMPING           = 0.8        # 0.8 = damp 20% of observed residual
 BIAS_WINDOW_DAYS       = 14
 BIAS_MAX_ROWS          = 100
 BIAS_MIN_ROWS          = 20
-BIAS_PARK_MIN_ROWS     = 10
-BIAS_PARK_BLEND_WEIGHT = 0.30       # park specificity weight (global = 0.70)
+BIAS_PARK_MIN_ROWS     = 5          # park activates at n>=5 (was 10)
+BIAS_PARK_BLEND_WEIGHT = 0.50       # 50/50 blend (was 70/30)
 _RESIDUAL_LOG          = Path("data") / "logs" / "model_residuals.csv"
 
 
@@ -102,7 +102,7 @@ def get_dynamic_bias(home_park_id: str | None = None) -> tuple[float, int, dict]
     offset_runs is a signed value to ADD to projected totals — negative means
     the model is over-projecting and needs to be cooled.
     """
-    meta: dict = {"source": "fallback", "park_blend": False, "global_residual": None,
+    meta: dict = {"source": "fallback", "park_blend": "fallback", "global_residual": None,
                   "park_residual": None, "damping": BIAS_DAMPING}
     if not _RESIDUAL_LOG.exists():
         return GLOBAL_BIAS_FALLBACK, 0, meta
@@ -129,15 +129,28 @@ def get_dynamic_bias(home_park_id: str | None = None) -> tuple[float, int, dict]
         park_rows = recent[recent["home_park_id"] == home_park_id]
         if len(park_rows) >= BIAS_PARK_MIN_ROWS:
             park_residual = float(park_rows["residual"].mean())
-            blended = (1.0 - BIAS_PARK_BLEND_WEIGHT) * global_residual \
-                      + BIAS_PARK_BLEND_WEIGHT * park_residual
-            meta["park_blend"]    = True
             meta["park_residual"] = park_residual
             meta["park_n"]        = int(len(park_rows))
+
+            # ── Safety Valve ────────────────────────────────────────────
+            # If global says "heat" (global_residual < 0) but park says
+            # "cool" (park_residual > 0), trust the local cooling 100%.
+            # Prevents known over-projection parks (TEX +5.55r) from being
+            # masked by global heating.
+            if global_residual < 0 and park_residual > 0:
+                meta["park_blend"] = "safety_valve"
+                offset = -park_residual * BIAS_DAMPING
+                return offset, len(recent), meta
+
+            # Standard 50/50 blend
+            blended = (1.0 - BIAS_PARK_BLEND_WEIGHT) * global_residual \
+                      + BIAS_PARK_BLEND_WEIGHT * park_residual
+            meta["park_blend"] = "blend"
             offset = -blended * BIAS_DAMPING
             return offset, len(recent), meta
 
     offset = -global_residual * BIAS_DAMPING
+    meta["park_blend"] = "global"
     return offset, len(recent), meta
 
 # ---------------------------------------------------------------------------
@@ -370,8 +383,9 @@ def predict_games(date_str: str) -> pd.DataFrame:
     df = pd.DataFrame(rows)
 
     # ── Dynamic Bias audit line ──────────────────────────────────────────
-    # One line summarises the thermostat state for today's slate. If any
-    # park-blended offsets fired, list them explicitly.
+    # Per-game bias source: Global | Blend | Safety-Valve | Fallback.
+    _label_map = {"global": "Global", "blend": "Blend",
+                  "safety_valve": "Safety-Valve", "fallback": "Fallback"}
     if _bias_applied_log:
         offsets = [b[1] for b in _bias_applied_log]
         n_games = _bias_applied_log[0][2]
@@ -379,11 +393,11 @@ def predict_games(date_str: str) -> pd.DataFrame:
         src = _bias_applied_log[0][3].get("source", "fallback")
         print(f"[Thermostat] Dynamic Bias Applied: mean={mean_off:+.3f} r "
               f"(source={src} | n={n_games} | damping={BIAS_DAMPING})")
-        park_blends = [(h, o, m.get("park_residual"), m.get("park_n"))
-                       for (h, o, _, m) in _bias_applied_log if m.get("park_blend")]
-        for h, o, pr, pn in park_blends:
-            print(f"   [park-blend] {h}: offset={o:+.3f}r "
-                  f"(park_residual={pr:+.2f}, n_park={pn})")
+        for (h, o, _, m) in _bias_applied_log:
+            label = _label_map.get(m.get("park_blend", "global"), "Global")
+            pr_str = (f" | park_residual={m['park_residual']:+.2f} "
+                      f"(n={m.get('park_n','?')})") if m.get("park_residual") is not None else ""
+            print(f"   [{h}] Bias Source: {label} | Offset: {o:+.3f}r{pr_str}")
 
     # Signal attribution — flag games where the Late-Inning Environmental
     # Multiplier fired on either side. Consumed by the ledger for ROI-by-signal.
