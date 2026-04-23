@@ -433,6 +433,73 @@ def predict_games(date_str: str) -> pd.DataFrame:
         print(f"\n  L1 correct: {correct_l1}/{total_games}  ({correct_l1/total_games:.1%})")
         print(f"  L2 correct: {correct_l2}/{total_games}  ({correct_l2/total_games:.1%})")
 
+    # ── Alpha feature attachment ─────────────────────────────────────────────
+    # Bullpen xFIP/ERA/WAR per side + home-away diff. Current L1/L2 models
+    # were trained without these columns, so they do not enter inference;
+    # attached here so model_scores.csv carries them for the renderer, the
+    # auto-reconciler, and the next retrain cycle.
+    try:
+        from bullpen_features import append_bullpen_features
+        df = append_bullpen_features(df)
+    except Exception as e:
+        print(f"[BullpenFeatures] ML scorer attach failed: {e}")
+
+    # Manual bullpen adjustment bridge: nudge home_win_prob (L2 stacker)
+    # by ±1.5pp when bullpen xFIP gap is decisive (|diff| > 0.45).
+    # Thermal penalty: in extreme cold (<46°F) both bullpens see velocity/movement
+    # degradation, so the xFIP edge is less reliable — halve the impact.
+    # Live signal until bullpen cols enter the trained feature_cols.json.
+    try:
+        # Pull per-game temp from today's games.csv so the thermal gate has data.
+        # games.csv keys by full name; ml_df keys by abbr — key temp by both.
+        temp_by_home: dict = {}
+        try:
+            _games = pd.read_csv("games.csv")
+            if "home_team" in _games.columns and "temp_f" in _games.columns:
+                sys.path.insert(0, str(Path(__file__).parent / "wizard_agents"))
+                try:
+                    from tools.implementations import TEAM_NAME_TO_ABBR
+                except Exception:
+                    TEAM_NAME_TO_ABBR = {}
+                for _, r in _games.iterrows():
+                    full = r.get("home_team")
+                    t    = pd.to_numeric(r.get("temp_f"), errors="coerce")
+                    if pd.isna(t):
+                        continue
+                    temp_by_home[full] = float(t)
+                    abbr = TEAM_NAME_TO_ABBR.get(full)
+                    if abbr:
+                        temp_by_home[abbr] = float(t)
+        except Exception:
+            pass
+
+        if "stacker_l2" in df.columns and "bullpen_xfip_diff" in df.columns:
+            base  = pd.to_numeric(df["stacker_l2"], errors="coerce")
+            diff  = pd.to_numeric(df["bullpen_xfip_diff"], errors="coerce").fillna(0.0)
+            # Thermal penalty — effective diff is halved when home_temp < 46°F.
+            # Uses abbr-or-fullname key set in bullpen_features by joining temp_by_home.
+            temp = df["home_team"].map(temp_by_home) if "home_team" in df.columns else pd.Series([None] * len(df))
+            temp = pd.to_numeric(temp, errors="coerce")
+            cold = temp.fillna(99.0) < 46.0
+            eff_diff = diff.where(~cold, diff * 0.5)
+            df["bullpen_thermal_penalty"] = cold.astype(int)
+            df["bullpen_xfip_diff_effective"] = eff_diff.round(3)
+
+            adj = base.copy()
+            adj = adj.where(~(eff_diff < -0.45), base + 0.015)
+            adj = adj.where(~(eff_diff >  0.45), base - 0.015)
+            df["adj_home_win_prob"] = adj.clip(lower=0.01, upper=0.99).round(4)
+
+            applied = (eff_diff.abs() > 0.45)
+            df["signal_flags"] = applied.map(lambda v: "BULLPEN_ML_ADJ" if v else "")
+            n_up   = int((eff_diff < -0.45).sum())
+            n_down = int((eff_diff >  0.45).sum())
+            n_cold = int(cold.sum())
+            print(f"[BullpenAdj] adj_home_win_prob: +1.5pp on {n_up} games, "
+                  f"-1.5pp on {n_down} games | thermal-halved on {n_cold} games (temp<46°F)")
+    except Exception as e:
+        print(f"[BullpenAdj] failed: {e}")
+
     return df
 
 

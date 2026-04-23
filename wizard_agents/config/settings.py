@@ -7,13 +7,15 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
-
 # ── Pipeline directory ────────────────────────────────────────────────────────
 PIPELINE_DIR = Path(os.getenv(
     "PIPELINE_DIR",
     r"C:\Users\garci\OneDrive\Documents\Claude\mlb_model_pipeline_dan"
 ))
+
+# Load .env from the project root by absolute path so `python -m` / cron runs
+# from other cwds still pick up the credentials.
+load_dotenv(dotenv_path=PIPELINE_DIR / ".env", override=False)
 
 # ── File paths ────────────────────────────────────────────────────────────────
 FILES = {
@@ -27,6 +29,7 @@ FILES = {
     "fangraphs_batters":     PIPELINE_DIR / "data/raw/fangraphs_batters.csv",
     "fangraphs_team_vs_lhp": PIPELINE_DIR / "data/raw/fangraphs_team_vs_lhp.csv",
     "fangraphs_team_vs_rhp": PIPELINE_DIR / "data/raw/fangraphs_team_vs_rhp.csv",
+    "fangraphs_bullpen":     PIPELINE_DIR / "data/raw/fangraphs_bullpen.csv",
     "savant_pitchers":       PIPELINE_DIR / "data/raw/savant_pitchers.csv",
     "savant_batters":        PIPELINE_DIR / "data/raw/savant_batters.csv",
 }
@@ -36,6 +39,7 @@ STATIC_FILES = [
     "fangraphs_batters",
     "fangraphs_team_vs_lhp",
     "fangraphs_team_vs_rhp",
+    "fangraphs_bullpen",
     "savant_pitchers",
     "savant_batters",
 ]

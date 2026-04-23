@@ -149,6 +149,37 @@ def predict_games(date_str: str) -> pd.DataFrame:
     fm = pd.read_parquet(FEAT_MATRIX)
     fm["game_date"] = pd.to_datetime(fm["game_date"])
 
+    # Late-Inning Environmental Multiplier — Alpha Bridge until retrain.
+    # The unified-total model (run_dist_feature_cols.json) was NOT trained on
+    # wind_vector_out, so we cannot feed it through the XGB inputs (hard
+    # assertion at line 185). Instead we post-hoc scale lam_h + lam_a when the
+    # physical conditions clearly favour offence: a stiff wind blowing OUT to
+    # CF paired with a fly-ball starter. Applied per-side; recompute all
+    # downstream probabilities off the scaled lambdas.
+    games_csv = Path(__file__).parent / "games.csv"
+    wind_by_team: dict[str, float] = {}
+    if games_csv.exists():
+        try:
+            # games.csv uses odds-API full names ("Texas Rangers"); the lineup
+            # loop below iterates abbreviations ("TEX"). Key the dict by BOTH
+            # so the lookup hits regardless of which form arrives at the call.
+            sys.path.insert(0, str(Path(__file__).parent / "wizard_agents"))
+            from tools.implementations import TEAM_NAME_TO_ABBR
+            gdf = pd.read_csv(games_csv, usecols=["home_team", "wind_vector_out"])
+            for _, r in gdf.dropna(subset=["wind_vector_out"]).iterrows():
+                nm = str(r["home_team"]).strip()
+                wvo = float(r["wind_vector_out"])
+                wind_by_team[nm] = wvo
+                abbr = TEAM_NAME_TO_ABBR.get(nm)
+                if abbr:
+                    wind_by_team[abbr] = wvo
+        except Exception as e:
+            print(f"[AlphaBridge] games.csv wind lookup failed: {e}")
+
+    ENV_WIND_THRESHOLD = 8.0     # mph blowing out to CF
+    ENV_FB_THRESHOLD   = 0.40    # FB%  > 40% — genuine fly-ball starter
+    ENV_MULTIPLIER     = 1.05    # +5% to projected runs per side
+
     lineups = get_todays_games(date_str)
     print(f"\n{len(lineups)} games scheduled for {date_str}\n")
 
@@ -187,8 +218,32 @@ def predict_games(date_str: str) -> pd.DataFrame:
         X = feat_df.values.astype(np.float32)
 
         # ── Dual-Poisson XGB lambdas ────────────────────────────────────
-        lam_h = float(np.clip(m_home.predict(X)[0], 0.1, 15.0))
-        lam_a = float(np.clip(m_away.predict(X)[0], 0.1, 15.0))
+        lam_h_raw = float(np.clip(m_home.predict(X)[0], 0.1, 15.0))
+        lam_a_raw = float(np.clip(m_away.predict(X)[0], 0.1, 15.0))
+
+        # ── Alpha Bridge: Late-Inning Environmental Multiplier ─────────
+        # FB% proxy = 1 - GB% - (league-avg LD% ≈ 0.20). Conservative —
+        # triggers only on pitchers with GB% < 0.40, i.e. top-quartile flyball.
+        wind_vec   = wind_by_team.get(home)
+        home_gb    = feat.get("home_sp_gb_pct", np.nan)
+        away_gb    = feat.get("away_sp_gb_pct", np.nan)
+        home_fb    = (1.0 - float(home_gb) - 0.20) if pd.notna(home_gb) else np.nan
+        away_fb    = (1.0 - float(away_gb) - 0.20) if pd.notna(away_gb) else np.nan
+        env_trigger_h = (wind_vec is not None and wind_vec > ENV_WIND_THRESHOLD
+                         and pd.notna(home_fb) and home_fb > ENV_FB_THRESHOLD)
+        env_trigger_a = (wind_vec is not None and wind_vec > ENV_WIND_THRESHOLD
+                         and pd.notna(away_fb) and away_fb > ENV_FB_THRESHOLD)
+        mult_h = ENV_MULTIPLIER if env_trigger_h else 1.0
+        mult_a = ENV_MULTIPLIER if env_trigger_a else 1.0
+        lam_h  = float(np.clip(lam_h_raw * mult_h, 0.1, 15.0))
+        lam_a  = float(np.clip(lam_a_raw * mult_a, 0.1, 15.0))
+        if env_trigger_h or env_trigger_a:
+            print(f"[AlphaBridge] {home} vs {away}: "
+                  f"wind_out={wind_vec:+.1f}mph, "
+                  f"home_fb={home_fb:.2f} → x{mult_h}, "
+                  f"away_fb={away_fb:.2f} → x{mult_a} | "
+                  f"raw total {lam_h_raw + lam_a_raw:.2f} → "
+                  f"adj total {lam_h + lam_a:.2f}")
 
         # ── Vegas total line ────────────────────────────────────────────
         total_line = _resolve_total_line_for_game(gk, date_str, fm)
@@ -229,6 +284,12 @@ def predict_games(date_str: str) -> pd.DataFrame:
             "away_sp":            away_sp,
             "lam_home":           round(lam_h, 3),
             "lam_away":           round(lam_a, 3),
+            "lam_home_raw":       round(lam_h_raw, 3),
+            "lam_away_raw":       round(lam_a_raw, 3),
+            "projected_total_raw": round(lam_h_raw + lam_a_raw, 2),
+            "projected_total_adj": round(lam_h     + lam_a,     2),
+            "env_mult_home":      mult_h,
+            "env_mult_away":      mult_a,
             "total_line":         round(total_line, 2),
             "p_over_dc":          round(p_over_dc,  4),
             "p_over_xgb":         round(p_over_xgb, 4),
@@ -239,6 +300,23 @@ def predict_games(date_str: str) -> pd.DataFrame:
         })
 
     df = pd.DataFrame(rows)
+
+    # Signal attribution — flag games where the Late-Inning Environmental
+    # Multiplier fired on either side. Consumed by the ledger for ROI-by-signal.
+    if len(df) > 0 and "env_mult_home" in df.columns:
+        emh = pd.to_numeric(df["env_mult_home"], errors="coerce").fillna(1.0)
+        ema = pd.to_numeric(df["env_mult_away"], errors="coerce").fillna(1.0)
+        triggered = (emh > 1.0) | (ema > 1.0)
+        df["signal_flags"] = triggered.map(lambda v: "WEATHER_TOTALS_ADJ" if v else "")
+
+    # ── Alpha feature attachment ─────────────────────────────────────────
+    # Bullpen xFIP/ERA/WAR + home-away diff. Post-hoc attach (not in
+    # feat_cols); available for downstream reporting / retrain.
+    try:
+        from bullpen_features import append_bullpen_features
+        df = append_bullpen_features(df)
+    except Exception as e:
+        print(f"[BullpenFeatures] run_dist scorer attach failed: {e}")
 
     # ── Pretty-print table sorted by largest edge ────────────────────────
     if len(df) > 0 and df["p_over_final"].notna().any():

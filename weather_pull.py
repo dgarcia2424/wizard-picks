@@ -122,7 +122,7 @@ def fetch_open_meteo(lat: float, lon: float, date_str: str) -> dict | None:
         "longitude": lon,
         "start_date": date_str,
         "end_date": date_str,
-        "hourly": "temperature_2m,windspeed_10m,winddirection_10m,relativehumidity_2m,precipitation",
+        "hourly": "temperature_2m,windspeed_10m,winddirection_10m,relativehumidity_2m,precipitation,dewpoint_2m",
         "temperature_unit": "fahrenheit",
         "windspeed_unit": "mph",
         "timezone": "America/New_York",
@@ -160,6 +160,7 @@ def extract_weather(data: dict, team: str) -> dict:
         "wind_bearing":  safe_get("winddirection_10m"),
         "humidity":      safe_get("relativehumidity_2m"),
         "precip_mm":     safe_get("precipitation"),
+        "dew_point_f":   safe_get("dewpoint_2m"),
         "stadium_name":  stadium_name,
     }
 
@@ -359,7 +360,7 @@ def process_game_list(df: pd.DataFrame, year: int) -> None:
     # Ensure column order
     col_order = [
         "game_date", "home_team", "temp_f", "wind_mph",
-        "wind_bearing", "humidity", "precip_mm", "stadium_name",
+        "wind_bearing", "humidity", "precip_mm", "dew_point_f", "stadium_name",
     ]
     for col in col_order:
         if col not in out_df.columns:

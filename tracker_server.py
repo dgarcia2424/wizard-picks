@@ -1,19 +1,20 @@
 """
-tracker_server.py — MLB Bet Tracker Local Server
-Runs a lightweight HTTP server that handles bet logging from model_report.html
+tracker_server.py — MLB Bet Tracker Local Server (read-only observer)
+
+Exposes GET /stats (and /bets, /ping) for the Auto-Reconciliation Engine and
+the rendered HTML report's live stats bar. All manual-entry endpoints
+(/log_bet, /log_result) have been removed — grading now flows through
+auto_grade_historical_picks() against actuals_2026.parquet.
 
 Usage:
     python tracker_server.py          # Starts on port 5151
     python tracker_server.py --port 5252
-
-Keep running in background while using model_report.html
 """
 
 import os
 import csv
 import json
 import argparse
-from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.parse
 
@@ -41,45 +42,6 @@ def load_bets():
             bets.append(row)
     return bets
 
-def save_bet(bet):
-    ensure_tracker()
-    with open(TRACKER_FILE, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
-        writer.writerow(bet)
-
-def update_bet(bet_id, updates):
-    bets = load_bets()
-    for bet in bets:
-        if bet["id"] == bet_id:
-            bet.update(updates)
-    with open(TRACKER_FILE, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
-        writer.writeheader()
-        writer.writerows(bets)
-
-def next_id():
-    bets = load_bets()
-    if not bets:
-        return "1"
-    return str(max(int(b["id"]) for b in bets if b["id"].isdigit()) + 1)
-
-def calc_profit(units, line, result):
-    try:
-        u = float(units)
-        l = int(line)
-        if result == "WIN":
-            if l < 0:
-                return round(u * (100 / abs(l)), 2)
-            else:
-                return round(u * (l / 100), 2)
-        elif result == "LOSS":
-            return round(-u, 2)
-        elif result == "PUSH":
-            return 0.0
-    except:
-        return 0.0
-    return 0.0
-
 class TrackerHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass  # Suppress default logging
@@ -96,7 +58,7 @@ class TrackerHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
@@ -108,55 +70,6 @@ class TrackerHandler(BaseHTTPRequestHandler):
             self.send_json(compute_stats())
         elif parsed.path == "/ping":
             self.send_json({"status": "ok"})
-        else:
-            self.send_json({"error": "not found"}, 404)
-
-    def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(length))
-        parsed = urllib.parse.urlparse(self.path)
-
-        if parsed.path == "/log_bet":
-            bet_id = next_id()
-            bet = {
-                "id":           bet_id,
-                "date":         body.get("date", ""),
-                "game":         body.get("game", ""),
-                "home":         body.get("home", ""),
-                "away":         body.get("away", ""),
-                "model":        body.get("model", ""),
-                "bet_type":     body.get("bet_type", ""),
-                "model_prob":   body.get("model_prob", ""),
-                "market_line":  body.get("market_line", ""),
-                "book":         body.get("book", "DK"),
-                "units":        body.get("units", "1"),
-                "result":       "PENDING",
-                "actual_total": "",
-                "profit_loss":  "",
-                "logged_at":    datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "notes":        body.get("notes", ""),
-            }
-            save_bet(bet)
-            print(f"  📝 Logged: {bet['game']} | {bet['model']} {bet['bet_type']} @ {bet['market_line']}")
-            self.send_json({"status": "ok", "id": bet_id})
-
-        elif parsed.path == "/log_result":
-            bet_id  = body.get("id", "")
-            result  = body.get("result", "")
-            total   = body.get("actual_total", "")
-            bets    = load_bets()
-            matched = next((b for b in bets if b["id"] == bet_id), None)
-            if matched:
-                pl = calc_profit(matched["units"], matched["market_line"], result)
-                update_bet(bet_id, {
-                    "result":       result,
-                    "actual_total": total,
-                    "profit_loss":  pl,
-                })
-                print(f"  {'✅' if result=='WIN' else '❌' if result=='LOSS' else '⬜'} Result: {matched['game']} | {result} | P/L: {pl:+.2f}u")
-                self.send_json({"status": "ok", "profit_loss": pl})
-            else:
-                self.send_json({"error": "bet not found"}, 404)
         else:
             self.send_json({"error": "not found"}, 404)
 
@@ -201,9 +114,9 @@ def main():
 
     ensure_tracker()
     print(f"\n{'='*50}")
-    print(f"  MLB Bet Tracker Server — port {args.port}")
+    print(f"  MLB Bet Tracker Server (read-only) — port {args.port}")
     print(f"  Tracker file: {TRACKER_FILE}")
-    print(f"  Keep this running while using model_report.html")
+    print(f"  Endpoints: GET /stats, /bets, /ping")
     print(f"  Ctrl+C to stop")
     print(f"{'='*50}\n")
 

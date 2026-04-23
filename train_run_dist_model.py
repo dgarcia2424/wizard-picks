@@ -817,6 +817,11 @@ def main():
     parser.add_argument("--with-2026", action="store_true")
     parser.add_argument("--matrix", type=str,
                         default="feature_matrix_enriched_v2.parquet")
+    parser.add_argument("--feat-cols", type=str, default=None,
+                        help="Path to feature-column manifest JSON. Default: "
+                             "run_dist_feature_cols.json (live model). Pass "
+                             "models/run_dist_feature_cols_next.json to retrain "
+                             "with the v2 env/interaction feature set.")
     args = parser.parse_args()
 
     print("=" * 70)
@@ -827,10 +832,11 @@ def main():
 
     # Use persisted manifest if present; otherwise derive
     feat_cols_override = None
-    if OUT_FEAT_COLS.exists():
+    manifest_path = Path(args.feat_cols) if args.feat_cols else OUT_FEAT_COLS
+    if manifest_path.exists():
         try:
-            feat_cols_override = json.load(open(OUT_FEAT_COLS))
-            print(f"  Using feature manifest: {OUT_FEAT_COLS} "
+            feat_cols_override = json.load(open(manifest_path))
+            print(f"  Using feature manifest: {manifest_path} "
                   f"({len(feat_cols_override)} features)")
         except Exception:
             feat_cols_override = None

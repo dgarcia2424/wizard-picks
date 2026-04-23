@@ -1,7 +1,7 @@
 """
 orchestrator/daily_pipeline.py
 
-Daily pipeline: Agent 1 → Agent 3 → Agent 4 → Agent 5
+Daily pipeline: Ingest → Score → Render → Email
 Runs at 10 AM after DK posts lines.
 
 Agent 2 (Static Data Manager) runs independently on Sundays via main_weekly.py.
@@ -32,19 +32,31 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from agents.definitions import AGENT3
 from config import settings
 from config.settings import FILES, PIPELINE_DIR
-from orchestrator.agent_loop import run_agent, PipelineHaltError
 from render_report import render
+
+# Environmental feature engineering (wind vectors, league RPG, interactions)
+from models.feature_engineering import (
+    compute_wind_vector_out,
+    compute_days_since_opening_day,
+    compute_league_rpg_rolling_7d,
+    load_league_rpg_history,
+)
+
+
+class PipelineHaltError(RuntimeError):
+    """Raised by Step 1 when upstream data is missing (e.g. zero games from odds API)."""
 from tools.implementations import (
     archive_model_scores,
     auto_grade_historical_picks,
     fetch_odds_api,
     fetch_mlb_starters,
     fetch_weather,
+    generate_ml_scores,
     rebuild_live_predictions_log,
     write_csv,
+    TEAM_NAME_TO_ABBR,
 )
 
 # Agent 4 (Report Generation) has been replaced with a deterministic
@@ -177,29 +189,76 @@ def run_daily_pipeline(force: bool = False) -> dict[str, str]:
                 return dirs[int((d + 22.5) // 45) % 8]
 
             enriched_weather: list[str] = []
+            # Environmental features computed deterministically in Step 1.
+            # These are LOGGED per game and attached to agent1_output. Downstream
+            # training / inference reads weather parquets + build_feature_matrix.py;
+            # this block is the production-path parity check.
+            league_hist = load_league_rpg_history()
+            league_rpg_7d = compute_league_rpg_rolling_7d(DATE_KEY, league_hist)
+            days_since_opener = compute_days_since_opening_day(DATE_KEY)
+            logger.info(
+                f"[EnvFeatures] league_rpg_rolling_7d={league_rpg_7d} "
+                f"days_since_opening_day={days_since_opener}"
+            )
+            env_features: list[dict] = []
             for g in games:
                 gid  = g.get("game_id", g.get("home_team", ""))
                 home = g.get("home_team", "")
                 w    = weather.get(gid, {}) or {}
                 if "error" in w:
                     enriched_weather.append(f"{home}: weather unavailable ({w.get('error')})")
+                    env_features.append({
+                        "game_id": gid, "home_team": home,
+                        "wind_vector_out": None, "dew_point_f": None,
+                        "temp_f": None,
+                        "days_since_opening_day": days_since_opener,
+                        "league_rpg_rolling_7d": league_rpg_7d,
+                    })
                     continue
                 t   = w.get("temperature_f")
                 ws  = w.get("wind_speed_mph")
-                wd  = _cardinal(w.get("wind_direction"))
+                wb  = w.get("wind_direction")
+                wd  = _cardinal(wb)
                 pp  = w.get("precipitation_probability")
+                dp  = w.get("dew_point_f")
                 pp_s = f", Precip {pp}%" if pp is not None else ""
+                dp_s = f", Dew {dp}°F" if dp is not None else ""
+                home_abbr = TEAM_NAME_TO_ABBR.get(home, home)
+                wvo = compute_wind_vector_out(ws, wb, home_abbr)
+                wvo_s = f", WindOut {wvo:+.1f}" if wvo is not None else ""
                 enriched_weather.append(
-                    f"{home}: {t}°F, Wind {ws}mph {wd}{pp_s}"
+                    f"{home}: {t}°F, Wind {ws}mph {wd}{wvo_s}{dp_s}{pp_s}"
                 )
+                env_features.append({
+                    "game_id": gid, "home_team": home,
+                    "wind_vector_out": wvo,
+                    "dew_point_f": dp,
+                    "temp_f": t,
+                    "days_since_opening_day": days_since_opener,
+                    "league_rpg_rolling_7d": league_rpg_7d,
+                })
             for line in enriched_weather:
                 logger.info(f"[Weather] {line}")
 
-            # 5) Write games.csv — odds API output is the canonical shape.
-            # TODO: join `enriched_weather` into a `weather_context` column on
-            # games.csv once downstream consumers are ready to read it. For now
-            # starter info lives in `lineups_{date}.parquet` and weather is
-            # logged only — games.csv stays 1:1 with fetch_odds_api output.
+            # 5) Merge Alpha Features (env physics) into each game row so they
+            # land as columns in games.csv alongside the odds API payload.
+            env_by_gid = {e["game_id"]: e for e in env_features}
+            alpha_cols = ("wind_vector_out", "dew_point_f", "temp_f",
+                          "days_since_opening_day", "league_rpg_rolling_7d")
+            wvo_count = 0
+            for g in games:
+                env = env_by_gid.get(g.get("game_id", g.get("home_team", "")), {})
+                for col in alpha_cols:
+                    g[col] = env.get(col)
+                if g.get("wind_vector_out") is not None:
+                    wvo_count += 1
+            logger.info(
+                f"[AlphaFeatures] appended to games.csv: {alpha_cols} | "
+                f"wind_vector_out populated for {wvo_count}/{len(games)} games | "
+                f"league_rpg_rolling_7d={league_rpg_7d} | "
+                f"days_since_opening_day={days_since_opener}"
+            )
+
             write_result = json.loads(write_csv(
                 file_key="games",
                 records_json=json.dumps(games),
@@ -218,6 +277,9 @@ def run_daily_pipeline(force: bool = False) -> dict[str, str]:
                 "us_error":         odds.get("us_error"),
                 "eu_error":         odds.get("eu_error"),
                 "enriched_weather": enriched_weather,
+                "env_features":     env_features,
+                "league_rpg_rolling_7d":   league_rpg_7d,
+                "days_since_opening_day":  days_since_opener,
             }, ensure_ascii=False)
             _save("agent1", agent1_output)
             results["agent1"] = agent1_output
@@ -237,30 +299,34 @@ def run_daily_pipeline(force: bool = False) -> dict[str, str]:
     else:
         results["agent1"] = agent1_output
 
-    # ── AGENT 3: Scoring Engine ───────────────────────────────────────────────
+    # ── STEP 3: Scoring Engine (deterministic Python call) ────────────────────
     agent3_output = None if force else _load("agent3")
 
     if agent3_output is None:
-        # Step 1 is now deterministic Python (no LLM call) — no rate-limit wait needed.
-        logger.info("▶ Starting Agent 3: Scoring Engine")
+        logger.info("▶ Starting Step 3: Scoring Engine (deterministic generate_ml_scores)")
         try:
-            agent3_output = run_agent(
-                system_prompt=AGENT3.system_prompt,
-                tools=AGENT3.tools,
-                tool_executor=AGENT3.tool_executor,
-                max_tokens=8096,
-                user_message=(
-                    f"Score today's slate ({TODAY}) by calling generate_ml_scores. "
-                    "The tool runs the ML, Totals, Runline, and F5 stackers, applies the "
-                    "Three-Part Lock, computes Kelly stakes, and writes model_scores.csv. "
-                    "Emit the completion report from the returned JSON — do not re-score manually."
-                ),
-                context=f"Agent 1 (Data Ingestion) completed:\n{agent1_output}",
-                agent_name=AGENT3.name,
-            )
+            scoring_raw = generate_ml_scores(game_date=DATE_KEY)
+            try:
+                scoring_payload = json.loads(scoring_raw)
+            except (TypeError, json.JSONDecodeError):
+                scoring_payload = {"status": "ERROR", "error": "generate_ml_scores returned non-JSON"}
+
+            if scoring_payload.get("status") == "ERROR":
+                raise RuntimeError(f"generate_ml_scores failed: {scoring_payload.get('error')}")
+
+            agent3_output = scoring_raw if isinstance(scoring_raw, str) else json.dumps(scoring_payload)
             _save("agent3", agent3_output)
             results["agent3"] = agent3_output
-            logger.info(f"✅ Agent 3 complete.\n{agent3_output[:500]}")
+
+            summary = (
+                f"games_scored={scoring_payload.get('games_scored')} | "
+                f"actionable={scoring_payload.get('actionable')} "
+                f"(T1={scoring_payload.get('tier1')} / T2={scoring_payload.get('tier2')}) | "
+                f"fails: sanity={scoring_payload.get('failed_sanity')}, "
+                f"odds={scoring_payload.get('failed_odds_floor')}, "
+                f"edge={scoring_payload.get('failed_edge')}"
+            )
+            logger.info(f"✅ Step 3 complete. {summary}")
 
             # Archive today's model_scores.csv so rolling cutoff stats can
             # grow forward without re-running the sterile backtest.
@@ -268,11 +334,45 @@ def run_daily_pipeline(force: bool = False) -> dict[str, str]:
             logger.info(f"[Archive] model_scores: {archive_status}")
 
         except Exception as e:
-            logger.error(f"❌ Agent 3 error: {e}", exc_info=True)
+            logger.error(f"❌ Step 3 error: {e}", exc_info=True)
             results["agent3"] = f"ERROR: {e}"
             # Don't halt — attempt report and email with whatever was scored
     else:
         results["agent3"] = agent3_output
+
+    # ── STEP 6: Prop Scoring (Pitching K-Prop Engine) ────────────────────────
+    # Appends PROP_K rows onto model_scores.csv BEFORE the renderer + email so
+    # Step 4/5 pick them up. Runs even if Step 3 was checkpointed: props are
+    # cheap and market K-lines refresh through the morning.
+    logger.info("▶ Starting Step 6: Prop Scoring (PROP_K)")
+    try:
+        from score_props_today import score_props  # project root on sys.path
+        props_df = score_props(DATE_KEY)
+        scores_path = PIPELINE_DIR / FILES["model_scores"]
+        if not props_df.empty and scores_path.exists():
+            base_df = pd.read_csv(scores_path)
+            # Strip any previous PROP_K rows for this date (idempotent re-run).
+            if "model" in base_df.columns:
+                base_df = base_df[base_df["model"] != "PROP_K"]
+            combined = pd.concat([base_df, props_df], ignore_index=True, sort=False)
+            combined.to_csv(scores_path, index=False)
+            n_act = int(props_df["actionable"].sum())
+            logger.info(f"✅ Step 6 complete. appended {len(props_df)} PROP_K rows "
+                        f"(actionable={n_act}) → {scores_path.name}")
+            results["agent6"] = f"OK: {len(props_df)} props appended, {n_act} actionable"
+            # Invalidate agent4 checkpoint so the renderer re-runs against the
+            # updated model_scores.csv (props were appended post-Step 3).
+            try:
+                _ckpt_path("agent4").unlink(missing_ok=True)
+            except Exception:
+                pass
+        else:
+            logger.info(f"Step 6 skipped — props_df rows={len(props_df)}, "
+                        f"scores_path exists={scores_path.exists()}")
+            results["agent6"] = "SKIPPED"
+    except Exception as e:
+        logger.error(f"❌ Step 6 (Prop Scoring) error: {e}", exc_info=True)
+        results["agent6"] = f"ERROR: {e}"
 
     # ── STEP 4: Report Generation (deterministic Python renderer) ─────────────
     # Agent 4's LLM-driven HTML generation has been replaced by
@@ -356,6 +456,16 @@ def run_daily_pipeline(force: bool = False) -> dict[str, str]:
         n_tier1 = int((df_act.get("tier") == 1).sum()) if "tier" in df_act.columns else 0
         n_tier2 = int((df_act.get("tier") == 2).sum()) if "tier" in df_act.columns else 0
 
+        def _units_from_edge(edge) -> int:
+            """1-2-3 Unit scale by edge size. 3U ≥ 10%, 2U ≥ 5%, 1U ≥ 1%, else 0."""
+            if edge is None or pd.isna(edge):
+                return 0
+            e = float(edge)
+            if e >= 0.10: return 3
+            if e >= 0.05: return 2
+            if e >= 0.01: return 1
+            return 0
+
         def _fmt_pick(r) -> str:
             game  = r.get("game", "")
             model = r.get("model", "")
@@ -364,10 +474,16 @@ def run_daily_pipeline(force: bool = False) -> dict[str, str]:
             odds  = r.get("retail_american_odds", "")
             stake = r.get("dollar_stake", "")
             prob  = r.get("model_prob", None)
+            edge  = r.get("edge", None)
+            flags = r.get("signal_flags", "") or ""
+            units = _units_from_edge(edge)
             prob_s = f"{prob*100:.1f}%" if isinstance(prob, (int, float)) else ""
             odds_s = f"{int(odds):+d}" if pd.notna(odds) else ""
+            edge_s = f"{edge*100:.1f}%" if isinstance(edge, (int, float)) else ""
+            flag_s = f" [{flags}]" if flags else ""
             return (f"  • {game} — {model} {btype} {pick}  "
-                    f"| prob {prob_s} | odds {odds_s} | stake ${stake}")
+                    f"| prob {prob_s} | edge {edge_s} | odds {odds_s} "
+                    f"| {units}U (${stake}){flag_s}")
 
         lines: list[str] = [
             "=" * 60,
@@ -414,6 +530,16 @@ def run_daily_pipeline(force: bool = False) -> dict[str, str]:
             logger.warning(f"⚠ Tracker script not found: {tracker_script}")
     except Exception as e:
         logger.warning(f"⚠ Accuracy tracking failed (non-fatal): {e}")
+
+    # ── DRIFT MONITOR (Totals bias watchdog) ──────────────────────────────────
+    try:
+        sys.path.insert(0, str(_PROJECT_ROOT))
+        from drift_monitor import compute_drift
+        drift = compute_drift(window=10)
+        logger.info(f"[Drift] {drift}")
+        results["drift"] = str(drift)
+    except Exception as e:
+        logger.warning(f"⚠ Drift monitor failed (non-fatal): {e}")
 
     results["pipeline_status"] = "COMPLETE"
     logger.info("=" * 60)

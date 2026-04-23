@@ -1672,17 +1672,29 @@ def build_air_density_features(
                 eff_hum  = float(r.get("humidity", 50))
 
             rho = _compute_air_density(eff_temp, eff_hum, elev)
+
+            # Directional wind + dew point for env-aware features
+            from models.feature_engineering import compute_wind_vector_out
+            wvo = compute_wind_vector_out(
+                r.get("wind_mph"), r.get("wind_bearing"), team, roof_closed=closed
+            )
+            dp  = r.get("dew_point_f") if "dew_point_f" in wx.columns else None
+
             rows.append({
                 "home_team":       team,
                 "game_date":       r["game_date"],
                 "air_density_rho": rho,
                 "roof_closed_flag": closed,
+                "wind_vector_out":  wvo,
+                "dew_point_f":      dp,
+                "temp_f":           eff_temp if not closed else None,
             })
         frames.append(pd.DataFrame(rows))
 
     if not frames:
         return pd.DataFrame(columns=["home_team", "game_date",
-                                      "air_density_rho", "roof_closed_flag"])
+                                      "air_density_rho", "roof_closed_flag",
+                                      "wind_vector_out", "dew_point_f", "temp_f"])
     result = pd.concat(frames, ignore_index=True)
     if verbose:
         n = result["air_density_rho"].notna().sum()
@@ -2520,17 +2532,23 @@ def assemble_matrix(
             print(f"      Pitcher game-state: home={n_home}/{len(df)}, "
                   f"away={n_away}/{len(df)}")
 
-    # ── Air density + roof flag ───────────────────────────────────────────
+    # ── Air density + roof flag + wind vector + dew point ────────────────
     if air_density is not None and not air_density.empty:
         ad = air_density.copy()
         ad["game_date"] = pd.to_datetime(ad["game_date"])
-        df = df.merge(ad[["home_team", "game_date", "air_density_rho", "roof_closed_flag"]],
-                      on=["home_team", "game_date"], how="left")
+        env_cols = ["home_team", "game_date", "air_density_rho", "roof_closed_flag"]
+        for extra in ("wind_vector_out", "dew_point_f", "temp_f"):
+            if extra in ad.columns:
+                env_cols.append(extra)
+        df = df.merge(ad[env_cols], on=["home_team", "game_date"], how="left")
         if verbose:
             n_rho = df["air_density_rho"].notna().sum()
             n_roof = df["roof_closed_flag"].notna().sum()
+            extras = [c for c in ("wind_vector_out", "dew_point_f", "temp_f") if c in df.columns]
+            extras_s = " | ".join(f"{c}: {df[c].notna().sum()}" for c in extras)
             print(f"      Air density: {n_rho}/{len(df)} rows | "
-                  f"roof_flag: {n_roof}/{len(df)} rows")
+                  f"roof_flag: {n_roof}/{len(df)} rows" +
+                  (f" | {extras_s}" if extras_s else ""))
 
     # ── Bullpen top-3 quality-arm fatigue ────────────────────────────────
     if bp_top3_fatigue is not None and not bp_top3_fatigue.empty:
@@ -3254,6 +3272,34 @@ def main():
                              ump_cs_rate=ump_cs_rate,
                              lineup_handedness=lineup_handedness,
                              kprop_features=kprop_features)
+
+    # ── Environmental calendar + interactions (v2 feature set) ──────────
+    # These columns are additive: the currently-trained cat_total.pkl /
+    # lgbm_total.pkl / dc_model_run_dist.pkl use run_dist_feature_cols.json
+    # (unchanged) and never see them. They land in the feature matrix for
+    # the next training cycle, which will read run_dist_feature_cols_next.json.
+    from models.feature_engineering import (
+        compute_days_since_opening_day,
+        compute_league_rpg_rolling_7d,
+        load_league_rpg_history,
+        create_interaction_features,
+    )
+
+    matrix["days_since_opening_day"] = matrix["game_date"].apply(
+        compute_days_since_opening_day
+    )
+
+    league_hist = load_league_rpg_history()
+    unique_dates = sorted(matrix["game_date"].dropna().unique())
+    rpg_map = {
+        d: compute_league_rpg_rolling_7d(pd.Timestamp(d).date(), league_hist)
+        for d in unique_dates
+    }
+    matrix["league_rpg_rolling_7d"] = matrix["game_date"].map(rpg_map)
+
+    matrix = create_interaction_features(matrix)
+    print(f"  Env features added: days_since_opening_day, league_rpg_rolling_7d, "
+          f"aero_impact, sp_environment_vulnerability[±diff], sp_thermal_aging[±diff]")
 
     out_parquet = f"{args.out}.parquet"
     out_csv     = f"{args.out}.csv"

@@ -3,8 +3,18 @@ main.py — Daily pipeline entry point
 Run at 10 AM: python main.py
 """
 import sys
-from orchestrator.daily_pipeline import run_daily_pipeline
-from orchestrator.agent_loop import PipelineHaltError
+
+# Force UTF-8 on stdout/stderr so emoji in log lines (✅ ❌ ▶ 🎯 ⚠️) don't
+# crash the Windows cp1252 console. Must run before the logger's StreamHandler
+# is created in daily_pipeline. No-op on platforms that already default to utf-8.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
+from orchestrator.daily_pipeline import run_daily_pipeline, PipelineHaltError
 
 
 def main():

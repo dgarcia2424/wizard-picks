@@ -108,6 +108,72 @@ _ARCHIVE_DIR_PREDS = PIPELINE_DIR / "data" / "predictions"
 _ACTUALS_PARQUET   = PIPELINE_DIR / "data" / "statcast" / "actuals_2026.parquet"
 _LIVE_LOG          = PIPELINE_DIR / "live_predictions_2026.csv"
 
+# MLB Stats API → abbrev normalization. Statcast parquet sometimes uses "OAK"
+# vs the API's "ATH", so we coerce to the same convention the parquet stores.
+_MLB_API_ABBREV_FIX = {"OAK": "ATH"}
+
+
+def _fetch_mlb_actuals_for_dates(dates: list[str]) -> pd.DataFrame:
+    """Zero-lag fallback: pull final scores + linescore (for F5/NRFI) straight
+    from the MLB Stats API for any prediction dates the Statcast parquet hasn't
+    absorbed yet. Returns a DataFrame with the same columns the join reads:
+      game_date · home_abbr · away_abbr · home_score_final · away_score_final
+      · home_covers_rl · f1_nrfi · f5_home_win
+    Non-final games (in-progress / postponed) are skipped."""
+    url = "https://statsapi.mlb.com/api/v1/schedule"
+    rows: list[dict] = []
+    for d in dates:
+        try:
+            r = requests.get(url, timeout=20, params={
+                "sportId": 1, "date": d,
+                "hydrate": "team,linescore",
+            })
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:
+            logger.warning(f"[LiveLog/MLBApi] {d} fetch failed: {e}")
+            continue
+
+        for de in data.get("dates", []) or []:
+            for g in de.get("games", []) or []:
+                state = (g.get("status") or {}).get("abstractGameState", "")
+                if state != "Final":
+                    continue
+                try:
+                    home = g["teams"]["home"]
+                    away = g["teams"]["away"]
+                    h_abbr = (home.get("team") or {}).get("abbreviation")
+                    a_abbr = (away.get("team") or {}).get("abbreviation")
+                    if not (h_abbr and a_abbr):
+                        continue
+                    h_abbr = _MLB_API_ABBREV_FIX.get(h_abbr, h_abbr)
+                    a_abbr = _MLB_API_ABBREV_FIX.get(a_abbr, a_abbr)
+                    hs = home.get("score")
+                    as_ = away.get("score")
+                    if hs is None or as_ is None:
+                        continue
+                    ls = g.get("linescore") or {}
+                    innings = ls.get("innings") or []
+                    f1h = ((innings[0].get("home") or {}).get("runs") or 0) if len(innings) >= 1 else 0
+                    f1a = ((innings[0].get("away") or {}).get("runs") or 0) if len(innings) >= 1 else 0
+                    f5h = sum(((i.get("home") or {}).get("runs") or 0) for i in innings[:5]) if innings else None
+                    f5a = sum(((i.get("away") or {}).get("runs") or 0) for i in innings[:5]) if innings else None
+                    f5_home_win = (int(f5h > f5a) if f5h is not None and f5a is not None else None)
+                    rows.append({
+                        "game_date":        d,
+                        "home_abbr":        h_abbr,
+                        "away_abbr":        a_abbr,
+                        "home_score_final": hs,
+                        "away_score_final": as_,
+                        "home_covers_rl":   int((hs - as_) >= 2),
+                        "f1_nrfi":          int((f1h + f1a) == 0),
+                        "f5_home_win":      f5_home_win,
+                    })
+                except Exception as e:
+                    logger.warning(f"[LiveLog/MLBApi] parse error on {d}: {e}")
+                    continue
+    return pd.DataFrame(rows)
+
 
 def _archive_odds_snapshot(games: list, target_date: str) -> None:
     """Persist today's full odds snapshot (incl. F5/NRFI) as parquet.
@@ -189,6 +255,32 @@ def rebuild_live_predictions_log() -> str:
 
         actuals = actuals.rename(columns={"home_team": "home_abbr", "away_team": "away_abbr"})
         actuals["game_date"] = pd.to_datetime(actuals["game_date"]).dt.strftime("%Y-%m-%d")
+
+        # Zero-lag fallback: the Statcast parquet trails MLB's scoreboard by
+        # 1-2 days. For any prediction date not yet in the parquet, pull finals
+        # straight from the MLB Stats API so today's report already reflects
+        # yesterday's (and even this morning's) outcomes.
+        yesterday_key = (date.today() - timedelta(days=1)).isoformat()
+        pred_dates    = {str(d) for d in preds["game_date"].dropna().unique()}
+        # Only fill dates on or before yesterday — today's games haven't finished.
+        candidate_dates = {d for d in pred_dates if d <= yesterday_key}
+        have_dates    = set(actuals["game_date"].dropna().unique())
+        missing_dates = sorted(candidate_dates - have_dates)
+        if missing_dates:
+            api_extra = _fetch_mlb_actuals_for_dates(missing_dates)
+            if not api_extra.empty:
+                # Align columns with the parquet frame (fill missing ones as NA).
+                for c in ["home_score_final", "away_score_final",
+                          "home_covers_rl", "f1_nrfi", "f5_home_win"]:
+                    if c not in api_extra.columns:
+                        api_extra[c] = pd.NA
+                actuals = pd.concat(
+                    [actuals, api_extra], ignore_index=True, sort=False,
+                )
+                logger.info(
+                    f"[LiveLog] MLB API fallback filled {len(api_extra)} games "
+                    f"across {len(missing_dates)} date(s): {missing_dates}"
+                )
 
         merged = preds.merge(
             actuals[["game_date", "home_abbr", "away_abbr",
@@ -752,7 +844,7 @@ def fetch_weather(games_json: str) -> str:
         try:
             resp = requests.get("https://api.open-meteo.com/v1/forecast", timeout=10, params={
                 "latitude": lat, "longitude": lon,
-                "current":  "temperature_2m,wind_speed_10m,wind_direction_10m,precipitation_probability,weather_code",
+                "current":  "temperature_2m,wind_speed_10m,wind_direction_10m,precipitation_probability,weather_code,dewpoint_2m,relative_humidity_2m",
                 "temperature_unit": "fahrenheit", "wind_speed_unit": "mph", "forecast_days": 1,
             })
             resp.raise_for_status()
@@ -762,6 +854,8 @@ def fetch_weather(games_json: str) -> str:
                 "wind_speed_mph":            round(w.get("wind_speed_10m", 0)),
                 "wind_direction":            w.get("wind_direction_10m"),
                 "precipitation_probability": w.get("precipitation_probability"),
+                "dew_point_f":               w.get("dewpoint_2m"),
+                "humidity":                  w.get("relative_humidity_2m"),
             }
         except Exception as e:
             weather[game_id] = {"status": "WARNING", "error": str(e)}
@@ -1071,9 +1165,14 @@ def generate_ml_scores(game_date: str = "") -> str:
             out[key] = {c: _safe_float(r.get(c)) for c in cols}
         return out
 
-    ml_by = _keyed(ml_df, ["stacker_l2"])                             # p_home_win
+    ml_by = _keyed(ml_df, ["stacker_l2",
+                           "bullpen_xfip_diff_effective",
+                           "bullpen_thermal_penalty"])                 # p_home_win + bullpen ctx
     rd_by = _keyed(rd_df, ["p_over_final", "p_home_cover_final",
-                           "lam_home",     "lam_away",     "total_line"])
+                           "lam_home",     "lam_away",     "total_line",
+                           "home_bullpen_xfip", "away_bullpen_xfip",
+                           "bullpen_xfip_diff",
+                           "env_mult_home", "env_mult_away"])
     f5_by = _keyed(f5_df, ["stacker_l2"])                             # p_f5_home_cover
     nrfi_by = _keyed(nrfi_df, ["p_stk_nrfi"])                          # p_no_run_first_inning
 
@@ -1109,9 +1208,17 @@ def generate_ml_scores(game_date: str = "") -> str:
                                     _safe_float(g.get(imp_col)),
                                     _safe_float(g.get(odds_col)),
                                     sanity_margin=0.10)
+                # Signal attribution — bullpen bridge fires when post-thermal
+                # |eff diff| > 0.45. Flag rides with the ledger for ROI filtering.
+                eff_diff = ml_row.get("bullpen_xfip_diff_effective")
+                bp_flag = ("BULLPEN_ML_ADJ"
+                           if eff_diff is not None and abs(float(eff_diff)) > 0.45
+                           else "")
                 picks.append({"date": target, "game": game_label,
                               "model": "ML", "bet_type": "Moneyline",
-                              "pick_direction": side, **ev})
+                              "pick_direction": side,
+                              "signal_flags": bp_flag,
+                              **ev})
 
         # ─── MODEL 2: Totals (Over / Under) ─────────────────────────────────
         rd_row = rd_by.get(key)
@@ -1128,10 +1235,23 @@ def generate_ml_scores(game_date: str = "") -> str:
                                     _safe_float(g.get(imp_col)),
                                     _safe_float(g.get(odds_col)),
                                     sanity_margin=0.08)
+                emh = rd_row.get("env_mult_home") or 1.0
+                ema = rd_row.get("env_mult_away") or 1.0
+                wx_flag = ("WEATHER_TOTALS_ADJ"
+                           if (float(emh) > 1.0 or float(ema) > 1.0) else "")
                 picks.append({"date": target, "game": game_label,
                               "model": "Totals",
                               "bet_type": f"Total {_safe_float(g.get('retail_total_line')) or rd_row.get('total_line')}",
-                              "pick_direction": side, **ev})
+                              "pick_direction": side,
+                              "home_bullpen_xfip": rd_row.get("home_bullpen_xfip"),
+                              "away_bullpen_xfip": rd_row.get("away_bullpen_xfip"),
+                              "bullpen_xfip_diff": rd_row.get("bullpen_xfip_diff"),
+                              "signal_flags": wx_flag,
+                              "projected_total_adj": (
+                                  (rd_row.get("lam_home") or 0.0) +
+                                  (rd_row.get("lam_away") or 0.0)
+                              ),
+                              **ev})
 
         # ─── MODEL 3: Runline (−1.5 / +1.5) ─────────────────────────────────
         # Retail odds come from Agent 1's dual-region fetch (DK/FD/BetMGM best price,
@@ -1233,7 +1353,9 @@ def generate_ml_scores(game_date: str = "") -> str:
                    "model_prob", "P_true", "Retail_Implied_Prob", "edge",
                    "retail_american_odds",
                    "sanity_check_pass", "odds_floor_pass",
-                   "tier", "dollar_stake", "actionable"]
+                   "tier", "dollar_stake", "actionable",
+                   "home_bullpen_xfip", "away_bullpen_xfip", "bullpen_xfip_diff",
+                   "signal_flags", "projected_total_adj"]
     out_df = pd.DataFrame(picks, columns=output_cols) if picks else pd.DataFrame(columns=output_cols)
     out_path = FILES["model_scores"]
     out_df.to_csv(out_path, index=False)
@@ -1372,6 +1494,7 @@ LEDGER_COLUMNS = [
     "model", "bet_type", "pick_direction",
     "model_prob", "P_true", "Retail_Implied_Prob", "edge",
     "retail_american_odds", "tier", "dollar_stake",
+    "signal_flags",
     "result", "profit_loss", "graded_at",
 ]
 
@@ -1437,6 +1560,7 @@ def _append_to_ledger(target_date: str, games_df: pd.DataFrame, actionable: list
             "retail_american_odds": p["retail_american_odds"],
             "tier":                 p["tier"],
             "dollar_stake":         p["dollar_stake"],
+            "signal_flags":         p.get("signal_flags", "") or "",
             "result":               "",
             "profit_loss":          "",
             "graded_at":            "",

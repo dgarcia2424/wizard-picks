@@ -8,8 +8,7 @@ Reads model_scores.csv and writes model_report.html with the new structure:
   B. Actionable Bets — grouped Tier 1 / Tier 2 across ALL markets
   C. Alpha Markets — ML + Totals calibration showcase (Game | Pick |
                      Model Prob | Pinnacle Prob | Retail Edge)
-  D. Result Entry placeholder (hydrated client-side from /pending_bets)
-  E. Full picks table (collapsed by default)
+  D. Full picks table (collapsed by default)
 
 No Votes / component columns. No MFull/MF5i/etc. legacy fields anywhere.
 
@@ -224,19 +223,6 @@ def _generate_cards_html(df: pd.DataFrame) -> str:
         else:
             tier_cls, tier_lbl = "bet-card", ""
 
-        payload = {
-            "date":                 r["date"],
-            "game":                 r["game"],
-            "model":                r["model"],
-            "bet_type":             r["bet_type"],
-            "pick_direction":       r["pick_direction"],
-            "model_prob":           None if pd.isna(r["model_prob"]) else float(r["model_prob"]),
-            "market_line":          r["bet_type"],
-            "retail_american_odds": None if pd.isna(r["retail_american_odds"]) else int(r["retail_american_odds"]),
-            "stake":                None if pd.isna(r["dollar_stake"]) else int(r["dollar_stake"]),
-        }
-        payload_json = _html.escape(json.dumps(payload), quote=True)
-
         cards.append(
             f"<article class='{tier_cls}'>"
               "<header class='bc-head'>"
@@ -269,9 +255,6 @@ def _generate_cards_html(df: pd.DataFrame) -> str:
                 "<div class='bc-stat'>"
                   "<span class='bc-l'>Stake</span>"
                   f"<span class='bc-v stake'>{_fmt_stake(r['dollar_stake'])}</span>"
-                "</div>"
-                "<div class='bc-stat bc-action'>"
-                  f"<button class='btn-log' data-pick='{payload_json}'>Log Bet</button>"
                 "</div>"
               "</div>"
             "</article>"
@@ -716,21 +699,9 @@ def render_actionable(df: pd.DataFrame) -> str:
 
     def _rows(sub: pd.DataFrame) -> str:
         if len(sub) == 0:
-            return "<tr><td colspan='9' class='muted'>None</td></tr>"
+            return "<tr><td colspan='8' class='muted'>None</td></tr>"
         parts = []
         for _, r in sub.iterrows():
-            payload = {
-                "date":            r["date"],
-                "game":            r["game"],
-                "model":           r["model"],
-                "bet_type":        r["bet_type"],
-                "pick_direction":  r["pick_direction"],
-                "model_prob":      None if pd.isna(r["model_prob"]) else float(r["model_prob"]),
-                "market_line":     r["bet_type"],
-                "retail_american_odds": None if pd.isna(r["retail_american_odds"]) else int(r["retail_american_odds"]),
-                "stake":           None if pd.isna(r["dollar_stake"]) else int(r["dollar_stake"]),
-            }
-            payload_json = _html.escape(json.dumps(payload), quote=True)
             parts.append(
                 f"<tr class='act-row'>"
                 f"<td>{_html.escape(str(r['game']))}</td>"
@@ -741,7 +712,6 @@ def render_actionable(df: pd.DataFrame) -> str:
                 f"<td class='num {_edge_class(r['edge'])}'><b>{_fmt_edge(r['edge'])}</b></td>"
                 f"<td class='num'>{_fmt_odds(r['retail_american_odds'])}</td>"
                 f"<td class='num stake'>{_fmt_stake(r['dollar_stake'])}</td>"
-                f"<td><button class='btn-log' data-pick='{payload_json}'>Log Bet</button></td>"
                 f"</tr>"
             )
         return "".join(parts)
@@ -752,7 +722,7 @@ def render_actionable(df: pd.DataFrame) -> str:
     hdr = ("<thead><tr>"
            "<th>Game</th><th>Market</th><th>Pick</th>"
            "<th>Model Prob</th><th>Pinnacle Prob</th><th>Edge</th>"
-           "<th>Retail Odds</th><th>Stake</th><th></th>"
+           "<th>Retail Odds</th><th>Stake</th>"
            "</tr></thead>")
 
     return (
@@ -981,10 +951,6 @@ header .sub{color:#ffffff;font-size:13px}
            font-weight:700;color:#fff;letter-spacing:.03em}
 .tier-hdr{display:flex;align-items:center;gap:8px}
 .tier-1{color:#f97316}.tier-2{color:#60a5fa}
-.btn-log{background:#2563eb;color:#fff;border:0;padding:6px 12px;border-radius:6px;
-         font-size:12px;cursor:pointer;font-weight:600}
-.btn-log:hover{background:#1d4ed8}
-.btn-log:disabled{background:#374151;cursor:not-allowed}
 .stats-bar{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
            gap:10px;margin-bottom:18px}
 .stat{background:#1a1d24;border:1px solid #262a33;border-radius:10px;padding:12px}
@@ -1027,11 +993,8 @@ details summary::-webkit-details-marker{display:none}
 .bc-v{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;color:#e4e7eb}
 .bc-v.subtle{color:#ffffff;font-weight:500}
 .bc-v.stake{color:#4ade80}
-.bc-action{grid-column:1 / -1;margin-top:4px}
-.bc-action .btn-log{width:100%}
 @media (max-width:480px){
   .bc-grid{grid-template-columns:repeat(2,1fr)}
-  .bc-action{grid-column:1 / -1}
 }
 """
 
@@ -1057,53 +1020,7 @@ async function loadStats(){
   }
 }
 
-// --- Log Bet ---------------------------------------------------------------
-document.addEventListener('click', async (e)=>{
-  const btn = e.target.closest('.btn-log');
-  if(!btn) return;
-  const data = JSON.parse(btn.dataset.pick);
-  const stake = prompt('Stake ($):', data.stake ?? 50);
-  if(stake===null) return;
-  try{
-    const res = await fetch(TRACKER + '/log_bet', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({...data, stake: parseFloat(stake)})
-    });
-    if(!res.ok) throw new Error(await res.text());
-    btn.textContent='✓ Logged'; btn.disabled=true;
-    loadStats();
-  }catch(err){ alert('Log failed: '+err.message); }
-});
-
-// --- Pending bets / result entry -------------------------------------------
-async function loadPending(){
-  try{
-    const r = await fetch(TRACKER + '/pending_bets', {cache:'no-store'});
-    if(!r.ok) return;
-    const bets = await r.json();
-    const box = document.getElementById('pending');
-    if(!bets.length){ box.innerHTML = "<p class='muted'>No pending bets.</p>"; return; }
-    box.innerHTML = bets.map(b =>
-      `<div class='stat' style='display:flex;justify-content:space-between;align-items:center'>`+
-      `<div><b>${b.game}</b> — ${b.bet_type} (${b.model})</div>`+
-      `<div>`+
-      `<button class='btn-log' data-id='${b.id}' data-r='WIN'>WIN</button> `+
-      `<button class='btn-log' data-id='${b.id}' data-r='LOSS' style='background:#b91c1c'>LOSS</button> `+
-      `<button class='btn-log' data-id='${b.id}' data-r='PUSH' style='background:#ffffff'>PUSH</button>`+
-      `</div></div>`
-    ).join('');
-    box.querySelectorAll('button').forEach(btn=>{
-      btn.addEventListener('click', async ()=>{
-        await fetch(TRACKER+'/log_result', {method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({id: btn.dataset.id, result: btn.dataset.r})});
-        loadPending(); loadStats();
-      });
-    });
-  }catch(e){}
-}
-loadStats(); loadPending();
+loadStats();
 """
 
 
@@ -1136,10 +1053,6 @@ def render(df: pd.DataFrame) -> str:
         + accuracy_html
         + cutoff_html
         + render_alpha(df)
-        # Pending Results moved to the bottom; Actionable Bets card grid and
-        # Full Picks Table removed per user request.
-        + "<section class='card'><h2>📝 Pending Results</h2>"
-          "<div id='pending'><p class='muted'>Loading…</p></div></section>"
     )
 
     js = JS_TEMPLATE.replace("__PORT__", str(TRACKER_PORT))
