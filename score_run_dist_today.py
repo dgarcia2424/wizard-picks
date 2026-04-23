@@ -78,6 +78,69 @@ ACTUALS_2026         = DATA_DIR   / "actuals_2026.parquet"
 
 
 # ---------------------------------------------------------------------------
+# DYNAMIC BIAS THERMOSTAT (self-healing)
+# ---------------------------------------------------------------------------
+# Replaces the static -0.66 constant with a rolling residual tracker:
+#   residual = projected_total_adj - actual_total   (positive → over-projecting)
+#   adjustment = -mean(residual) * DAMPING
+# Global mean blended 70/30 with a park-specific mean when park_id has >10
+# games in the log. Falls back to -0.66 if fewer than 20 rows exist.
+# Source log is maintained by update_actuals.py → data/logs/model_residuals.csv.
+GLOBAL_BIAS_FALLBACK   = -0.66
+BIAS_DAMPING           = 0.8        # 0.8 = damp 20% of observed residual
+BIAS_WINDOW_DAYS       = 14
+BIAS_MAX_ROWS          = 100
+BIAS_MIN_ROWS          = 20
+BIAS_PARK_MIN_ROWS     = 10
+BIAS_PARK_BLEND_WEIGHT = 0.30       # park specificity weight (global = 0.70)
+_RESIDUAL_LOG          = Path("data") / "logs" / "model_residuals.csv"
+
+
+def get_dynamic_bias(home_park_id: str | None = None) -> tuple[float, int, dict]:
+    """Return (offset_runs, n_games_used, meta).
+
+    offset_runs is a signed value to ADD to projected totals — negative means
+    the model is over-projecting and needs to be cooled.
+    """
+    meta: dict = {"source": "fallback", "park_blend": False, "global_residual": None,
+                  "park_residual": None, "damping": BIAS_DAMPING}
+    if not _RESIDUAL_LOG.exists():
+        return GLOBAL_BIAS_FALLBACK, 0, meta
+
+    df = pd.read_csv(_RESIDUAL_LOG)
+    if df.empty or "residual" not in df.columns:
+        return GLOBAL_BIAS_FALLBACK, 0, meta
+
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df = df.dropna(subset=["date", "residual"])
+    # Prefer last BIAS_WINDOW_DAYS, but cap at BIAS_MAX_ROWS most-recent rows.
+    cutoff = df["date"].max() - pd.Timedelta(days=BIAS_WINDOW_DAYS)
+    recent = df[df["date"] >= cutoff].sort_values("date")
+    if len(recent) > BIAS_MAX_ROWS:
+        recent = recent.tail(BIAS_MAX_ROWS)
+    if len(recent) < BIAS_MIN_ROWS:
+        return GLOBAL_BIAS_FALLBACK, len(recent), meta
+
+    global_residual = float(recent["residual"].mean())
+    meta["source"] = "dynamic"
+    meta["global_residual"] = global_residual
+
+    if home_park_id:
+        park_rows = recent[recent["home_park_id"] == home_park_id]
+        if len(park_rows) >= BIAS_PARK_MIN_ROWS:
+            park_residual = float(park_rows["residual"].mean())
+            blended = (1.0 - BIAS_PARK_BLEND_WEIGHT) * global_residual \
+                      + BIAS_PARK_BLEND_WEIGHT * park_residual
+            meta["park_blend"]    = True
+            meta["park_residual"] = park_residual
+            meta["park_n"]        = int(len(park_rows))
+            offset = -blended * BIAS_DAMPING
+            return offset, len(recent), meta
+
+    offset = -global_residual * BIAS_DAMPING
+    return offset, len(recent), meta
+
+# ---------------------------------------------------------------------------
 # MODEL LOADING
 # ---------------------------------------------------------------------------
 def load_models():
@@ -148,6 +211,9 @@ def _resolve_total_line_for_game(game_pk, date_str: str, fm: pd.DataFrame) -> fl
 def predict_games(date_str: str) -> pd.DataFrame:
     print("Loading models …")
     feat_cols, dc, m_home, m_away, st_tot, st_rl = load_models()
+
+    # Per-game dynamic-bias audit log (populated inside the game loop).
+    _bias_applied_log: list[tuple] = []
 
     print(f"Loading feature matrix from {FEAT_MATRIX} …")
     fm = pd.read_parquet(FEAT_MATRIX)
@@ -237,6 +303,16 @@ def predict_games(date_str: str) -> pd.DataFrame:
         lam_h  = lam_h_raw
         lam_a  = lam_a_raw
 
+        # ── Dynamic Bias Thermostat ─────────────────────────────────────
+        # Park-aware self-healing offset from the residual log. Split evenly
+        # across home/away lambdas; flows through XGB p_over / p_cover and
+        # stacker aux consistently. Floor at 0.1 to stay in trained domain.
+        bias_offset, _bias_n, _bias_meta = get_dynamic_bias(home)
+        _half_bias = bias_offset / 2.0
+        lam_h = float(np.clip(lam_h + _half_bias, 0.1, 15.0))
+        lam_a = float(np.clip(lam_a + _half_bias, 0.1, 15.0))
+        _bias_applied_log.append((home, bias_offset, _bias_n, _bias_meta))
+
         # ── Vegas total line ────────────────────────────────────────────
         total_line = _resolve_total_line_for_game(gk, date_str, fm)
 
@@ -292,6 +368,22 @@ def predict_games(date_str: str) -> pd.DataFrame:
         })
 
     df = pd.DataFrame(rows)
+
+    # ── Dynamic Bias audit line ──────────────────────────────────────────
+    # One line summarises the thermostat state for today's slate. If any
+    # park-blended offsets fired, list them explicitly.
+    if _bias_applied_log:
+        offsets = [b[1] for b in _bias_applied_log]
+        n_games = _bias_applied_log[0][2]
+        mean_off = float(np.mean(offsets))
+        src = _bias_applied_log[0][3].get("source", "fallback")
+        print(f"[Thermostat] Dynamic Bias Applied: mean={mean_off:+.3f} r "
+              f"(source={src} | n={n_games} | damping={BIAS_DAMPING})")
+        park_blends = [(h, o, m.get("park_residual"), m.get("park_n"))
+                       for (h, o, _, m) in _bias_applied_log if m.get("park_blend")]
+        for h, o, pr, pn in park_blends:
+            print(f"   [park-blend] {h}: offset={o:+.3f}r "
+                  f"(park_residual={pr:+.2f}, n_park={pn})")
 
     # Signal attribution — flag games where the Late-Inning Environmental
     # Multiplier fired on either side. Consumed by the ledger for ROI-by-signal.

@@ -446,6 +446,11 @@ def score_props(date_str: str) -> pd.DataFrame:
                 "prob_mc":       round(prob_sim,    4),   # same as model_prob
                 "pitch_limit":   int(pitch_limit),
                 "failure_rate":  round(failure_rate, 4),
+                # Edge per unit of structural fragility. Floor failure_rate at 1%
+                # to avoid div-by-zero when MC never exits early.
+                "edge_to_failure_ratio": round(
+                    (prob_edge / max(failure_rate, 0.01)), 4
+                ) if prob_edge is not None else None,
             })
 
     df = pd.DataFrame(rows)
