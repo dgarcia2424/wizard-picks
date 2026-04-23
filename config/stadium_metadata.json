@@ -1,0 +1,48 @@
+{
+  "_meta": {
+    "description": "Per-park physical metadata used by Wizard v3.1 batting-prop features.",
+    "fields": {
+      "park_id": "Pipeline team abbreviation (home team).",
+      "park_name": "Stadium common name.",
+      "cf_azimuth_deg": "Bearing from home plate toward the center-field point, degrees clockwise from true north. Source: publicly documented stadium orientations; values are nominal (±2°).",
+      "altitude_ft": "Field-level elevation above sea level, feet.",
+      "roof": "open | retractable | fixed",
+      "notes": "Optional free-text."
+    },
+    "version": "1.0",
+    "created": "2026-04-23"
+  },
+  "parks": {
+    "ARI": {"park_name": "Chase Field",                "cf_azimuth_deg":  24, "altitude_ft": 1082, "roof": "retractable", "notes": "CF NNE"},
+    "ATL": {"park_name": "Truist Park",                "cf_azimuth_deg":  62, "altitude_ft":  980, "roof": "open",        "notes": "CF ENE"},
+    "BAL": {"park_name": "Camden Yards",               "cf_azimuth_deg":  30, "altitude_ft":   36, "roof": "open",        "notes": ""},
+    "BOS": {"park_name": "Fenway Park",                "cf_azimuth_deg":  45, "altitude_ft":   20, "roof": "open",        "notes": "CF NE (classic)"},
+    "CHC": {"park_name": "Wrigley Field",              "cf_azimuth_deg": 355, "altitude_ft":  594, "roof": "open",        "is_dome": false, "notes": "CF nearly due N; wind off Lake Michigan dominates"},
+    "CHW": {"park_name": "Rate Field",                 "cf_azimuth_deg":  40, "altitude_ft":  595, "roof": "open",        "notes": ""},
+    "CIN": {"park_name": "Great American Ball Park",   "cf_azimuth_deg":  24, "altitude_ft":  490, "roof": "open",        "notes": ""},
+    "CLE": {"park_name": "Progressive Field",          "cf_azimuth_deg":   0, "altitude_ft":  660, "roof": "open",        "notes": "CF due N"},
+    "COL": {"park_name": "Coors Field",                "cf_azimuth_deg":   0, "altitude_ft": 5200, "roof": "open",        "notes": "Altitude driver"},
+    "DET": {"park_name": "Comerica Park",              "cf_azimuth_deg":  31, "altitude_ft":  585, "roof": "open",        "notes": ""},
+    "HOU": {"park_name": "Daikin Park",                "cf_azimuth_deg": 345, "altitude_ft":   22, "roof": "retractable", "notes": "CF NNW"},
+    "KC":  {"park_name": "Kauffman Stadium",           "cf_azimuth_deg":  45, "altitude_ft":  886, "roof": "open",        "notes": ""},
+    "LAA": {"park_name": "Angel Stadium",              "cf_azimuth_deg":  45, "altitude_ft":  160, "roof": "open",        "notes": ""},
+    "LAD": {"park_name": "Dodger Stadium",             "cf_azimuth_deg":   0, "altitude_ft":  512, "roof": "open",        "notes": "CF due N"},
+    "MIA": {"park_name": "loanDepot park",             "cf_azimuth_deg":  40, "altitude_ft":   10, "roof": "retractable", "notes": ""},
+    "MIL": {"park_name": "American Family Field",      "cf_azimuth_deg":  52, "altitude_ft":  635, "roof": "retractable", "notes": ""},
+    "MIN": {"park_name": "Target Field",               "cf_azimuth_deg":  90, "altitude_ft":  815, "roof": "open",        "notes": "CF due E (unusual)"},
+    "NYM": {"park_name": "Citi Field",                 "cf_azimuth_deg":  24, "altitude_ft":   37, "roof": "open",        "notes": ""},
+    "NYY": {"park_name": "Yankee Stadium",             "cf_azimuth_deg":  75, "altitude_ft":   55, "roof": "open",        "notes": "CF ENE"},
+    "OAK": {"park_name": "Oakland Coliseum",           "cf_azimuth_deg":  60, "altitude_ft":   50, "roof": "open",        "notes": "Legacy venue; verify if relocated"},
+    "ATH": {"park_name": "Sutter Health Park",         "cf_azimuth_deg":  45, "altitude_ft":   30, "roof": "open",        "is_dome": false, "notes": "Athletics temporary home (Sacramento)"},
+    "PHI": {"park_name": "Citizens Bank Park",         "cf_azimuth_deg":  15, "altitude_ft":   20, "roof": "open",        "notes": ""},
+    "PIT": {"park_name": "PNC Park",                   "cf_azimuth_deg": 118, "altitude_ft":  730, "roof": "open",        "notes": "CF ESE — atypical"},
+    "SD":  {"park_name": "Petco Park",                 "cf_azimuth_deg":   0, "altitude_ft":   13, "roof": "open",        "notes": "Marine layer"},
+    "SF":  {"park_name": "Oracle Park",                "cf_azimuth_deg":  90, "altitude_ft":    0, "roof": "open",        "notes": "CF due E into bay"},
+    "SEA": {"park_name": "T-Mobile Park",              "cf_azimuth_deg":  45, "altitude_ft":   15, "roof": "retractable", "notes": ""},
+    "STL": {"park_name": "Busch Stadium",              "cf_azimuth_deg":  45, "altitude_ft":  465, "roof": "open",        "notes": ""},
+    "TB":  {"park_name": "Tropicana Field",            "cf_azimuth_deg":  45, "altitude_ft":   45, "roof": "fixed",       "is_dome": true,  "notes": "Dome — wind vector inert; verify 2026 venue after roof damage"},
+    "TEX": {"park_name": "Globe Life Field",           "cf_azimuth_deg":  15, "altitude_ft":  551, "roof": "retractable", "notes": "+5.55r outlier — Heating park"},
+    "TOR": {"park_name": "Rogers Centre",              "cf_azimuth_deg":   0, "altitude_ft":  300, "roof": "retractable", "notes": "CF due N"},
+    "WSH": {"park_name": "Nationals Park",             "cf_azimuth_deg":  30, "altitude_ft":   12, "roof": "open",        "notes": ""}
+  }
+}

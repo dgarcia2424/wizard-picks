@@ -197,7 +197,7 @@ def run_all() -> None:
         run_step("prizepicks_pull.py", "prizepicks")
 
         # ── Step 6: Generate today's card ─────────────────────────────────
-        rc, _ = run_step("run_today.py --csv --email", "picks")
+        rc, _ = run_step("wizard_agents/main.py", "picks")
         if rc != 0:
             log.warning("run_today.py exited non-zero — check model_scores.csv for errors.")
 
@@ -277,10 +277,10 @@ def run_refresh(label: str, send_email: bool = False) -> None:
         run_step("prizepicks_pull.py", "prizepicks")
 
         # ── Step 9: Generate card ─────────────────────────────────────────────
-        card_cmd = "run_today.py --csv --email" if send_email else "run_today.py --csv"
+        card_cmd = "wizard_agents/main.py" if send_email else "run_today.py --csv"
         rc, _ = run_step(card_cmd, "picks")
         if rc != 0:
-            log.warning("run_today.py exited non-zero — check model_scores.csv for errors.")
+            log.warning("picks step exited non-zero — check model_scores.csv for errors.")
 
         # ── Step 10: Upload to Supabase ───────────────────────────────────────
         run_step("supabase_upload.py", "upload")

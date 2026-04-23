@@ -93,7 +93,20 @@ BIAS_MAX_ROWS          = 100
 BIAS_MIN_ROWS          = 20
 BIAS_PARK_MIN_ROWS     = 5          # park activates at n>=5 (was 10)
 BIAS_PARK_BLEND_WEIGHT = 0.50       # 50/50 blend (was 70/30)
+MAX_BIAS_ADJUSTMENT    = 1.5        # Circuit breaker: cap |offset| in runs.
+                                    # Prevents extreme park outliers (e.g. TEX
+                                    # +5.55r → uncapped -4.44r) from driving
+                                    # unphysical projections.
 _RESIDUAL_LOG          = Path("data") / "logs" / "model_residuals.csv"
+
+
+def _clamp_offset(offset: float, meta: dict) -> float:
+    """Apply MAX_BIAS_ADJUSTMENT circuit breaker and record raw vs clamped."""
+    clamped = max(-MAX_BIAS_ADJUSTMENT, min(MAX_BIAS_ADJUSTMENT, offset))
+    if clamped != offset:
+        meta["offset_raw"] = offset
+        meta["clamped"]    = True
+    return clamped
 
 
 def get_dynamic_bias(home_park_id: str | None = None) -> tuple[float, int, dict]:
@@ -113,11 +126,14 @@ def get_dynamic_bias(home_park_id: str | None = None) -> tuple[float, int, dict]
 
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df = df.dropna(subset=["date", "residual"])
-    # Prefer last BIAS_WINDOW_DAYS, but cap at BIAS_MAX_ROWS most-recent rows.
+    # 14-day window first. Park stats are derived from the FULL windowed set
+    # (no row cap), so that parks whose last home game falls outside the
+    # BIAS_MAX_ROWS tail aren't silently evicted. The row cap is applied only
+    # to the GLOBAL estimator, where it controls variance of the league-wide
+    # residual mean.
     cutoff = df["date"].max() - pd.Timedelta(days=BIAS_WINDOW_DAYS)
-    recent = df[df["date"] >= cutoff].sort_values("date")
-    if len(recent) > BIAS_MAX_ROWS:
-        recent = recent.tail(BIAS_MAX_ROWS)
+    window = df[df["date"] >= cutoff].sort_values("date")
+    recent = window.tail(BIAS_MAX_ROWS) if len(window) > BIAS_MAX_ROWS else window
     if len(recent) < BIAS_MIN_ROWS:
         return GLOBAL_BIAS_FALLBACK, len(recent), meta
 
@@ -126,7 +142,7 @@ def get_dynamic_bias(home_park_id: str | None = None) -> tuple[float, int, dict]
     meta["global_residual"] = global_residual
 
     if home_park_id:
-        park_rows = recent[recent["home_park_id"] == home_park_id]
+        park_rows = window[window["home_park_id"] == home_park_id]
         if len(park_rows) >= BIAS_PARK_MIN_ROWS:
             park_residual = float(park_rows["residual"].mean())
             meta["park_residual"] = park_residual
@@ -139,17 +155,17 @@ def get_dynamic_bias(home_park_id: str | None = None) -> tuple[float, int, dict]
             # masked by global heating.
             if global_residual < 0 and park_residual > 0:
                 meta["park_blend"] = "safety_valve"
-                offset = -park_residual * BIAS_DAMPING
+                offset = _clamp_offset(-park_residual * BIAS_DAMPING, meta)
                 return offset, len(recent), meta
 
             # Standard 50/50 blend
             blended = (1.0 - BIAS_PARK_BLEND_WEIGHT) * global_residual \
                       + BIAS_PARK_BLEND_WEIGHT * park_residual
             meta["park_blend"] = "blend"
-            offset = -blended * BIAS_DAMPING
+            offset = _clamp_offset(-blended * BIAS_DAMPING, meta)
             return offset, len(recent), meta
 
-    offset = -global_residual * BIAS_DAMPING
+    offset = _clamp_offset(-global_residual * BIAS_DAMPING, meta)
     meta["park_blend"] = "global"
     return offset, len(recent), meta
 
