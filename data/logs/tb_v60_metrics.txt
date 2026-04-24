@@ -1,0 +1,38 @@
+TB Stacker v6.0 metrics
+Fine-tuned from v3.7: False
+AUC target (0.540): [TARGET MET]
+
+rows_train: 309652
+rows_valid: 2252
+auc: 0.57538
+logloss: 0.62131
+brier: 0.21518
+best_iter: 94
+base_rate_valid: 0.3224
+
+Feature importance (gain):
+              feature       gain  rank
+        batting_order 724.341553     1
+     exp_pa_heuristic 329.038116     2
+              stand_R 188.267380     3
+             wind_mph 162.769348     4
+          bias_offset 138.206879     5
+  projected_total_adj 133.300690     6
+  swing_length_pctile 110.146194     7
+               temp_f  96.010811     8
+     bat_speed_pctile  51.845337     9
+         wind_bearing  50.955708    10
+                 woba  45.612286    11
+              stand_S  36.613186    12
+                  slg  35.494305    13
+              est_slg  32.601662    14
+      air_density_rho  31.865959    15
+              stand_L  31.841728    16
+     lineup_fragility  31.412285    17
+             est_woba  31.400160    18
+  velocity_decay_risk  30.318113    19
+                   ba  28.847239    20
+               est_ba  26.283184    21
+pull_side_wind_vector  25.737732    22
+       opp_sp_ff_velo  19.278990    23
+    platoon_same_hand   9.877249    24

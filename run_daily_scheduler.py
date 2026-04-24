@@ -211,9 +211,18 @@ def run_all() -> None:
         # (b) Rebuild F5 SP labels from fresh Statcast (nightly retrain)
         run_step("build_f5_sp_labels.py", "f5_labels")
         # (b) Retrain script classifiers on updated labels
+        run_step("train_script_a.py",  "train_a")
         run_step("train_script_a2.py", "train_a2")
         run_step("train_script_b.py",  "train_b")
         run_step("train_script_c.py",  "train_c")
+        # (b2) Retrain K-Over, F5, NRFI, ML, run-dist, TB v6.0, RL v1
+        run_step("train_k_over_v1.py",              "train_k_over")
+        run_step("train_f5_model.py --with-2026",   "train_f5")
+        run_step("train_nrfi_model.py --with-2026", "train_nrfi")
+        run_step("train_ml_model.py --with-2026",   "train_ml")
+        run_step("train_run_dist_model.py --with-2026", "train_run_dist")
+        run_step("retrain_tb_v60.py",               "train_tb60")
+        run_step("train_rl_v1.py",                  "train_rl_v1")
         # (c) Build correlation matrix (fast, empirical r-values)
         run_step("correlation_matrix.py --build", "corr_matrix")
         # (d) Rebuild 2026 bullpen burn windows from fresh statcast
@@ -240,6 +249,7 @@ def run_all() -> None:
         # ── Step 8d: Rolling trackers ──────────────────────────────────────
         run_step("blend_tracker.py --update", "blend_tracker")
         run_step("optimize_locks.py --phase 2 --save", "lock_optimizer")
+        run_step("optimize_signal_bands.py", "signal_bands")
         run_step("clv_tracker.py --update", "clv_tracker")
 
         # ── Step 9: Pipeline health snapshot ──────────────────────────────

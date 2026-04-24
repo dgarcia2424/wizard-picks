@@ -49,6 +49,13 @@ PRICE_GUARD_ODDS     = -250  # reject over_odds worse than this (e.g. -260, -300
 DEFAULT_PITCH_LIMIT  = 92    # fallback when no per-start history exists
 EARLY_EXIT_BATTER_THRESHOLD = 18  # < 5 IP proxy (≈18 BF including baserunners)
 
+# ── v10.0 Market-Steam Bias ───────────────────────────────────────────────────
+# When PrizePicks proxy line exceeds retail consensus by >0.5 K, sharp money
+# has moved the retail line DOWN (books limiting over exposure). This is an
+# informed signal that the OVER is live — apply a modest absolute boost.
+STEAM_BIAS_DELTA_K_THRESHOLD = 0.5   # market_delta_k > this triggers boost
+STEAM_BIAS_BOOST             = 0.02  # absolute P(K over) boost
+
 # ── Monte Carlo simulator constants ──────────────────────────────────────────
 N_TRIALS            = 5_000
 MAX_PITCHES         = 95
@@ -287,6 +294,39 @@ def get_pitch_limit(pitcher_key: str, limit_map: dict[str, int]) -> int:
     return int(v) if v is not None and v > 0 else DEFAULT_PITCH_LIMIT
 
 
+def _load_steam_signals(date_str: str) -> dict[str, dict]:
+    """
+    Load prop market steam signals from fetch_prop_market_signals.py output.
+    Returns {pitcher_key: {market_delta_k, steam_flag, juice_lean, ...}}.
+    """
+    tag  = date_str.replace("-", "_")
+    path = _SC / f"prop_market_signals_{tag}.parquet"
+    if not path.exists():
+        path_csv = _SC / f"prop_market_signals_{tag}.csv"
+        if path_csv.exists():
+            df = pd.read_csv(path_csv)
+        else:
+            return {}
+    else:
+        df = pd.read_parquet(path)
+
+    if df.empty or "pitcher_name" not in df.columns:
+        return {}
+
+    out: dict[str, dict] = {}
+    for _, r in df.iterrows():
+        key = _strip_accents(str(r["pitcher_name"]))
+        out[key] = {
+            "market_delta_k":       float(r.get("market_delta_k", 0.0) or 0.0),
+            "steam_flag":           int(r.get("steam_flag", 0) or 0),
+            "juice_lean":           float(r.get("juice_lean", 0.0) or 0.0),
+            "retail_consensus_line": r.get("retail_consensus_line"),
+            "prizepicks_proxy_line": r.get("prizepicks_proxy_line"),
+            "sharp_book":            r.get("sharp_book"),
+        }
+    return out
+
+
 def _load_k_lines(date_str: str) -> pd.DataFrame:
     """Median line + best over_odds per pitcher across books."""
     path = _SC / f"k_props_{date_str}.parquet"
@@ -347,8 +387,10 @@ def score_props(date_str: str) -> pd.DataFrame:
     sp_rates    = _load_pitcher_rates()
     team_rates  = _load_team_lineup_rates()
     pitch_lims  = _load_pitch_limits()
+    steam_map   = _load_steam_signals(date_str)   # v10.0 Market-Steam
     rng         = np.random.default_rng(seed=20260423)
     n_price_excluded = 0
+    n_steam_bias     = 0
 
     if lineups.empty or k_lines.empty:
         print(f"[PropScorer] lineups={len(lineups)} k_lines={len(k_lines)} — nothing to score.")
@@ -414,6 +456,20 @@ def score_props(date_str: str) -> pd.DataFrame:
             sim_mean = float(sim_Ks.mean())
             prob_sim = float((sim_Ks > k_line).mean())
 
+            # ── v10.0 Market-Steam Bias ───────────────────────────────────
+            # If PrizePicks proxy line > retail consensus by >0.5 K, sharp
+            # money has pushed the retail line down. Apply informed boost.
+            steam_sig         = steam_map.get(key, {})
+            market_delta_k    = float(steam_sig.get("market_delta_k", 0.0))
+            steam_bias_applied = False
+            if market_delta_k > STEAM_BIAS_DELTA_K_THRESHOLD:
+                prob_sim          = min(prob_sim + STEAM_BIAS_BOOST, 0.99)
+                steam_bias_applied = True
+                n_steam_bias      += 1
+                print(f"  [SteamBias] {sp_name}: delta_k={market_delta_k:+.2f} "
+                      f"→ P(K over) boosted +{STEAM_BIAS_BOOST:.2f} "
+                      f"(sharp_book={steam_sig.get('sharp_book', 'n/a')})")
+
             implied_prob = _american_to_prob(over_odds)
             prob_edge    = (prob_sim - implied_prob) if implied_prob is not None else None
             actionable   = bool(prob_edge is not None and prob_edge > ACTIONABLE_PROB_EDGE)
@@ -451,15 +507,23 @@ def score_props(date_str: str) -> pd.DataFrame:
                 "edge_to_failure_ratio": round(
                     (prob_edge / max(failure_rate, 0.01)), 4
                 ) if prob_edge is not None else None,
+                # v10.0 Market-Steam signal columns
+                "steam_bias_applied": steam_bias_applied,
+                "market_delta_k":     round(market_delta_k, 2),
+                "steam_flag":         int(steam_sig.get("steam_flag", 0)),
+                "steam_juice_lean":   round(float(steam_sig.get("juice_lean", 0.0)), 4),
+                "steam_sharp_book":   steam_sig.get("sharp_book"),
             })
 
     df = pd.DataFrame(rows)
     n_act = int(df["actionable"].sum()) if not df.empty else 0
+    n_steam_loaded = len(steam_map)
     print(f"[PropScorer] MC-scored {len(df)} K-props | actionable={n_act} "
-          f"| price_excluded={n_price_excluded} "
+          f"| price_excluded={n_price_excluded} | steam_bias_applied={n_steam_bias} "
+          f"(steam_signals_loaded={n_steam_loaded}) "
           f"(prob_edge > {ACTIONABLE_PROB_EDGE*100:.0f}pp | N_TRIALS={N_TRIALS} | "
           f"price_guard<{PRICE_GUARD_ODDS} | "
-          f"physics_mult on wvo<{WIND_IN_THRESHOLD} or temp<{COLD_THRESHOLD}°F)")
+          f"physics_mult on wvo<{WIND_IN_THRESHOLD} or temp<{COLD_THRESHOLD}F)")
     return df
 
 

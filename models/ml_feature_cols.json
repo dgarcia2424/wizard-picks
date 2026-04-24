@@ -205,5 +205,8 @@
   "away_sp_circadian_age_adj",
   "circadian_age_net",
   "home_rolling_adj_ml_form",
-  "away_rolling_adj_ml_form"
+  "away_rolling_adj_ml_form",
+  "p_script_a2",
+  "p_script_b",
+  "p_script_c"
 ]

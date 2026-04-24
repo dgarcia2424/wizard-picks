@@ -218,6 +218,10 @@ ML_STACKING_FEATURES = [
     "team_ml_log_odds",                  # logit(p_home) - logit(p_away)
     "rolling_ml_form_diff",              # home minus away 15-game form residual
     "mc_f5_expected_total",              # scoring environment carries ML signal
+    # v8.0 script probability signals
+    "p_script_a2",                       # A2 Away Dominance proxy
+    "p_script_b",                        # B Explosion (high-total) proxy
+    "p_script_c",                        # C Elite Duel (low-total) proxy
 ]
 
 CALIB_BINS   = [0.0, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 1.0]
@@ -510,6 +514,127 @@ def load_ml_labels(fm: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# SCRIPT PROBABILITY INJECTION (v8.0)
+# ---------------------------------------------------------------------------
+
+_SGP_DIR = BASE_DIR / "data/sgp"
+
+_SCRIPT_MAP = {
+    "A2_Dominance": "p_script_a2",
+    "B_Explosion":  "p_script_b",
+    "C_EliteDuel":  "p_script_c",
+}
+
+
+def _load_sgp_real_probs() -> pd.DataFrame:
+    """
+    Scan data/sgp/sgp_live_edge_*.csv and return a wide-format DataFrame:
+      (game_date, home_team) -> p_script_a2, p_script_b, p_script_c
+
+    Each CSV contains one row per (game, script); we pivot to wide.
+    """
+    if not _SGP_DIR.exists():
+        return pd.DataFrame()
+
+    frames = []
+    for csv_path in sorted(_SGP_DIR.glob("sgp_live_edge_*.csv")):
+        # Parse date from filename: sgp_live_edge_2026_04_24.csv -> 2026-04-24
+        stem = csv_path.stem  # sgp_live_edge_2026_04_24
+        parts = stem.split("_")
+        if len(parts) >= 6 and parts[3].isdigit() and len(parts[3]) == 4:
+            try:
+                game_date = f"{parts[3]}-{parts[4]}-{parts[5]}"
+            except IndexError:
+                continue
+        else:
+            continue
+
+        try:
+            df = pd.read_csv(csv_path, usecols=["home_team", "script", "p_joint_copula"])
+        except Exception:
+            continue
+
+        df = df[df["script"].isin(_SCRIPT_MAP)].copy()
+        df["game_date"] = pd.to_datetime(game_date)
+        frames.append(df)
+
+    if not frames:
+        return pd.DataFrame()
+
+    all_sgp = pd.concat(frames, ignore_index=True)
+    wide = all_sgp.pivot_table(
+        index=["game_date", "home_team"],
+        columns="script",
+        values="p_joint_copula",
+        aggfunc="max",
+    ).reset_index()
+    wide.columns.name = None
+
+    # Rename script -> p_script_*
+    wide = wide.rename(columns={s: c for s, c in _SCRIPT_MAP.items()
+                                  if s in wide.columns})
+    return wide
+
+
+def _inject_script_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add p_script_a2, p_script_b, p_script_c to the training dataframe.
+
+    Priority:
+      1. Real p_joint_copula from sgp_live_edge CSVs (2026 games only)
+      2. Proxy derivations from feature-matrix stats (all years)
+
+    Proxy formulas
+    --------------
+    p_script_a2  (A2 Away Dominance: away SP better, game goes under)
+        sigmoid(10 * (away_sp_k_pct_10d - home_sp_k_pct_10d - 0.02))
+
+    p_script_b   (B Explosion: high-total environment, offenses dominant)
+        sigmoid(0.5 * (close_total - 8.8))   — centred at league-avg
+
+    p_script_c   (C Elite Duel: both SPs elite, low total)
+        sigmoid(-0.5 * (close_total - 8.2))   — inverse of B
+    """
+    def _sigmoid(x):
+        return 1.0 / (1.0 + np.exp(-np.clip(x, -20, 20)))
+
+    # --- proxy scores (all rows) ---
+    away_k = df.get("away_sp_k_pct_10d", pd.Series(0.22, index=df.index))
+    home_k = df.get("home_sp_k_pct_10d", pd.Series(0.22, index=df.index))
+    total  = df.get("close_total",        pd.Series(8.8,  index=df.index))
+
+    df["p_script_a2"] = _sigmoid(10 * (away_k.fillna(0.22) - home_k.fillna(0.22) - 0.02)).round(5)
+    df["p_script_b"]  = _sigmoid(0.5 * (total.fillna(8.8)  - 8.8)).round(5)
+    df["p_script_c"]  = _sigmoid(-0.5 * (total.fillna(8.2) - 8.2)).round(5)
+
+    # --- override with real SGP probs where available ---
+    sgp = _load_sgp_real_probs()
+    if not sgp.empty:
+        df["game_date"] = pd.to_datetime(df["game_date"])
+        sgp["game_date"] = pd.to_datetime(sgp["game_date"])
+        merged_sgp = df[["game_pk", "game_date", "home_team"]].merge(
+            sgp, on=["game_date", "home_team"], how="left", suffixes=("", "_real"))
+
+        for proxy_col in ["p_script_a2", "p_script_b", "p_script_c"]:
+            real_col = proxy_col + "_real"
+            if real_col in merged_sgp.columns:
+                real_vals = merged_sgp.set_index("game_pk")[real_col]
+                mask = df["game_pk"].map(real_vals).notna()
+                df.loc[mask, proxy_col] = df.loc[mask, "game_pk"].map(real_vals)
+
+        n_real = merged_sgp[["p_script_a2_real", "p_script_b_real", "p_script_c_real"]
+                             ].notna().any(axis=1).sum() if all(
+            c in merged_sgp.columns for c in
+            ["p_script_a2_real", "p_script_b_real", "p_script_c_real"]
+        ) else 0
+        if n_real:
+            print(f"    [script injection] {n_real} rows with real SGP probs; "
+                  f"remainder use proxies.")
+
+    return df
+
+
+# ---------------------------------------------------------------------------
 # DATASET BUILD
 # ---------------------------------------------------------------------------
 
@@ -549,6 +674,9 @@ def build_dataset(include_2026: bool = False) -> tuple[pd.DataFrame, list[str]]:
 
     print("    Computing opponent-quality-adjusted ML form …")
     merged = _compute_rolling_adj_ml_form(merged)
+
+    print("    Injecting script probability features (v8.0) …")
+    merged = _inject_script_features(merged)
 
     print(f"    Label breakdown: home_win_rate={merged['home_win'].mean():.3f}")
 

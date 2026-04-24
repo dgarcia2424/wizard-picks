@@ -1,0 +1,82 @@
+{
+  "rl_edge": {
+    "tier2": 0.005,
+    "tier1": 0.02,
+    "n_games": 85,
+    "roi_best": -0.0899,
+    "win_rate": 0.4,
+    "note": "n=85 \u2014 directional only (target: 150+)",
+    "last_optimized": "2026-04-24"
+  },
+  "ml_edge": {
+    "tier2": 0.015,
+    "tier1": 0.02,
+    "n_games": 90,
+    "roi_best": 0.0984,
+    "win_rate": 0.4545,
+    "note": "n=90 \u2014 directional only (target: 150+)",
+    "last_optimized": "2026-04-24"
+  },
+  "ou_edge": {
+    "tier2": 0.005,
+    "tier1": 0.02,
+    "n_games": 83,
+    "roi_best": -0.2008,
+    "win_rate": 0.4186,
+    "note": "n=83 \u2014 directional only (target: 150+)",
+    "last_optimized": "2026-04-24"
+  },
+  "k_over_edge": {
+    "tier2": 0.08,
+    "tier1": 0.1,
+    "n_games": 65,
+    "roi_best": 0.1099,
+    "win_rate": 0.5556,
+    "note": "n=65 \u2014 directional only (target: 150+)",
+    "last_optimized": "2026-04-24"
+  },
+  "nrfi_prob": {
+    "tier2": 0.0,
+    "tier1": 0.03,
+    "n_games": 146,
+    "roi_best": 0.0592,
+    "win_rate": 0.5548,
+    "note": "n=146 \u2014 directional only",
+    "last_optimized": "2026-04-24"
+  },
+  "f5_win_prob": {
+    "tier2": 0.5,
+    "tier1": 0.52,
+    "n_games": 54,
+    "roi_best": 0.1818,
+    "win_rate": 0.619,
+    "note": "n=54 \u2014 directional only (target: 150+)",
+    "last_optimized": "2026-04-24"
+  },
+  "script_a": {
+    "note": "no rows for script=A_Dominance",
+    "last_optimized": "2026-04-24"
+  },
+  "script_a2": {
+    "note": "no rows for script=A2_DomF5",
+    "last_optimized": "2026-04-24"
+  },
+  "script_b": {
+    "tier2": 0.005,
+    "tier1": 0.02,
+    "n_games": 14,
+    "roi_best": -1.0,
+    "win_rate": 0.0,
+    "note": "n=14 \u2014 directional only (target: 150+)",
+    "last_optimized": "2026-04-24"
+  },
+  "script_c": {
+    "tier2": 0.005,
+    "tier1": 0.02,
+    "n_games": 14,
+    "roi_best": -1.0,
+    "win_rate": 0.0,
+    "note": "n=14 \u2014 directional only (target: 150+)",
+    "last_optimized": "2026-04-24"
+  }
+}

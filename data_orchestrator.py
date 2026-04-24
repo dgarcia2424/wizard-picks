@@ -74,6 +74,22 @@ PARK_COORDS: dict[str, tuple[float, float]] = {
     "OAK": (37.7516, -122.2005),
 }
 
+# ── UTC offset per park for game-time ADI resolution (v5.0) ──────────────
+# Reflects US Daylight Saving Time (March–November).
+# ARI stays on MST (UTC-7) year-round; all others shift +1h in DST.
+PARK_UTC_OFFSET: dict[str, int] = {
+    "ARI": -7,                                    # No DST
+    "ATL": -4, "BAL": -4, "BOS": -4, "CIN": -4,  # Eastern DST
+    "CLE": -4, "DET": -4, "MIA": -4, "NYM": -4,
+    "NYY": -4, "PHI": -4, "PIT": -4, "TB":  -4,
+    "TOR": -4, "WSH": -4,
+    "CHC": -5, "CWS": -5, "HOU": -5, "KC":  -5,  # Central DST
+    "MIL": -5, "MIN": -5, "STL": -5, "TEX": -5,
+    "COL": -6,                                    # Mountain DST
+    "LAA": -7, "LAD": -7, "SD":  -7, "SF":  -7,  # Pacific DST
+    "SEA": -7, "ATH": -7, "OAK": -7,
+}
+
 # ── Shared team-id -> abbr map (loaded once) ────────────────────────────
 _TEAM_MAP: dict[int, str] = {}
 
@@ -211,16 +227,19 @@ def pull_today(today: str) -> pd.DataFrame:
             hp_ump = next((o for o in officials
                            if o.get("officialType") == "Home Plate"), {})
             rows.append({
-                "game_pk":          g.get("gamePk"),
-                "home_team":        tm.get(int(ht["team"]["id"]), ""),
-                "away_team":        tm.get(int(at["team"]["id"]), ""),
-                "status":           g.get("status", {}).get("detailedState", ""),
+                "game_pk":           g.get("gamePk"),
+                "home_team":         tm.get(int(ht["team"]["id"]), ""),
+                "away_team":         tm.get(int(at["team"]["id"]), ""),
+                "status":            g.get("status", {}).get("detailedState", ""),
                 "home_starter_name": home_sp.upper() if home_sp else "",
                 "away_starter_name": away_sp.upper() if away_sp else "",
                 "home_sp_mlbam_id":  home_sp_id,
                 "away_sp_mlbam_id":  away_sp_id,
                 "ump_hp_name":       hp_ump.get("official", {}).get("fullName", ""),
                 "ump_hp_id":         hp_ump.get("official", {}).get("id"),
+                # ISO-8601 UTC game start time — used by enrich_live_adi for
+                # per-game forecast-hour resolution (v5.0 high-resolution ADI)
+                "game_time_utc":     g.get("gameDate", ""),
             })
     sched = pd.DataFrame(rows)
     n_prob = (sched["home_starter_name"] != "").sum()
@@ -274,8 +293,30 @@ def _buck_air_density(temp_f: float, rh_pct: float, pressure_hpa: float) -> floa
     return (p_dry * 100.0) / (R_d * T_k) + (e_v * 100.0) / (R_v * T_k)
 
 
+def _game_hour_local(game_time_utc: str, team: str, default: int = 19) -> int:
+    """Convert an ISO-8601 UTC game-start string to the park's local hour.
+
+    Uses PARK_UTC_OFFSET for DST-aware conversion (no pytz dependency).
+    Falls back to `default` (7 PM local) if the string is absent or malformed.
+    """
+    if not game_time_utc:
+        return default
+    try:
+        # Accept both "2026-04-24T17:05:00Z" and "2026-04-24T17:05:00+00:00"
+        ts = game_time_utc.rstrip("Z").split("+")[0]
+        dt_utc = pd.Timestamp(ts, tz="UTC")
+        offset = PARK_UTC_OFFSET.get(team, -4)
+        local_hour = (dt_utc.hour + offset) % 24
+        return int(local_hour)
+    except Exception:
+        return default
+
+
 def enrich_live_adi(context: pd.DataFrame, game_hour_local: int = 19) -> pd.DataFrame:
     """Fetch real-time weather from Open-Meteo for each home park.
+
+    v5.0: uses the actual game start hour per park (from game_time_utc) instead
+    of a fixed 19:00 default, giving high-resolution ADI for day/evening splits.
 
     Populates: temp_f, relative_humidity, surface_pressure_hpa, air_density_rho.
     Falls back to FM carry-forward values if Open-Meteo is unreachable.
@@ -285,12 +326,25 @@ def enrich_live_adi(context: pd.DataFrame, game_hour_local: int = 19) -> pd.Data
         if col not in context.columns:
             context[col] = np.nan
 
+    # Build per-team game hour map from game_time_utc (v5.0 high-resolution ADI)
+    team_game_hour: dict[str, int] = {}
+    if "game_time_utc" in context.columns:
+        for _, row in context.iterrows():
+            team = str(row.get("home_team", ""))
+            if team and team not in team_game_hour:
+                team_game_hour[team] = _game_hour_local(
+                    str(row.get("game_time_utc", "")), team, default=game_hour_local)
+    # Fallback: all teams use the supplied default
+    if not team_game_hour:
+        team_game_hour = {}
+
     fetched: dict[str, dict] = {}
     for _, row in context.iterrows():
         team = str(row.get("home_team", ""))
         if team in fetched or team not in PARK_COORDS:
             continue
         lat, lon = PARK_COORDS[team]
+        ghr = team_game_hour.get(team, game_hour_local)
         url = (f"https://api.open-meteo.com/v1/forecast"
                f"?latitude={lat}&longitude={lon}"
                f"&hourly=temperature_2m,relative_humidity_2m,surface_pressure"
@@ -299,13 +353,14 @@ def enrich_live_adi(context: pd.DataFrame, game_hour_local: int = 19) -> pd.Data
         try:
             with urllib.request.urlopen(url, timeout=10) as r:
                 w = json.loads(r.read())
-            idx = min(game_hour_local, len(w["hourly"]["time"]) - 1)
+            idx = min(ghr, len(w["hourly"]["time"]) - 1)
             t   = float(w["hourly"]["temperature_2m"][idx] or 72.0)
             rh  = float(w["hourly"]["relative_humidity_2m"][idx] or 50.0)
             p   = float(w["hourly"]["surface_pressure"][idx] or 1013.25)
             fetched[team] = {"temp_f": t, "relative_humidity": rh,
                              "surface_pressure_hpa": p,
-                             "air_density_rho": _buck_air_density(t, rh, p)}
+                             "air_density_rho": _buck_air_density(t, rh, p),
+                             "game_hour_local_used": ghr}
         except Exception as exc:
             print(f"  [adi] Open-Meteo failed for {team}: {exc}")
 
@@ -316,7 +371,10 @@ def enrich_live_adi(context: pd.DataFrame, game_hour_local: int = 19) -> pd.Data
                 context.at[i, col] = val
 
     n = sum(1 for t in context["home_team"] if t in fetched)
-    print(f"  [adi] Live weather fetched for {n}/{len(context)} games")
+    hours_used = {t: fetched[t].get("game_hour_local_used", "?")
+                  for t in fetched}
+    print(f"  [adi] Live weather fetched for {n}/{len(context)} games"
+          f"  (hours: { {t: h for t, h in list(hours_used.items())[:4]} }{'…' if len(hours_used) > 4 else ''})")
     return context
 
 
@@ -632,6 +690,63 @@ def enrich_abs_framing(context: pd.DataFrame) -> pd.DataFrame:
     return context
 
 
+# ════════════════════════════════════════════════════════════════════════
+# STEP 3e — Catcher Challenge IQ (v5.0 ABS system)
+# ════════════════════════════════════════════════════════════════════════
+
+def enrich_catcher_iq(context: pd.DataFrame) -> pd.DataFrame:
+    """Add home/away catcher K-multipliers from build_catcher_iq.py output.
+
+    Elite catchers (top-quartile reclaimed_strike_rate) receive a +1.03x
+    K-anchor multiplier.  The multiplier is applied multiplicatively on top
+    of ump_k_synergy, compounding with the umpire and framing adjustments.
+
+    Columns added: home_catcher_k_mult, away_catcher_k_mult
+    Both default to 1.0 if catcher_iq data is unavailable.
+    """
+    context = context.copy().reset_index(drop=True)
+    context["home_catcher_k_mult"] = 1.0
+    context["away_catcher_k_mult"] = 1.0
+
+    try:
+        from build_catcher_iq import get_team_k_multiplier
+        year = pd.Timestamp.now().year
+
+        n_elite_home = 0
+        n_elite_away = 0
+        for i, row in context.iterrows():
+            home = str(row.get("home_team", ""))
+            away = str(row.get("away_team", ""))
+            hm   = get_team_k_multiplier(home, year)
+            am   = get_team_k_multiplier(away, year)
+            context.at[i, "home_catcher_k_mult"] = hm
+            context.at[i, "away_catcher_k_mult"] = am
+            if hm > 1.0:
+                n_elite_home += 1
+            if am > 1.0:
+                n_elite_away += 1
+
+        # Compound with ump_k_synergy (order: ump × framing → × catcher IQ)
+        for side, mult_col, syn_col in (
+            ("home", "home_catcher_k_mult", "ump_k_synergy_home"),
+            ("away", "away_catcher_k_mult", "ump_k_synergy_away"),
+        ):
+            if syn_col in context.columns:
+                context[syn_col] = (
+                    context[syn_col] * context[mult_col]
+                ).round(4)
+
+        n_boosted = n_elite_home + n_elite_away
+        print(f"  [catcher_iq] IQ multipliers applied; "
+              f"{n_boosted} games with elite catcher boost "
+              f"(home={n_elite_home}, away={n_elite_away})")
+
+    except Exception as exc:
+        print(f"  [catcher_iq] skipped: {exc}")
+
+    return context
+
+
 def enrich_slate(schedule: pd.DataFrame, today: str) -> pd.DataFrame:
     """Join sticky SP + game metrics from FM, then layer in live enrichments."""
     context = schedule.copy()
@@ -693,6 +808,7 @@ def enrich_slate(schedule: pd.DataFrame, today: str) -> pd.DataFrame:
     context = enrich_ump_synergy(context)
     context = enrich_abs_framing(context)
     context = enrich_bullpen_5d(context, today)
+    context = enrich_catcher_iq(context)
 
     return context
 

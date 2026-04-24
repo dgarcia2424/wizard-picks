@@ -1,33 +1,19 @@
 {
-  "last_run": "2026-04-24T11:30:45",
-  "elapsed_s": 43.4,
+  "last_run": "2026-04-24T15:30:02",
+  "elapsed_s": 0.6,
   "total_checks": 35,
-  "ok": 32,
-  "warn": 3,
+  "ok": 34,
+  "warn": 1,
   "fail": 0,
-  "repaired": 3,
+  "repaired": 1,
   "overall": "warn",
   "issues": [
     {
       "name": "lineup_quality",
       "status": "warn",
-      "message": "STALE: 19.5h old (limit 5h) \u2014 data/statcast/lineup_quality_today.parquet | REPAIRED via build_lineup_quality.py",
+      "message": "STALE: 23.5h old (limit 5h) \u2014 data/statcast/lineup_quality_today.parquet | REPAIRED via build_lineup_quality.py",
       "repaired": true,
       "repair_cmd": "build_lineup_quality.py"
-    },
-    {
-      "name": "park_factors_2026",
-      "status": "warn",
-      "message": "STALE: 6.0h old (limit 5h) \u2014 data/statcast/park_factors_2026.parquet | REPAIRED via supplemental_pull.py --force-year 2026",
-      "repaired": true,
-      "repair_cmd": "supplemental_pull.py --force-year 2026"
-    },
-    {
-      "name": "standings_2026",
-      "status": "warn",
-      "message": "STALE: 6.0h old (limit 5h) \u2014 data/statcast/standings_2026.parquet | REPAIRED via supplemental_pull.py --force-year 2026",
-      "repaired": true,
-      "repair_cmd": "supplemental_pull.py --force-year 2026"
     }
   ]
 }

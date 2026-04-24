@@ -47,6 +47,11 @@ from train_ml_model import (
 # ---------------------------------------------------------------------------
 BASE_DIR        = Path(".")
 DATA_DIR        = BASE_DIR / "data" / "statcast"
+CONTEXT_PATH    = BASE_DIR / "data/orchestrator/daily_context.parquet"
+
+# v8.0 — 90th percentile of historical bullpen_burn_5d (from bullpen_burn_by_game.parquet)
+BP_BURN_THRESH_90  = 360.0   # raw high-leverage pitch count
+BP_BURN_PENALTY    = 0.05    # absolute win-prob adjustment when a side is gassed
 MODELS_DIR      = BASE_DIR / "models"
 FEAT_MATRIX     = BASE_DIR / "feature_matrix_enriched_v2.parquet"
 
@@ -489,13 +494,121 @@ def predict_games(date_str: str) -> pd.DataFrame:
         # downstream ledger keeps the column for schema compatibility.
         if "stacker_l2" in df.columns:
             base = pd.to_numeric(df["stacker_l2"], errors="coerce")
-            df["adj_home_win_prob"]         = base.clip(lower=0.01, upper=0.99).round(4)
+
+            # ── v8.0 Bullpen Burn Penalty ─────────────────────────────────
+            # When a team's 5-day cumulative high-leverage pitch count
+            # exceeds the 90th-pctile historical threshold, apply a flat
+            # ±BP_BURN_PENALTY shift to adj_home_win_prob.
+            #   home gassed -> -0.05 (hurts home)
+            #   away gassed -> +0.05 (hurts away / helps home)
+            # Burns are loaded from daily_context (pre-computed by orchestrator).
+            burn_delta = pd.Series(0.0, index=df.index)
+            try:
+                if CONTEXT_PATH.exists():
+                    ctx = pd.read_parquet(CONTEXT_PATH, columns=[
+                        "home_team", "home_bullpen_burn_5d", "away_bullpen_burn_5d"])
+                    ctx_map = ctx.set_index("home_team")
+                    h_burn = df["home_team"].map(ctx_map["home_bullpen_burn_5d"])
+                    a_burn = df["home_team"].map(ctx_map["away_bullpen_burn_5d"])
+                    h_gassed = h_burn.fillna(0) > BP_BURN_THRESH_90
+                    a_gassed = a_burn.fillna(0) > BP_BURN_THRESH_90
+                    burn_delta = burn_delta - h_gassed * BP_BURN_PENALTY
+                    burn_delta = burn_delta + a_gassed * BP_BURN_PENALTY
+                    df["home_burn_5d"]        = h_burn.round(0)
+                    df["away_burn_5d"]        = a_burn.round(0)
+                    df["home_burn_gassed"]    = h_gassed.astype(int)
+                    df["away_burn_gassed"]    = a_gassed.astype(int)
+                    n_flags = int((h_gassed | a_gassed).sum())
+                    if n_flags:
+                        print(f"  [BurnPenalty] {n_flags} game(s) flagged "
+                              f"(thresh={BP_BURN_THRESH_90:.0f}): "
+                              f"home_gassed={h_gassed.sum()}, "
+                              f"away_gassed={a_gassed.sum()}")
+            except Exception as _bp_exc:
+                print(f"  [BurnPenalty] skipped: {_bp_exc}")
+
+            adj = (base + burn_delta).clip(lower=0.01, upper=0.99).round(4)
+            df["adj_home_win_prob"]         = adj
+            df["bp_burn_delta"]             = burn_delta.round(4)
             df["bullpen_thermal_penalty"]   = 0
             df["bullpen_xfip_diff_effective"] = pd.to_numeric(
                 df.get("bullpen_xfip_diff", 0.0), errors="coerce").fillna(0.0).round(3)
             df["signal_flags"] = ""
     except Exception as e:
         print(f"[BullpenAdj] failed: {e}")
+
+    return df
+
+
+# ---------------------------------------------------------------------------
+# POISSON RUN LINE INTEGRATION (v8.0 TASK 4)
+# ---------------------------------------------------------------------------
+
+def _prob_to_american(p: float) -> int:
+    """Convert win probability to American moneyline odds (nearest integer)."""
+    p = max(0.01, min(0.99, p))
+    if p >= 0.5:
+        return int(round(-100 * p / (1.0 - p)))   # negative (favourite)
+    else:
+        return int(round(100 * (1.0 - p) / p))    # positive (underdog)
+
+
+def _attach_poisson_rl(df: pd.DataFrame, date_str: str) -> pd.DataFrame:
+    """
+    Join Poisson run-distribution outputs (lam_home, lam_away,
+    p_home_cover_final) from score_run_dist_today onto the ML output.
+
+    Adds:
+      rl_lam_home, rl_lam_away     — Poisson lambdas
+      rl_p_home_cover              — P(home covers -1.5) from Poisson stacker
+      fair_rl_home_price           — American odds for home -1.5
+      fair_rl_away_price           — American odds for away +1.5
+      rl_ml_diverge_flag           — 1 when ML likes home ML but RL stacker
+                                     says away covers +1.5 (or vice versa)
+    """
+    try:
+        import score_run_dist_today as srd
+        rl_df = srd.predict_games(date_str)
+    except Exception as exc:
+        print(f"  [PoissonRL] could not load RL scores: {exc}")
+        return df
+
+    if rl_df is None or rl_df.empty:
+        return df
+
+    keep = ["home_team", "lam_home", "lam_away",
+            "p_home_cover_final", "projected_total_adj"]
+    keep = [c for c in keep if c in rl_df.columns]
+    rl_slim = rl_df[keep].copy().rename(columns={
+        "lam_home":           "rl_lam_home",
+        "lam_away":           "rl_lam_away",
+        "p_home_cover_final": "rl_p_home_cover",
+        "projected_total_adj":"rl_projected_total",
+    })
+
+    df = df.merge(rl_slim, on="home_team", how="left")
+
+    if "rl_p_home_cover" in df.columns:
+        p_cover = pd.to_numeric(df["rl_p_home_cover"], errors="coerce").fillna(0.5)
+        df["fair_rl_home_price"] = p_cover.apply(_prob_to_american)
+        df["fair_rl_away_price"] = (1.0 - p_cover).apply(_prob_to_american)
+
+        # Divergence: ML model likes home win (> 0.55) but Poisson says away
+        # covers the -1.5 spread (rl_p_home_cover < 0.45) — or vice versa
+        ml_home = pd.to_numeric(df.get("adj_home_win_prob",
+                                        df.get("stacker_l2", 0.5)),
+                                errors="coerce").fillna(0.5)
+        ml_likes_home = ml_home > 0.55
+        rl_home_covers = p_cover > 0.55
+        df["rl_ml_diverge_flag"] = (
+            (ml_likes_home & ~rl_home_covers) |
+            (~ml_likes_home & rl_home_covers)
+        ).astype(int)
+
+        n_div = int(df["rl_ml_diverge_flag"].sum())
+        n_rl  = df["rl_lam_home"].notna().sum()
+        print(f"  [PoissonRL] Joined {n_rl} RL scores | "
+              f"{n_div} ML/RL divergence flag(s)")
 
     return df
 
@@ -510,11 +623,23 @@ def main():
     )
     parser.add_argument("--date", default=None,
                         help="Date YYYY-MM-DD (default: today)")
+    parser.add_argument("--with-rl", action="store_true",
+                        help="Attach Poisson RL lambdas and fair RL prices (v8.0)")
     args = parser.parse_args()
 
     from datetime import date
     date_str = args.date or date.today().isoformat()
-    predict_games(date_str)
+    df = predict_games(date_str)
+
+    if args.with_rl and df is not None and not df.empty:
+        df = _attach_poisson_rl(df, date_str)
+        rl_cols = ["home_team", "away_team", "rl_lam_home", "rl_lam_away",
+                   "rl_p_home_cover", "fair_rl_home_price", "fair_rl_away_price",
+                   "rl_ml_diverge_flag"]
+        rl_cols = [c for c in rl_cols if c in df.columns]
+        if rl_cols:
+            print("\n  [RL Summary]")
+            print(df[rl_cols].to_string(index=False))
 
 
 if __name__ == "__main__":

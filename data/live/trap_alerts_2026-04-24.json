@@ -1,0 +1,16 @@
+[
+  {
+    "date": "2026-04-24",
+    "game": "WSH@CWS",
+    "home_team": "CWS",
+    "away_team": "WSH",
+    "close_total": 9.0,
+    "pinnacle_total": 9.5,
+    "trap_type": "SHARP_FADE",
+    "direction": "OVER",
+    "retail_total": 9.0,
+    "line_diff": 0.5,
+    "model_edge": 0.005,
+    "description": "Pinnacle (9.5) vs retail (9.0) = +0.5 run diff. Sharp money on OVER. Retail public fading sharps."
+  }
+]

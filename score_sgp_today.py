@@ -259,6 +259,11 @@ def main():
     picks.to_csv(csv_path, index=False)
     picks.to_json(json_path, orient="records", indent=2)
 
+    # Save dated archive so optimize_signal_bands.py can build history
+    dated_tag = score_date.replace("-", "_")
+    dated_csv = OUT_DIR / f"sgp_picks_{dated_tag}.csv"
+    picks.to_csv(dated_csv, index=False)
+
     # ── Console report ──────────────────────────────────────────────────
     print(f"\n{'-'*60}")
     print(f"  SGP PICKS -- {score_date}")
