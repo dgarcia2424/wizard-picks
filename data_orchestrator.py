@@ -1,15 +1,24 @@
 """
-data_orchestrator.py — v4.0 Master Data Pipeline.
+data_orchestrator.py — v4.3 Master Data Pipeline.
 
 Single-schedule entry point. Run once daily (recommended: 3:30 PM ET,
 after lineups typically post). All steps are idempotent.
 
 Steps:
     1. RECOVER  : Fill any actuals gap via MLB Stats API -> actuals_2026.parquet
-    2. PULL     : Today's schedule + lineups (lineup_pull.py) + weather stub
-    3. ENRICH   : Sticky SGP metrics for each game SP (from feature_matrix)
+    2. PULL     : Today's schedule (with probablePitcher hydration) + lineups
+    3. ENRICH   : SP metrics from FM + live ADI (Open-Meteo) + ump synergy + bullpen burn
     4. RESIDUALS: Update model_residuals.csv for yesterday
     5. VALIDATE : Fail loud if any critical source is empty / malformed
+
+v4.3 changes:
+    - probablePitcher hydrated from MLB API in pull_today() — no more FM carry-forward
+      for starter names (fixes systematic away_starter_name bleed bug)
+    - Live ADI: Open-Meteo fetches real-time temp/humidity/pressure per park;
+      air_density_rho computed via Buck equation
+    - Ump synergy: HP ump joined from ump_features; 1.2x K multiplier for
+      wide-zone ump paired with stuff+ starter
+    - Bullpen 5d: bullpen_burn_5d added alongside existing 3d window
 
 Outputs:
     data/statcast/actuals_2026.parquet        (updated)
@@ -42,7 +51,28 @@ CONTEXT_FILE  = OUT_DIR / "daily_context.parquet"
 LOG_FILE      = OUT_DIR / "orchestrator_log.csv"
 
 TEAMS_URL    = "https://statsapi.mlb.com/api/v1/teams?sportId=1"
-SCHEDULE_URL = "https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={d}&hydrate=linescore"
+SCHEDULE_URL = ("https://statsapi.mlb.com/api/v1/schedule?sportId=1"
+                "&date={d}&hydrate=linescore,probablePitcher,officials")
+
+# ── Stadium lat/lon for Open-Meteo weather fetch ─────────────────────────
+PARK_COORDS: dict[str, tuple[float, float]] = {
+    "ARI": (33.4455, -112.0667), "ATL": (33.8908, -84.4678),
+    "BAL": (39.2838, -76.6216),  "BOS": (42.3467, -71.0972),
+    "CHC": (41.9484, -87.6553),  "CWS": (41.8299, -87.6338),
+    "CIN": (39.0979, -84.5082),  "CLE": (41.4962, -81.6852),
+    "COL": (39.7559, -104.9942), "DET": (42.3390, -83.0485),
+    "HOU": (29.7573, -95.3555),  "KC":  (39.0517, -94.4803),
+    "LAA": (33.8003, -117.8827), "LAD": (34.0739, -118.2400),
+    "MIA": (25.7781, -80.2197),  "MIL": (43.0280, -87.9712),
+    "MIN": (44.9817, -93.2778),  "NYM": (40.7571, -73.8458),
+    "NYY": (40.8296, -73.9262),  "ATH": (37.7516, -122.2005),
+    "PHI": (39.9061, -75.1665),  "PIT": (40.4469, -80.0057),
+    "SD":  (32.7076, -117.1570), "SF":  (37.7786, -122.3893),
+    "SEA": (47.5914, -122.3325), "STL": (38.6226, -90.1928),
+    "TB":  (27.7682, -82.6534),  "TEX": (32.7473, -97.0832),
+    "TOR": (43.6414, -79.3894),  "WSH": (38.8730, -77.0074),
+    "OAK": (37.7516, -122.2005),
+}
 
 # ── Shared team-id -> abbr map (loaded once) ────────────────────────────
 _TEAM_MAP: dict[int, str] = {}
@@ -145,7 +175,11 @@ def recover_actuals(today: date) -> int:
 # STEP 2 — PULL: today's schedule + lineups
 # ════════════════════════════════════════════════════════════════════════
 def pull_today(today: str) -> pd.DataFrame:
-    """Fetch schedule and run lineup_pull. Returns schedule DataFrame."""
+    """Fetch schedule with probable pitchers and officials from MLB API.
+
+    Starters come directly from probablePitcher hydration — never from FM
+    carry-forward, which caused away_starter_name to bleed between match-ups.
+    """
     print(f"  [pull] lineup_pull.py --date {today}")
     try:
         result = subprocess.run(
@@ -158,27 +192,50 @@ def pull_today(today: str) -> pd.DataFrame:
         print(f"    [warn] lineup_pull failed: {exc}")
 
     tm = _get_team_map()
-    url = f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={today}"
+    url = (f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={today}"
+           f"&hydrate=probablePitcher,officials")
     with urllib.request.urlopen(url, timeout=15) as r:
         payload = json.loads(r.read())
     rows = []
     for block in payload.get("dates", []):
         for g in block.get("games", []):
+            ht = g["teams"]["home"]
+            at = g["teams"]["away"]
+            # Probable pitchers from API (fresh, game-specific)
+            home_sp = ht.get("probablePitcher", {}).get("fullName", "")
+            away_sp = at.get("probablePitcher", {}).get("fullName", "")
+            home_sp_id = ht.get("probablePitcher", {}).get("id")
+            away_sp_id = at.get("probablePitcher", {}).get("id")
+            # HP umpire if assigned (pre-game)
+            officials = g.get("officials", [])
+            hp_ump = next((o for o in officials
+                           if o.get("officialType") == "Home Plate"), {})
             rows.append({
-                "game_pk": g.get("gamePk"),
-                "home_team": tm.get(int(g["teams"]["home"]["team"]["id"]), ""),
-                "away_team": tm.get(int(g["teams"]["away"]["team"]["id"]), ""),
-                "status": g.get("status", {}).get("detailedState", ""),
+                "game_pk":          g.get("gamePk"),
+                "home_team":        tm.get(int(ht["team"]["id"]), ""),
+                "away_team":        tm.get(int(at["team"]["id"]), ""),
+                "status":           g.get("status", {}).get("detailedState", ""),
+                "home_starter_name": home_sp.upper() if home_sp else "",
+                "away_starter_name": away_sp.upper() if away_sp else "",
+                "home_sp_mlbam_id":  home_sp_id,
+                "away_sp_mlbam_id":  away_sp_id,
+                "ump_hp_name":       hp_ump.get("official", {}).get("fullName", ""),
+                "ump_hp_id":         hp_ump.get("official", {}).get("id"),
             })
     sched = pd.DataFrame(rows)
+    n_prob = (sched["home_starter_name"] != "").sum()
     print(f"  [pull] schedule: {len(sched)} games, "
-          f"{(sched['status']=='Scheduled').sum()} scheduled")
+          f"{(sched['status']=='Scheduled').sum()} scheduled, "
+          f"{n_prob} probable pitchers posted")
     return sched
 
 
 # ════════════════════════════════════════════════════════════════════════
 # STEP 3 — ENRICH: Sticky SGP metrics from feature_matrix
 # ════════════════════════════════════════════════════════════════════════
+# NOTE: home_starter_name / away_starter_name are intentionally NOT here.
+# They are hydrated live from MLB probablePitcher API in pull_today() and
+# must never be overwritten by FM carry-forward (that caused the Woo/ATH bug).
 STICKY_SP_COLS = [
     "home_sp_k_pct", "home_sp_bb_pct", "home_sp_whiff_pctl",
     "home_sp_ff_velo", "home_sp_xwoba_against", "home_sp_gb_pct",
@@ -186,75 +243,287 @@ STICKY_SP_COLS = [
     "away_sp_k_pct", "away_sp_bb_pct", "away_sp_whiff_pctl",
     "away_sp_ff_velo", "away_sp_xwoba_against", "away_sp_gb_pct",
     "away_sp_k_pct_10d", "away_sp_k_bb_ratio",
-    "home_starter_name", "away_starter_name",
+    # home_sp_whiff_pctl / away_sp_whiff_pctl already above — used for ump synergy
 ]
 STICKY_GAME_COLS = [
-    "close_total", "wind_mph", "wind_bearing", "temp_f",
-    "ump_k_above_avg", "home_park_factor",
+    "close_total", "wind_mph", "wind_bearing",
+    "home_park_factor",
     "home_bat_k_vs_rhp", "home_bat_k_vs_lhp",
     "away_bat_k_vs_rhp", "away_bat_k_vs_lhp",
     "home_bullpen_xfip", "away_bullpen_xfip",
     "elo_diff",
 ]
 
-# Batter sticky metrics not in game-grain FM — these require the batter
-# feature matrix and are joined at score time, not here.
-# Flagged: Zone-Contact%, Hard-Hit%, Sprint Speed per batter not in FM.
 
-STICKY_BATTER_MISSING = [
-    "zone_contact_pct",  # not in feature_matrix_enriched_v2
-    "hard_hit_pct",      # not in feature_matrix_enriched_v2
-    "sprint_speed",      # not in feature_matrix_enriched_v2
-]
+# ════════════════════════════════════════════════════════════════════════
+# STEP 3a — Live ADI via Open-Meteo
+# ════════════════════════════════════════════════════════════════════════
+def _buck_air_density(temp_f: float, rh_pct: float, pressure_hpa: float) -> float:
+    """Compute dry-air density (kg/m³) via Buck equation.
+
+    Higher density = more atmospheric drag = pitcher-friendly (Under anchor).
+    Lower density (hot, humid, high altitude) = ball carries = Over anchor.
+    """
+    temp_c = (temp_f - 32.0) * 5.0 / 9.0
+    # Saturation vapor pressure (Buck 1981)
+    e_sat = 6.1121 * np.exp((18.678 - temp_c / 234.5) * (temp_c / (257.14 + temp_c)))
+    e_v = (rh_pct / 100.0) * e_sat          # actual vapor pressure (hPa)
+    p_dry = pressure_hpa - e_v               # partial pressure of dry air
+    R_d, R_v = 287.058, 461.495             # gas constants J/(kg·K)
+    T_k = temp_c + 273.15
+    return (p_dry * 100.0) / (R_d * T_k) + (e_v * 100.0) / (R_v * T_k)
+
+
+def enrich_live_adi(context: pd.DataFrame, game_hour_local: int = 19) -> pd.DataFrame:
+    """Fetch real-time weather from Open-Meteo for each home park.
+
+    Populates: temp_f, relative_humidity, surface_pressure_hpa, air_density_rho.
+    Falls back to FM carry-forward values if Open-Meteo is unreachable.
+    """
+    context = context.copy()
+    for col in ("temp_f", "relative_humidity", "surface_pressure_hpa", "air_density_rho"):
+        if col not in context.columns:
+            context[col] = np.nan
+
+    fetched: dict[str, dict] = {}
+    for _, row in context.iterrows():
+        team = str(row.get("home_team", ""))
+        if team in fetched or team not in PARK_COORDS:
+            continue
+        lat, lon = PARK_COORDS[team]
+        url = (f"https://api.open-meteo.com/v1/forecast"
+               f"?latitude={lat}&longitude={lon}"
+               f"&hourly=temperature_2m,relative_humidity_2m,surface_pressure"
+               f"&wind_speed_unit=mph&temperature_unit=fahrenheit"
+               f"&timezone=auto&forecast_days=1")
+        try:
+            with urllib.request.urlopen(url, timeout=10) as r:
+                w = json.loads(r.read())
+            idx = min(game_hour_local, len(w["hourly"]["time"]) - 1)
+            t   = float(w["hourly"]["temperature_2m"][idx] or 72.0)
+            rh  = float(w["hourly"]["relative_humidity_2m"][idx] or 50.0)
+            p   = float(w["hourly"]["surface_pressure"][idx] or 1013.25)
+            fetched[team] = {"temp_f": t, "relative_humidity": rh,
+                             "surface_pressure_hpa": p,
+                             "air_density_rho": _buck_air_density(t, rh, p)}
+        except Exception as exc:
+            print(f"  [adi] Open-Meteo failed for {team}: {exc}")
+
+    for i, row in context.iterrows():
+        team = str(row.get("home_team", ""))
+        if team in fetched:
+            for col, val in fetched[team].items():
+                context.at[i, col] = val
+
+    n = sum(1 for t in context["home_team"] if t in fetched)
+    print(f"  [adi] Live weather fetched for {n}/{len(context)} games")
+    return context
+
+
+# ════════════════════════════════════════════════════════════════════════
+# STEP 3b — Umpire Synergy join
+# WIDE_ZONE_THRESHOLD: ump_k_above_avg > 0.3 → wide zone (more called strikes)
+# STUFF_PLUS_THRESHOLD: whiff_pctl > 0.70 → elite swing-and-miss stuff
+# Multiplier: 1.2x on K-over implied probability when both conditions met
+# ════════════════════════════════════════════════════════════════════════
+WIDE_ZONE_THRESHOLD  = 0.30   # ump_k_above_avg > this → wide zone
+STUFF_PLUS_THRESHOLD = 0.70   # whiff_pctl > this → stuff+ starter
+
+_UMP_FEATURES_CACHE: pd.DataFrame | None = None
+
+
+def _load_ump_features() -> pd.DataFrame:
+    global _UMP_FEATURES_CACHE
+    if _UMP_FEATURES_CACHE is not None:
+        return _UMP_FEATURES_CACHE
+    frames = []
+    for yr in (2023, 2024, 2025):
+        p = _ROOT / f"data/statcast/ump_features_{yr}.parquet"
+        if p.exists():
+            frames.append(pd.read_parquet(p))
+    if not frames:
+        return pd.DataFrame(columns=["ump_hp_id", "ump_k_above_avg",
+                                     "ump_bb_above_avg", "ump_rpg_above_avg"])
+    uf = pd.concat(frames, ignore_index=True)
+    # Career average per ump
+    _UMP_FEATURES_CACHE = (uf.dropna(subset=["ump_hp_id", "ump_k_above_avg"])
+                             .groupby("ump_hp_id")[["ump_k_above_avg",
+                                                    "ump_bb_above_avg",
+                                                    "ump_rpg_above_avg"]]
+                             .mean()
+                             .reset_index())
+    return _UMP_FEATURES_CACHE
+
+
+def enrich_ump_synergy(context: pd.DataFrame) -> pd.DataFrame:
+    """Join umpire K stats and compute ump_k_synergy_home / _away multipliers.
+
+    ump_k_synergy_home = 1.2 if wide-zone ump AND home SP is stuff+, else 1.0
+    ump_k_synergy_away = 1.2 if wide-zone ump AND away SP is stuff+, else 1.0
+
+    Also saves today's ump assignments to umpire_assignments_2026.parquet.
+    """
+    context = context.copy().reset_index(drop=True)
+    uf = _load_ump_features()
+
+    for col in ("ump_k_above_avg", "ump_bb_above_avg", "ump_rpg_above_avg",
+                "ump_k_synergy_home", "ump_k_synergy_away"):
+        if col not in context.columns:
+            context[col] = np.nan if "synergy" not in col else 1.0
+
+    # Populate from today's ump assignments (pulled in pull_today via officials)
+    if "ump_hp_id" in context.columns and not uf.empty:
+        context["ump_hp_id"] = pd.to_numeric(context["ump_hp_id"], errors="coerce")
+        uf["ump_hp_id"] = pd.to_numeric(uf["ump_hp_id"], errors="coerce")
+        merged = context.merge(uf, on="ump_hp_id", how="left",
+                               suffixes=("", "_uf")).reset_index(drop=True)
+        for col in ("ump_k_above_avg", "ump_bb_above_avg", "ump_rpg_above_avg"):
+            if f"{col}_uf" in merged.columns:
+                context[col] = merged[f"{col}_uf"].values
+            elif col in merged.columns:
+                context[col] = merged[col].values
+
+    # Save assignments for audit trail
+    if "ump_hp_id" in context.columns:
+        today_str = str(context.get("orchestrator_date", pd.Series([""])).iloc[0])
+        ump_today = context[["game_pk", "ump_hp_id", "ump_hp_name"]].copy()
+        ump_today["year"] = pd.Timestamp.now().year
+        assign_path = _ROOT / "data/statcast/umpire_assignments_2026.parquet"
+        if assign_path.exists():
+            existing = pd.read_parquet(assign_path)
+            ump_today = pd.concat(
+                [existing[~existing["game_pk"].isin(ump_today["game_pk"])],
+                 ump_today], ignore_index=True)
+        assign_path.parent.mkdir(parents=True, exist_ok=True)
+        ump_today.to_parquet(assign_path, index=False)
+
+    # Synergy multipliers — use .values to avoid index alignment issues
+    context = context.reset_index(drop=True)
+    context["ump_k_synergy_home"] = 1.0
+    context["ump_k_synergy_away"] = 1.0
+    wide_zone = (context["ump_k_above_avg"].fillna(0).values > WIDE_ZONE_THRESHOLD)
+    if "home_sp_whiff_pctl" in context.columns:
+        stuff_home = (context["home_sp_whiff_pctl"].fillna(0).values > STUFF_PLUS_THRESHOLD)
+        context.loc[wide_zone & stuff_home, "ump_k_synergy_home"] = 1.2
+    if "away_sp_whiff_pctl" in context.columns:
+        stuff_away = (context["away_sp_whiff_pctl"].fillna(0).values > STUFF_PLUS_THRESHOLD)
+        context.loc[wide_zone & stuff_away, "ump_k_synergy_away"] = 1.2
+
+    synergy_games = ((context["ump_k_synergy_home"] > 1.0) |
+                     (context["ump_k_synergy_away"] > 1.0)).sum()
+    print(f"  [ump]  K synergy 1.2x applied to {synergy_games} game(s); "
+          f"{context['ump_k_above_avg'].notna().sum()} umps matched")
+    return context
+
+
+# ════════════════════════════════════════════════════════════════════════
+# STEP 3c — Bullpen 5d fatigue window
+# ════════════════════════════════════════════════════════════════════════
+def enrich_bullpen_5d(context: pd.DataFrame, today: str) -> pd.DataFrame:
+    """Add bullpen_burn_5d to context by extending the existing 3d window.
+
+    Reads bullpen_burn_by_game.parquet (has bullpen_burn_3d) and sums
+    the 5-day rolling pitch-count window per team.
+    """
+    bp_path = _ROOT / "data/batter_features/bullpen_burn_by_game.parquet"
+    if not bp_path.exists():
+        print("  [bp5d] bullpen_burn_by_game.parquet not found — skipping")
+        context["bullpen_burn_5d"] = np.nan
+        return context
+
+    bp = pd.read_parquet(bp_path)
+    bp["game_date"] = pd.to_datetime(bp["game_date"])
+    today_dt = pd.Timestamp(today)
+    cutoff_5d = today_dt - pd.Timedelta(days=5)
+
+    # Sum hl_pitches over the last 5 days per team
+    bp_window = bp[(bp["game_date"] >= cutoff_5d) & (bp["game_date"] < today_dt)]
+    burn_5d = (bp_window.groupby("home_team")["total_hl_pitches"]
+                        .sum()
+                        .reset_index()
+                        .rename(columns={"total_hl_pitches": "home_bullpen_burn_5d"}))
+    burn_5d_away = burn_5d.rename(columns={
+        "home_team": "away_team",
+        "home_bullpen_burn_5d": "away_bullpen_burn_5d"
+    })
+
+    context = context.copy()
+    context = context.merge(burn_5d,      on="home_team", how="left")
+    context = context.merge(burn_5d_away, on="away_team", how="left")
+    context["home_bullpen_burn_5d"] = context["home_bullpen_burn_5d"].fillna(0)
+    context["away_bullpen_burn_5d"] = context["away_bullpen_burn_5d"].fillna(0)
+
+    # Gassed flag: > 350 high-leverage pitches in 5 days
+    GASSED_THRESHOLD = 350
+    context["home_bp_gassed"] = (context["home_bullpen_burn_5d"] > GASSED_THRESHOLD).astype("int8")
+    context["away_bp_gassed"]  = (context["away_bullpen_burn_5d"] > GASSED_THRESHOLD).astype("int8")
+
+    gassed = context["home_bp_gassed"].sum() + context["away_bp_gassed"].sum()
+    print(f"  [bp5d] bullpen_burn_5d joined; {gassed} gassed-bullpen flags")
+    return context
 
 
 def enrich_slate(schedule: pd.DataFrame, today: str) -> pd.DataFrame:
-    """Join sticky SP + game metrics from the most recent FM rows."""
+    """Join sticky SP + game metrics from FM, then layer in live enrichments."""
     context = schedule.copy()
 
     if not FEATURE_MTX.exists():
         print("  [enrich] feature_matrix not found; SP metrics will be null")
-        return context
-
-    fm = pd.read_parquet(FEATURE_MTX)
-    fm["game_date"] = pd.to_datetime(fm["game_date"])
-    fm_today = fm[fm["game_date"].dt.strftime("%Y-%m-%d") == today]
-
-    want = [c for c in STICKY_SP_COLS + STICKY_GAME_COLS if c in fm.columns]
-
-    if fm_today.empty:
-        # Carry-forward: most recent per home_team for non-time-varying stats
-        print(f"  [enrich] no FM rows for {today}; carrying forward most-recent per team")
-        fm_recent = (fm.sort_values("game_date")
-                       .groupby("home_team", as_index=False)
-                       .last()[["home_team"] + want])
-        context = context.merge(fm_recent, on="home_team", how="left")
     else:
-        fm_slim = fm_today[["game_pk", "home_team"] + want].copy()
-        fm_slim = fm_slim.drop_duplicates("home_team", keep="last")
-        context = context.merge(fm_slim, on=["game_pk", "home_team"], how="left")
-    # fallback: match by home_team when game_pk merge didn't cover all rows
-    if want and "home_team" in context.columns:
-        null_mask = context[want[0]].isna()
-        if null_mask.any():
-            fm_by_team = fm_slim.drop(columns=["game_pk"], errors="ignore")
-            fill = context.loc[null_mask, ["home_team"]].merge(
-                fm_by_team, on="home_team", how="left")
-            for col in want:
-                if col in fill.columns:
-                    context.loc[null_mask, col] = fill[col].values
+        fm = pd.read_parquet(FEATURE_MTX)
+        fm["game_date"] = pd.to_datetime(fm["game_date"])
+        fm_today = fm[fm["game_date"].dt.strftime("%Y-%m-%d") == today]
 
-    # Umpire zone factor from FM
-    if "ump_k_above_avg" not in context.columns:
-        context["ump_k_above_avg"] = np.nan
+        # Only join SP performance stats (no starter names — those come from pull_today)
+        want = [c for c in STICKY_SP_COLS + STICKY_GAME_COLS if c in fm.columns]
 
-    # Flag batter sticky metrics as not available
-    for col in STICKY_BATTER_MISSING:
-        context[col] = np.nan  # stub; requires batter-grain external source
+        if fm_today.empty:
+            print(f"  [enrich] no FM rows for {today}; carrying forward SP stats per team")
+            fm_recent = (fm.sort_values("game_date")
+                           .groupby("home_team", as_index=False)
+                           .last()[["home_team"] + want])
+            # Away team SP stats: join by away_team using most-recent away rows
+            away_want = [c for c in want if c.startswith("away_sp_")]
+            home_want = [c for c in want if not c.startswith("away_sp_")]
+            fm_home_stats = fm_recent[["home_team"] + home_want]
+            fm_away_stats = (fm.sort_values("game_date")
+                               .groupby("away_team", as_index=False)
+                               .last()[["away_team"] + away_want]
+                             if away_want and "away_team" in fm.columns
+                             else pd.DataFrame())
+            context = context.merge(fm_home_stats, on="home_team", how="left")
+            if not fm_away_stats.empty:
+                context = context.merge(fm_away_stats, on="away_team", how="left",
+                                        suffixes=("", "_away_fm"))
+        else:
+            fm_slim = fm_today[["game_pk", "home_team"] + want].copy()
+            fm_slim = fm_slim.drop_duplicates("home_team", keep="last")
+            context = context.merge(fm_slim, on=["game_pk", "home_team"], how="left")
+            # Fallback for unmatched games
+            null_mask = context[want[0]].isna() if want else pd.Series(False, index=context.index)
+            if null_mask.any():
+                fm_by_team = fm_slim.drop(columns=["game_pk"], errors="ignore")
+                fill = context.loc[null_mask, ["home_team"]].merge(
+                    fm_by_team, on="home_team", how="left")
+                for col in want:
+                    if col in fill.columns:
+                        context.loc[null_mask, col] = fill[col].values
 
-    print(f"  [enrich] SP metrics joined for {len(context)} games")
-    if STICKY_BATTER_MISSING:
-        print(f"  [enrich] GAPS (not in local data): {STICKY_BATTER_MISSING}")
+        print(f"  [enrich] SP stats joined for {len(context)} games")
+
+    # Preserve starter names from pull_today (do not overwrite with FM)
+    # If FM carry-forward accidentally populated them, restore from schedule
+    for col in ("home_starter_name", "away_starter_name"):
+        if col in schedule.columns and col in context.columns:
+            from_api = schedule[col]
+            context[col] = np.where(from_api.fillna("") != "",
+                                    from_api, context[col].fillna(""))
+
+    # Live enrichments
+    context = enrich_live_adi(context)
+    context = enrich_ump_synergy(context)
+    context = enrich_bullpen_5d(context, today)
+
     return context
 
 

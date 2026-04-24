@@ -204,7 +204,20 @@ def run_all() -> None:
         if rc != 0:
             log.warning("run_today.py exited non-zero — check model_scores.csv for errors.")
 
-        # ── Step 6b: SGP picks (Script A correlation scorer) ──────────────
+        # ── Step 6b: SGP picks — v4.3 pipeline ────────────────────────────
+        # (a) Rebuild F5 SP labels from fresh Statcast (nightly retrain)
+        run_step("build_f5_sp_labels.py", "f5_labels")
+        # (b) Retrain script classifiers on updated labels
+        run_step("train_script_a2.py", "train_a2")
+        run_step("train_script_b.py",  "train_b")
+        run_step("train_script_c.py",  "train_c")
+        # (c) Build correlation matrix (fast, empirical r-values)
+        run_step("correlation_matrix.py --build", "corr_matrix")
+        # (d) Full SGP alpha report (script-model based)
+        run_step("sgp_alpha_report.py", "sgp_alpha")
+        # (e) Live edge report (copula + odds API, correlation-tax aware)
+        run_step("fetch_live_odds.py", "sgp_live_edge")
+        # (f) Legacy SGP scorer (kept for backward compatibility)
         run_step("score_sgp_today.py", "sgp_picks")
 
         # ── Step 7: Upload results to Supabase ────────────────────────────
@@ -291,7 +304,10 @@ def run_refresh(label: str, send_email: bool = False) -> None:
         if rc != 0:
             log.warning("picks step exited non-zero — check model_scores.csv for errors.")
 
-        # ── Step 9b: SGP picks (Script A correlation scorer) ─────────────────
+        # ── Step 9b: SGP picks — v4.3 ────────────────────────────────────────
+        run_step("correlation_matrix.py --build", "corr_matrix")
+        run_step("sgp_alpha_report.py", "sgp_alpha")
+        run_step("fetch_live_odds.py", "sgp_live_edge")
         run_step("score_sgp_today.py", "sgp_picks")
 
         # ── Step 10: Upload to Supabase ───────────────────────────────────────
