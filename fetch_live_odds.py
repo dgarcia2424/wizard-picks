@@ -1,5 +1,5 @@
 """
-fetch_live_odds.py — v4.3 SGP Edge Auditor (Correlation-Tax Aware).
+fetch_live_odds.py — v4.5 SGP Edge Auditor (Correlation-Tax Aware).
 
 Implements:
     SGP_Edge = P(Joint_Model) / P(Book_SGP) - 1
@@ -36,14 +36,15 @@ import pandas as pd
 
 _ROOT = Path(__file__).resolve().parent
 
-ODDS_DIR      = _ROOT / "data/statcast"
-KPROPS_DIR    = _ROOT / "data/statcast"
-CONTEXT_FILE  = _ROOT / "data/orchestrator/daily_context.parquet"
-CORR_MATRIX   = _ROOT / "data/corr/correlation_matrix.json"
-MODEL_A2      = _ROOT / "models/script_a2_v1.json"
-MODEL_B       = _ROOT / "models/script_b_v1.json"
-MODEL_C       = _ROOT / "models/script_c_v1.json"
-OUT_DIR       = _ROOT / "data/sgp"
+ODDS_DIR         = _ROOT / "data/statcast"
+KPROPS_DIR       = _ROOT / "data/statcast"
+CONTEXT_FILE     = _ROOT / "data/orchestrator/daily_context.parquet"
+CORR_MATRIX      = _ROOT / "data/corr/correlation_matrix.json"
+PERSISTENCE_DIR  = _ROOT / "data/batter_features"
+MODEL_A2         = _ROOT / "models/script_a2_v1.json"
+MODEL_B          = _ROOT / "models/script_b_v1.json"
+MODEL_C          = _ROOT / "models/script_c_v1.json"
+OUT_DIR          = _ROOT / "data/sgp"
 
 BOOK_CORR_TAX_STANDARD = 0.15   # DraftKings / FanDuel
 BOOK_CORR_TAX_SHARP    = 0.20   # Pinnacle
@@ -156,6 +157,36 @@ def _load_kprops(date_str: str) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def _load_persistence(date_str: str) -> pd.DataFrame:
+    """Load lineup_persistence_{date}.parquet; fall back to latest available."""
+    p = PERSISTENCE_DIR / f"lineup_persistence_{date_str}.parquet"
+    if p.exists():
+        return pd.read_parquet(p)
+    files = sorted(glob.glob(str(PERSISTENCE_DIR / "lineup_persistence_*.parquet")))
+    if files:
+        return pd.read_parquet(files[-1])
+    return pd.DataFrame()
+
+
+def _team_persistence(persistence: pd.DataFrame, team: str) -> tuple[float, int]:
+    """Return (avg_p4pa, n_high_sub_risk) for a given team abbreviation.
+
+    Matches on 'team' column (home_team or away_team in lineup file).
+    Returns (0.84, 5) defaults if data unavailable — conservative midpoint.
+    """
+    if persistence.empty or not team:
+        return 0.84, 5
+    team_col = next((c for c in persistence.columns if c.lower() in ("team", "home_team")), None)
+    if team_col is None:
+        return 0.84, 5
+    rows = persistence[persistence[team_col].str.upper() == team.upper()]
+    if rows.empty:
+        return 0.84, 5
+    avg_p  = float(rows["p_4plus_pa"].mean())
+    n_high = int(rows["high_sub_risk"].sum())
+    return avg_p, n_high
+
+
 def _load_context(date_str: str) -> pd.DataFrame:
     if not CONTEXT_FILE.exists():
         return pd.DataFrame()
@@ -223,11 +254,17 @@ def score_game_sgp(
     models: dict,
     book_corr_tax: float = BOOK_CORR_TAX_STANDARD,
     verbose: bool = False,
+    persistence: pd.DataFrame | None = None,
 ) -> list[dict]:
-    """Score all three scripts for one game. Returns list of result dicts."""
+    """Score all scripts for one game. Returns list of result dicts."""
 
     home = str(game_row.get("home_team", ""))
     away = str(game_row.get("away_team", ""))
+
+    # ── Lineup persistence (P(4+ PA) gate for Over TB SGP legs) ──────────
+    _persistence = persistence if persistence is not None else pd.DataFrame()
+    home_avg_p4pa, home_n_high_sub = _team_persistence(_persistence, home)
+    away_avg_p4pa, away_n_high_sub = _team_persistence(_persistence, away)
 
     # ── Market leg probabilities ──────────────────────────────────────────
     # Moneyline
@@ -329,17 +366,28 @@ def score_game_sgp(
         "p_book_sgp":       round(p_book_a2, 4),
         "sgp_edge":         round(edge_a2, 4),
         "corr_lift":        round(p_joint_a2_copula / p_indep_a2, 3) if p_indep_a2 > 0 else None,
-        "synergy_home":     round(synergy_home, 2),
-        "home_bp_gassed":   home_bp_gassed,
-        "adi_note":         adi_note,
-        "book_corr_tax":    book_corr_tax,
-        "action":           a2_action,
+        "synergy_home":         round(synergy_home, 2),
+        "home_bp_gassed":       home_bp_gassed,
+        "home_avg_p4pa":        round(home_avg_p4pa, 3),
+        "home_n_high_sub_risk": home_n_high_sub,
+        "adi_note":             adi_note,
+        "book_corr_tax":        book_corr_tax,
+        "action":               a2_action,
     })
 
     # ── Script B: Home_Score>=5 | Game_Over | Home_ML_Win ────────────────
     # Script B uses game total + ML (no pitcher K-prop needed) — always scoreable
     r_score_total = _rho("game_total_vs_home_score")
-    p_home_score5 = float(np.clip(p_home_win * 0.80, 0.05, 0.95))
+    p_home_score5_base = float(np.clip(p_home_win * 0.80, 0.05, 0.95))
+    # Lineup integrity adjustment: if home has >= 5 high-sub-risk batters,
+    # scoring ceiling is modestly reduced (blowout-era subs pull bats early).
+    lineup_integrity_note = ""
+    if home_n_high_sub >= 5:
+        integrity_factor = max(0.95, 1.0 - (home_n_high_sub - 4) * 0.01)
+        p_home_score5 = float(np.clip(p_home_score5_base * integrity_factor, 0.05, 0.95))
+        lineup_integrity_note = f"[lineup_integrity={integrity_factor:.2f} n_high={home_n_high_sub}]"
+    else:
+        p_home_score5 = p_home_score5_base
 
     p_joint_b_copula = _copula_joint_3way(
         p_home_score5, p_true_over, p_home_win,
@@ -347,32 +395,35 @@ def score_game_sgp(
     p_indep_b  = p_home_score5 * p_true_over * p_home_win
     p_book_b   = p_indep_b * (1.0 - book_corr_tax)
     edge_b     = (p_joint_b_copula / p_book_b - 1.0) if p_book_b > 0 else 0.0
-    # Boost Script B when away bullpen is gassed (late-innings run scoring elevated)
     b_note = " [away_BP_GASSED]" if away_bp_gassed else ""
+    if lineup_integrity_note:
+        b_note += f" {lineup_integrity_note}"
 
     results.append({
-        "game":             f"{away} @ {home}",
-        "home_team":        home,
-        "away_team":        away,
-        "script":           "B_Explosion",
-        "legs":             f"Home_Score>=5 | Game_Over_{close_total} | {home}_ML_Win{b_note}",
-        "home_sp":          home_sp,
-        "away_sp":          away_sp,
-        "close_total":      close_total,
-        "home_k_matched":   True,   # B doesn't use K-prop
-        "p_leg_home_score5":  round(p_home_score5, 4),
-        "p_leg_game_over":    round(p_true_over, 4),
-        "p_leg_home_win":     round(p_home_win, 4),
-        "p_joint_copula":     round(p_joint_b_copula, 4),
-        "p_joint_indep":      round(p_indep_b, 4),
-        "p_book_sgp":         round(p_book_b, 4),
-        "sgp_edge":           round(edge_b, 4),
-        "corr_lift":          round(p_joint_b_copula / p_indep_b, 3) if p_indep_b > 0 else None,
-        "synergy_home":       round(synergy_home, 2),
-        "away_bp_gassed":     away_bp_gassed,
-        "adi_note":           adi_note,
-        "book_corr_tax":      book_corr_tax,
-        "action":             "PLAY" if edge_b >= MIN_EDGE_DEFAULT else "pass",
+        "game":                 f"{away} @ {home}",
+        "home_team":            home,
+        "away_team":            away,
+        "script":               "B_Explosion",
+        "legs":                 f"Home_Score>=5 | Game_Over_{close_total} | {home}_ML_Win{b_note}",
+        "home_sp":              home_sp,
+        "away_sp":              away_sp,
+        "close_total":          close_total,
+        "home_k_matched":       True,
+        "p_leg_home_score5":    round(p_home_score5, 4),
+        "p_leg_game_over":      round(p_true_over, 4),
+        "p_leg_home_win":       round(p_home_win, 4),
+        "p_joint_copula":       round(p_joint_b_copula, 4),
+        "p_joint_indep":        round(p_indep_b, 4),
+        "p_book_sgp":           round(p_book_b, 4),
+        "sgp_edge":             round(edge_b, 4),
+        "corr_lift":            round(p_joint_b_copula / p_indep_b, 3) if p_indep_b > 0 else None,
+        "synergy_home":         round(synergy_home, 2),
+        "away_bp_gassed":       away_bp_gassed,
+        "home_avg_p4pa":        round(home_avg_p4pa, 3),
+        "home_n_high_sub_risk": home_n_high_sub,
+        "adi_note":             adi_note,
+        "book_corr_tax":        book_corr_tax,
+        "action":               "PLAY" if edge_b >= MIN_EDGE_DEFAULT else "pass",
     })
 
     # ── Script C: Game_Under | Both_SP_K>=3 | Close_Game(+1.5) ──────────
@@ -419,12 +470,16 @@ def score_game_sgp(
         "p_book_sgp":       round(p_book_c, 4),
         "sgp_edge":         round(edge_c, 4),
         "corr_lift":        round(p_joint_c_copula / p_indep_c, 3) if p_indep_c > 0 else None,
-        "synergy_home":     round(synergy_home, 2),
-        "synergy_away":     round(synergy_away, 2),
-        "home_bp_gassed":   home_bp_gassed,
-        "adi_note":         adi_note,
-        "book_corr_tax":    book_corr_tax,
-        "action":           c_action,
+        "synergy_home":         round(synergy_home, 2),
+        "synergy_away":         round(synergy_away, 2),
+        "home_bp_gassed":       home_bp_gassed,
+        "home_avg_p4pa":        round(home_avg_p4pa, 3),
+        "away_avg_p4pa":        round(away_avg_p4pa, 3),
+        "home_n_high_sub_risk": home_n_high_sub,
+        "away_n_high_sub_risk": away_n_high_sub,
+        "adi_note":             adi_note,
+        "book_corr_tax":        book_corr_tax,
+        "action":               c_action,
     })
 
     # ── Script D: F5_Under | Game_Over (Late Inning Divergence) ────────────
@@ -479,13 +534,17 @@ def score_game_sgp(
         "p_book_sgp":        round(p_book_d, 4),
         "sgp_edge":          round(edge_d, 4),
         "corr_lift":         round(p_joint_d_copula / p_indep_d, 3) if p_indep_d > 0 else None,
-        "synergy_home":      round(synergy_home, 2),
-        "home_bp_gassed":    home_bp_gassed,
-        "away_bp_gassed":    away_bp_gassed,
-        "adi_note":          adi_note,
-        "book_corr_tax":     book_corr_tax,
-        "d_note":            d_note,
-        "action":            d_action,
+        "synergy_home":         round(synergy_home, 2),
+        "home_bp_gassed":       home_bp_gassed,
+        "away_bp_gassed":       away_bp_gassed,
+        "home_avg_p4pa":        round(home_avg_p4pa, 3),
+        "away_avg_p4pa":        round(away_avg_p4pa, 3),
+        "home_n_high_sub_risk": home_n_high_sub,
+        "away_n_high_sub_risk": away_n_high_sub,
+        "adi_note":             adi_note,
+        "book_corr_tax":        book_corr_tax,
+        "d_note":               d_note,
+        "action":               d_action,
     })
 
     return results
@@ -504,11 +563,12 @@ def build_live_edge_report(
         print(f"  SGP Live Edge Report  [{date_str}]")
         print("=" * 64)
 
-    odds    = _load_odds(date_str)
-    kprops  = _load_kprops(date_str)
-    context = _load_context(date_str)
-    models  = _load_models()
-    corr    = _load_corr()
+    odds        = _load_odds(date_str)
+    kprops      = _load_kprops(date_str)
+    context     = _load_context(date_str)
+    persistence = _load_persistence(date_str)
+    models      = _load_models()
+    corr        = _load_corr()
 
     if odds.empty:
         print("  [ERROR] No odds data — run odds_current_pull.py first")
@@ -522,6 +582,11 @@ def build_live_edge_report(
             print(f"  K-props: {len(kprops)} rows ({date_str})")
         else:
             print(f"  K-props: none for {date_str} — using default p=0.45")
+        if not persistence.empty:
+            n_high = int(persistence["high_sub_risk"].sum()) if "high_sub_risk" in persistence.columns else 0
+            print(f"  Lineup persistence: {len(persistence)} batters  high_sub_risk={n_high}")
+        else:
+            print(f"  Lineup persistence: none — run p_complete_game.py first")
 
     all_records = []
     for _, game_row in odds.iterrows():
@@ -532,7 +597,8 @@ def build_live_edge_report(
             if not match.empty:
                 ctx_row = match.iloc[0]
 
-        records = score_game_sgp(game_row, ctx_row, kprops, models, verbose=False)
+        records = score_game_sgp(game_row, ctx_row, kprops, models,
+                                 verbose=False, persistence=persistence)
         all_records.extend(records)
 
     if not all_records:
@@ -587,11 +653,12 @@ def audit_game(home_team: str, away_starter: str, date_str: str) -> None:
     print(f"  DETAILED SGP AUDIT: {away_starter} @ {home_team}  [{date_str}]")
     print("=" * 64)
 
-    odds    = _load_odds(date_str)
-    kprops  = _load_kprops(date_str)
-    context = _load_context(date_str)
-    corr    = _load_corr()
-    models  = _load_models()
+    odds        = _load_odds(date_str)
+    kprops      = _load_kprops(date_str)
+    context     = _load_context(date_str)
+    persistence = _load_persistence(date_str)
+    corr        = _load_corr()
+    models      = _load_models()
 
     game_row = None
     if not odds.empty:
@@ -613,7 +680,8 @@ def audit_game(home_team: str, away_starter: str, date_str: str) -> None:
     for pair, meta in corr.items():
         print(f"    {pair}: r={meta['rho']:+.4f}  n={meta.get('n_obs','?')}")
 
-    records = score_game_sgp(game_row, ctx_row, kprops, models, verbose=True)
+    records = score_game_sgp(game_row, ctx_row, kprops, models,
+                             verbose=True, persistence=persistence)
 
     print(f"\n  Script Results:")
     for rec in records:
