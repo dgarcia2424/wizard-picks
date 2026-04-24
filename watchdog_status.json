@@ -1,40 +1,19 @@
 {
-  "last_run": "2026-04-24T05:30:48",
-  "elapsed_s": 46.3,
+  "last_run": "2026-04-24T07:30:02",
+  "elapsed_s": 0.6,
   "total_checks": 35,
-  "ok": 31,
-  "warn": 4,
+  "ok": 34,
+  "warn": 1,
   "fail": 0,
-  "repaired": 4,
+  "repaired": 1,
   "overall": "warn",
   "issues": [
     {
-      "name": "ump_assignments",
-      "status": "warn",
-      "message": "STALE: 13.5h old (limit 5h) \u2014 data/statcast/umpire_assignments_2026.parquet | REPAIRED via ump_pull.py",
-      "repaired": true,
-      "repair_cmd": "ump_pull.py"
-    },
-    {
       "name": "lineup_quality",
       "status": "warn",
-      "message": "STALE: 13.5h old (limit 5h) \u2014 data/statcast/lineup_quality_today.parquet | REPAIRED via build_lineup_quality.py",
+      "message": "STALE: 15.5h old (limit 5h) \u2014 data/statcast/lineup_quality_today.parquet | REPAIRED via build_lineup_quality.py",
       "repaired": true,
       "repair_cmd": "build_lineup_quality.py"
-    },
-    {
-      "name": "park_factors_2026",
-      "status": "warn",
-      "message": "STALE: 18.0h old (limit 5h) \u2014 data/statcast/park_factors_2026.parquet | REPAIRED via supplemental_pull.py --force-year 2026",
-      "repaired": true,
-      "repair_cmd": "supplemental_pull.py --force-year 2026"
-    },
-    {
-      "name": "standings_2026",
-      "status": "warn",
-      "message": "STALE: 18.0h old (limit 5h) \u2014 data/statcast/standings_2026.parquet | REPAIRED via supplemental_pull.py --force-year 2026",
-      "repaired": true,
-      "repair_cmd": "supplemental_pull.py --force-year 2026"
     }
   ]
 }

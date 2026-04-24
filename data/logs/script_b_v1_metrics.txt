@@ -1,0 +1,38 @@
+Script B: Offensive Explosion
+script: B_Explosion
+legs: Home_Score>=5 | Game_Total_Over | Home_ML_Win
+rows_train: 2407
+rows_valid: 2414
+auc: 0.5542363880212787
+logloss: 0.5245710035277794
+brier: 0.17086930572986603
+best_iter: 18
+base_rate_valid: 0.21996685998343
+corr_ratio: 2.2235917418296975
+p_joint_actual: 0.22339763534536403
+p_joint_indep: 0.10046701970638719
+
+                   feature     gain
+  home_lineup_xwoba_vs_rhp 7.629380
+          home_park_factor 7.601244
+           air_density_rho 7.216317
+away_bullpen_vulnerability 7.001908
+          roof_closed_flag 6.998923
+     home_pyth_win_pct_15g 6.515243
+        away_sp_whiff_pctl 6.450610
+           away_sp_ff_velo 6.428576
+     away_sp_xwoba_against 6.360085
+  home_lineup_xwoba_vs_lhp 6.293303
+            away_sp_gb_pct 5.984152
+                  wind_mph 5.899560
+        home_team_woba_15g 5.891925
+            away_sp_bb_pct 5.843834
+         ump_rpg_above_avg 5.796587
+      home_lineup_wrc_plus 5.599394
+   home_team_xwoba_off_15g 5.593963
+                    temp_f 5.499947
+  home_team_barrel_pct_15g 5.487064
+       away_bp_fatigue_72h 5.317401
+             away_sp_k_pct 5.224532
+       home_rolling_rd_15g 5.004831
+ home_catcher_framing_runs 4.703292
