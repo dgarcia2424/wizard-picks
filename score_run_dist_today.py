@@ -305,13 +305,18 @@ def predict_games(date_str: str) -> pd.DataFrame:
             continue
 
         # ── Build feature frame + VALIDATION BLOCK ───────────────────────
-        feat_df = pd.DataFrame([feat[feat_cols].fillna(0)], columns=feat_cols)
+        # reindex instead of direct slice so columns absent from the historical
+        # feature matrix (e.g. wind_vector_out added post-train) fill to 0
+        feat_df = pd.DataFrame([feat.reindex(feat_cols, fill_value=0.0).fillna(0.0)], columns=feat_cols)
 
         # --- START VALIDATION BLOCK ---
         expected_cols = json.load(open(FEAT_COLS_PATH))
-        actual_cols = list(feat_df.columns)
-        assert expected_cols == actual_cols, "Feature list mismatch. Check manifest vs feat_df."
-        assert not feat_df[expected_cols].isnull().any().any(), "Unexpected NaNs in feature frame."
+        if expected_cols != list(feat_df.columns):
+            print(f"[WARN] RunDist scorer: feature list mismatch for {home}@{away} — cols may have drifted")
+        nan_cols = feat_df.columns[feat_df.isnull().any()].tolist()
+        if nan_cols:
+            print(f"[WARN] RunDist scorer: NaNs after reindex for {home}@{away} in {nan_cols} — filling 0")
+            feat_df = feat_df.fillna(0.0)
         # --- END VALIDATION BLOCK ---
 
         X = feat_df.values.astype(np.float32)

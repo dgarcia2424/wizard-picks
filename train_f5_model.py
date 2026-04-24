@@ -734,7 +734,7 @@ def _flip_team_perspective(
 
     # ── Negate diff and matchup-edge columns ─────────────────────────────
     for c in feat_cols:
-        if c.endswith("_diff") or "matchup_edge" in c:
+        if (c.endswith("_diff") or "matchup_edge" in c) and c in df_flip.columns:
             df_flip[c] = -df_flip[c]
 
     # ── Flip label: away_cover = (away_runs >= home_runs) ────────────────

@@ -13,6 +13,14 @@ both_sp_k_vs_close_game
   r=+0.0436**  n=4821  CI=[0.0154, 0.0718]
   Dual-dominance keeps scores suppressed + balanced. Positive r -> Elite Duel script: Under + both K + RL cover.
 
+sp_k_vs_star_hitter_tb
+  r=+0.0264 (n.s.)  n=4748  CI=[-0.0020, 0.0548]
+  High-K SP on home side correlates with SP dominating, which means less bullpen usage and the home lineup gets full at-bats. Star hitter TB = home score proxy (same direction as game_total_vs_home_score but conditioned on home SP dominance).
+
 f5_total_vs_game_total
   r=+0.7402***  n=4821  CI=n/a
   F5 total strongly predicts full game total (0.56 fraction assumption validity)
+
+f5_under_vs_game_over_conditional
+  r=+0.1000 (n.s.)  n=0  CI=n/a
+  Seeded r=+0.10. In the gassed-bullpen + elite-SP universe, dominant SP produces F5 Under then exhausted BP surrenders late runs, flipping the normally-negative F5/game correlation.

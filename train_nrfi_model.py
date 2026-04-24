@@ -539,7 +539,7 @@ def _flip_team_perspective(
             swapped.add(hc); swapped.add(ac)
 
     for c in feat_cols:
-        if c.endswith("_diff") or "matchup_edge" in c:
+        if (c.endswith("_diff") or "matchup_edge" in c) and c in df_flip.columns:
             df_flip[c] = -df_flip[c]
 
     # NRFI is symmetric → label unchanged on flip.

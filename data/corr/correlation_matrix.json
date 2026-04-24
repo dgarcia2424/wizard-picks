@@ -1,6 +1,6 @@
 {
-  "version": "v4.3",
-  "built_date": "2026-04-24T10:02:04.189379",
+  "version": "v4.5",
+  "built_date": "2026-04-24T11:36:29.758837",
   "n_games": 4821,
   "pairs": {
     "sp_k_vs_team_total": {
@@ -45,12 +45,33 @@
       "description": "Both SP F5 Ks >= 3 vs Close Game (|margin| <= 1)",
       "rationale": "Dual-dominance keeps scores suppressed + balanced. Positive r -> Elite Duel script: Under + both K + RL cover."
     },
+    "sp_k_vs_star_hitter_tb": {
+      "rho": 0.0264,
+      "rho_spearman": 0.0304,
+      "pval": 0.068653,
+      "pval_spearman": 0.036201,
+      "n_obs": 4748,
+      "ci_95_lo": -0.002,
+      "ci_95_hi": 0.0548,
+      "p_b_given_high_a": 4.4778,
+      "p_b_given_low_a": 4.3456,
+      "direction_b": 1,
+      "description": "Home SP F5 Ks vs Home Team Total Score (star-hitter TB proxy)",
+      "rationale": "High-K SP on home side correlates with SP dominating, which means less bullpen usage and the home lineup gets full at-bats. Star hitter TB = home score proxy (same direction as game_total_vs_home_score but conditioned on home SP dominance)."
+    },
     "f5_total_vs_game_total": {
       "rho": 0.7402,
       "pval": 0.0,
       "n_obs": 4821,
       "description": "F5 Total vs Full Game Total",
       "rationale": "F5 total strongly predicts full game total (0.56 fraction assumption validity)"
+    },
+    "f5_under_vs_game_over_conditional": {
+      "rho": 0.1,
+      "pval": NaN,
+      "n_obs": 0,
+      "description": "F5 Under vs Full Game Over (conditioned: gassed BP + elite SP)",
+      "rationale": "Seeded r=+0.10. In the gassed-bullpen + elite-SP universe, dominant SP produces F5 Under then exhausted BP surrenders late runs, flipping the normally-negative F5/game correlation."
     }
   }
 }
