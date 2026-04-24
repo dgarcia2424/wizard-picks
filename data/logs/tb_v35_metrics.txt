@@ -1,0 +1,30 @@
+TB Stacker v3.5 leak-free metrics
+rows_train: 103104
+rows_valid: 9008
+auc: 0.5364147178291251
+logloss: 0.6051107864184053
+brier: 0.2073352336883545
+ap: 0.3322391784561267
+best_iter: 3
+base_rate_valid: 0.29484902309058614
+
+Feature importance (gain)
+              feature       gain  rank
+        batting_order 268.599457     1
+     exp_pa_heuristic 196.759949     2
+              stand_L 137.367935     3
+              stand_R 105.302940     4
+pull_side_wind_vector  60.623020     5
+              stand_S  23.114111     6
+             wind_mph  18.871893     7
+    platoon_same_hand  16.128241     8
+               temp_f  13.828838     9
+  velocity_decay_risk  13.582141    10
+             est_woba   8.410600    11
+              est_slg   8.357849    12
+                 woba   8.296000    13
+     lineup_fragility   8.001717    14
+               est_ba   6.912257    15
+                  slg   6.884943    16
+         wind_bearing   6.724146    17
+                   ba   6.486571    18

@@ -1,0 +1,30 @@
+K-Over v1 metrics
+rows_train: 2738
+rows_valid: 2733
+k_threshold: 5.5
+auc: 0.611909313529239
+logloss: 0.6602863470370736
+brier: 0.23382192850112915
+ap: 0.5119271992587633
+best_iter: 33
+base_rate_valid: 0.4039517014270033
+
+          feature      gain  rank
+    sp_whiff_pctl 10.560892     1
+         sp_k_pct  6.831591     2
+       sp_ff_velo  6.813870     3
+     sp_arm_angle  5.941533     4
+        sp_bb_pct  5.921746     5
+   opp_bat_k_rate  5.793393     6
+sp_k_bb_ratio_10d  5.749177     7
+     sp_1st_k_pct  5.670302     8
+  ump_k_above_avg  5.666576     9
+ home_park_factor  5.522626    10
+     sp_k_pct_10d  5.470011    11
+           temp_f  5.435300    12
+    sp_k_minus_bb  5.338212    13
+        sp_gb_pct  5.184319    14
+       sp_age_pit  5.096070    15
+    sp_bb_pct_10d  5.025183    16
+ sp_xwoba_against  4.964352    17
+    sp_k_bb_ratio  4.811462    18

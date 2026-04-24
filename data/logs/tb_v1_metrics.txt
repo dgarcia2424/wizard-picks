@@ -1,0 +1,28 @@
+TB Stacker v1 — validation metrics
+rows_train: 103104
+rows_valid: 9008
+auc: 0.6940179345372673
+logloss: 0.5541541728198546
+brier: 0.18754243850708008
+ap: 0.460765136613299
+best_iter: 58
+base_rate_valid: 0.29484902309058614
+
+Feature importance (gain)
+              feature       gain  rank
+             pa_count 274.422394     1
+        batting_order  41.898090     2
+             wind_mph   6.515834     3
+              est_slg   5.540874     4
+              stand_R   5.502900     5
+                   ba   5.410681     6
+pull_side_wind_vector   5.386640     7
+               est_ba   5.118709     8
+             est_woba   5.100163     9
+              stand_L   4.947313    10
+                  slg   4.775312    11
+              stand_S   4.771150    12
+         wind_bearing   4.679276    13
+                 woba   4.150960    14
+
+pull_side_wind_vector rank: 7

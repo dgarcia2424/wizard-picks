@@ -35,6 +35,9 @@ LINEUP_CACHE_DIR = OUTPUT_DIR / "lineup_cache"
 
 MLB_SCHEDULE_BASE = "https://statsapi.mlb.com/api/v1/schedule"
 MLB_LINESCORE_BASE = "https://statsapi.mlb.com/api/v1/game/{gamePk}/linescore"
+MLB_PEOPLE_BASE   = "https://statsapi.mlb.com/api/v1/people/{personId}"
+
+HANDEDNESS_CACHE_PATH = OUTPUT_DIR / "handedness_cache.json"
 
 REQUEST_TIMEOUT = 30
 SLEEP_BETWEEN_REQUESTS = 0.2  # seconds — be polite to the free API
@@ -376,6 +379,85 @@ def records_to_wide(records: list[dict]) -> pd.DataFrame:
     return df
 
 
+# ---------------------------------------------------------------------------
+# Handedness enrichment (MLB /people/{id} -> batSide.code)
+# ---------------------------------------------------------------------------
+
+def _load_handedness_cache() -> dict[str, str]:
+    if HANDEDNESS_CACHE_PATH.exists():
+        try:
+            return json.loads(HANDEDNESS_CACHE_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_handedness_cache(cache: dict[str, str]) -> None:
+    try:
+        HANDEDNESS_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        HANDEDNESS_CACHE_PATH.write_text(json.dumps(cache, sort_keys=True),
+                                          encoding="utf-8")
+    except Exception as exc:
+        print(f"[handedness] cache save failed: {exc}")
+
+
+def fetch_handedness(player_id: int,
+                      cache: dict[str, str] | None = None) -> str:
+    """Return bat-side code: 'L' | 'R' | 'S' | '' (unknown).
+
+    Hits MLB Stats API /people/{id} for a single player and parses
+    batSide.code. Uses the provided cache dict in-memory; caller is
+    responsible for persisting after the batch.
+    """
+    key = str(int(player_id))
+    if cache is not None and key in cache:
+        return cache[key]
+    url = MLB_PEOPLE_BASE.format(personId=key)
+    try:
+        resp = requests.get(url, timeout=REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+        people = data.get("people") or []
+        code = ""
+        if people:
+            code = (people[0].get("batSide") or {}).get("code", "") or ""
+        if cache is not None:
+            cache[key] = code
+        return code
+    except Exception as exc:
+        print(f"[handedness] fetch failed for {player_id}: {exc}")
+        if cache is not None:
+            cache.setdefault(key, "")
+        return ""
+
+
+def enrich_long_with_handedness(long_df: pd.DataFrame) -> pd.DataFrame:
+    """Attach a 'stand' column to a lineups long DataFrame.
+
+    Uses a persistent JSON cache to avoid re-hitting /people/{id} for
+    previously-seen players (handedness is effectively static).
+    """
+    if long_df.empty or "player_id" not in long_df.columns:
+        long_df["stand"] = ""
+        return long_df
+
+    cache = _load_handedness_cache()
+    unique_ids = sorted({int(p) for p in long_df["player_id"].dropna().unique()})
+    missing = [pid for pid in unique_ids if str(pid) not in cache]
+    print(f"[handedness] {len(unique_ids)} unique players; "
+          f"{len(missing)} need API fetch.")
+    for pid in missing:
+        fetch_handedness(pid, cache=cache)
+        time.sleep(SLEEP_BETWEEN_REQUESTS)
+    _save_handedness_cache(cache)
+
+    long_df = long_df.copy()
+    long_df["stand"] = long_df["player_id"].astype("Int64").map(
+        lambda p: cache.get(str(int(p)), "") if pd.notna(p) else ""
+    )
+    return long_df
+
+
 def records_to_long(records: list[dict]) -> pd.DataFrame:
     """Build the long DataFrame (one row per lineup slot)."""
     long_rows = []
@@ -403,7 +485,10 @@ def records_to_long(records: list[dict]) -> pd.DataFrame:
         "game_date", "game_pk", "side", "team",
         "batting_order", "player_id", "player_name", "position",
     ]
-    return pd.DataFrame(long_rows, columns=long_cols) if long_rows else pd.DataFrame(columns=long_cols)
+    df = pd.DataFrame(long_rows, columns=long_cols) if long_rows else pd.DataFrame(columns=long_cols)
+    # Enrich with handedness (cached; hits MLB /people/{id} only for new ids).
+    df = enrich_long_with_handedness(df)
+    return df
 
 
 # ---------------------------------------------------------------------------

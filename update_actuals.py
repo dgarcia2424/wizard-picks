@@ -81,6 +81,9 @@ def _load_backtest_preds() -> pd.DataFrame:
 
 def _load_actuals() -> pd.DataFrame:
     if not _ACTUALS.exists():
+        print(f"  [ERROR] actuals source missing: {_ACTUALS}. "
+              f"Upstream drift_monitor.refresh_actuals() never ran. "
+              f"No residuals can be computed until this is populated.")
         return pd.DataFrame()
     a = pd.read_parquet(_ACTUALS)
     a["date"] = pd.to_datetime(a["game_date"]).dt.strftime("%Y-%m-%d")
