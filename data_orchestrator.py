@@ -329,7 +329,14 @@ def enrich_live_adi(context: pd.DataFrame, game_hour_local: int = 19) -> pd.Data
 WIDE_ZONE_THRESHOLD  = 0.30   # ump_k_above_avg > this → wide zone
 STUFF_PLUS_THRESHOLD = 0.70   # whiff_pctl > this → stuff+ starter
 
+# ABS Challenge Ceiling + Catcher Framing (v4.5)
+ABS_CHALLENGE_PCTILE_THRESHOLD = 0.60  # opposing team challenge pctile cutoff
+ABS_CHALLENGE_K_PENALTY        = 0.30  # fraction to reduce ump_k_synergy
+FRAMING_ELITE_SZ_RATE          = 0.68  # shadow_zone_strike_rate > this = elite framer
+FRAMING_K_BONUS                = 1.05  # multiplicative K-anchor bonus for elite framers
+
 _UMP_FEATURES_CACHE: pd.DataFrame | None = None
+_ABS_TEAM_CACHE:     pd.DataFrame | None = None
 
 
 def _load_ump_features() -> pd.DataFrame:
@@ -491,6 +498,140 @@ def enrich_bullpen_5d(context: pd.DataFrame, today: str) -> pd.DataFrame:
     return context
 
 
+# ════════════════════════════════════════════════════════════════════════
+# STEP 3d — ABS Challenge Ceiling + Catcher Framing Synergy (v4.5)
+# ════════════════════════════════════════════════════════════════════════
+
+def _build_team_abs_challenge_rates() -> pd.DataFrame:
+    """Per-team ABS challenge potential from statcast_2026.
+
+    Proxy: fraction of called strikes against a team (as batters) that land
+    outside the strict zone. Higher fraction = hitters have more ABS overturn
+    opportunities = wider challenge ceiling on ump K synergy.
+    Returns: DataFrame[team, abs_challenge_rate, abs_challenge_pctile]
+    """
+    global _ABS_TEAM_CACHE
+    if _ABS_TEAM_CACHE is not None:
+        return _ABS_TEAM_CACHE
+
+    sc_path = _ROOT / "data/statcast/statcast_2026.parquet"
+    empty = pd.DataFrame(columns=["team", "abs_challenge_rate", "abs_challenge_pctile"])
+    if not sc_path.exists():
+        return empty
+
+    needed = ["home_team", "away_team", "inning_topbot", "description",
+              "plate_x", "plate_z", "sz_top", "sz_bot"]
+    try:
+        sc = pd.read_parquet(sc_path, columns=needed)
+    except Exception:
+        try:
+            sc = pd.read_parquet(sc_path)
+            sc = sc[[c for c in needed if c in sc.columns]]
+        except Exception:
+            return empty
+
+    if "description" not in sc.columns:
+        return empty
+
+    cs = sc[sc["description"] == "called_strike"].copy()
+    if cs.empty:
+        return empty
+
+    if "inning_topbot" in cs.columns:
+        cs["batting_team"] = np.where(
+            cs["inning_topbot"] == "Bot", cs["home_team"], cs["away_team"])
+    elif "home_team" in cs.columns:
+        cs["batting_team"] = cs["home_team"]
+    else:
+        return empty
+
+    for col in ("plate_x", "plate_z", "sz_top", "sz_bot"):
+        if col in cs.columns:
+            cs[col] = pd.to_numeric(cs[col], errors="coerce")
+
+    if not all(c in cs.columns for c in ["plate_x", "plate_z", "sz_top", "sz_bot"]):
+        return empty
+
+    cs["outside_zone"] = (
+        (cs["plate_x"].abs() > 0.83) |
+        (cs["plate_z"] > cs["sz_top"] + 0.05) |
+        (cs["plate_z"] < cs["sz_bot"] - 0.05)
+    ).astype(float)
+
+    agg = (cs.groupby("batting_team")
+             .agg(total_cs=("outside_zone", "count"),
+                  outside_cs=("outside_zone", "sum"))
+             .reset_index())
+    agg["abs_challenge_rate"] = agg["outside_cs"] / agg["total_cs"].clip(lower=1)
+    agg["abs_challenge_pctile"] = agg["abs_challenge_rate"].rank(pct=True)
+    agg = agg.rename(columns={"batting_team": "team"})
+    _ABS_TEAM_CACHE = agg[["team", "abs_challenge_rate", "abs_challenge_pctile"]]
+    return _ABS_TEAM_CACHE
+
+
+def enrich_abs_framing(context: pd.DataFrame) -> pd.DataFrame:
+    """ABS Challenge Ceiling + Catcher Framing Synergy.
+
+    Challenge Ceiling: if the away lineup has >60th pctile ABS challenge
+    potential, reduce ump_k_synergy_home by 30% — the wide-zone advantage is
+    partially reclaimed when hitters can challenge borderline called strikes.
+
+    Catcher Framing: if home catcher shadow_zone_strike_rate is elite (>68%),
+    apply +1.05x multiplier to ump_k_synergy_home.
+
+    Net range: 0.84x (full penalty, no framing) to 1.26x (1.2x synergy + framing).
+    """
+    context = context.copy().reset_index(drop=True)
+
+    for col in ("ump_k_synergy_home", "ump_k_synergy_away"):
+        if col not in context.columns:
+            context[col] = 1.0
+
+    n_penalized = 0
+    abs_rates = _build_team_abs_challenge_rates()
+    if not abs_rates.empty and "away_team" in context.columns:
+        away_abs = abs_rates.rename(columns={"team": "away_team",
+                                              "abs_challenge_pctile": "_away_abs_pctile"})
+        ctx_m = context.merge(away_abs[["away_team", "_away_abs_pctile"]],
+                              on="away_team", how="left")
+        high_challenge = (ctx_m["_away_abs_pctile"].fillna(0).values
+                          > ABS_CHALLENGE_PCTILE_THRESHOLD)
+        context["away_abs_challenge_pctile"] = ctx_m["_away_abs_pctile"].values
+        syn = context["ump_k_synergy_home"].values.copy()
+        syn[high_challenge] = np.round(syn[high_challenge] * (1.0 - ABS_CHALLENGE_K_PENALTY), 3)
+        context["ump_k_synergy_home"] = syn
+        n_penalized = int(high_challenge.sum())
+
+    n_framing = 0
+    framing_path = _ROOT / "data/statcast/catcher_framing_2026.parquet"
+    if framing_path.exists():
+        try:
+            framing = pd.read_parquet(framing_path)
+            rate_col = next((c for c in framing.columns
+                             if "shadow" in c.lower() or "framing" in c.lower()), None)
+            team_col = next((c for c in framing.columns
+                             if c.lower() in ("team", "home_team")), None)
+            if rate_col and team_col and "home_team" in context.columns:
+                framing = framing.rename(columns={team_col: "home_team",
+                                                   rate_col: "_catcher_sz_rate"})
+                framing = (framing.groupby("home_team")["_catcher_sz_rate"]
+                                  .mean().reset_index())
+                ctx_fr = context.merge(framing, on="home_team", how="left")
+                elite = (ctx_fr["_catcher_sz_rate"].fillna(0).values
+                         > FRAMING_ELITE_SZ_RATE)
+                context["catcher_framing_rate"] = ctx_fr["_catcher_sz_rate"].values
+                syn = context["ump_k_synergy_home"].values.copy()
+                syn[elite] = np.round(syn[elite] * FRAMING_K_BONUS, 3)
+                context["ump_k_synergy_home"] = syn
+                n_framing = int(elite.sum())
+        except Exception as exc:
+            print(f"  [framing] load failed: {exc}")
+
+    print(f"  [abs]  ABS ceiling applied to {n_penalized} games; "
+          f"framing bonus to {n_framing} games")
+    return context
+
+
 def enrich_slate(schedule: pd.DataFrame, today: str) -> pd.DataFrame:
     """Join sticky SP + game metrics from FM, then layer in live enrichments."""
     context = schedule.copy()
@@ -550,6 +691,7 @@ def enrich_slate(schedule: pd.DataFrame, today: str) -> pd.DataFrame:
     # Live enrichments
     context = enrich_live_adi(context)
     context = enrich_ump_synergy(context)
+    context = enrich_abs_framing(context)
     context = enrich_bullpen_5d(context, today)
 
     return context

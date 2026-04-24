@@ -205,8 +205,10 @@ def run_all() -> None:
         if rc != 0:
             log.warning("run_today.py exited non-zero — check model_scores.csv for errors.")
 
-        # ── Step 6b: SGP picks — v4.3 pipeline ────────────────────────────
-        # (a) Rebuild F5 SP labels from fresh Statcast (nightly retrain)
+        # ── Step 6b: SGP picks — v4.5 pipeline ────────────────────────────
+        # (a) Lineup persistence (sub-risk gate for Over TB props)
+        run_step(f"p_complete_game.py --date {date.today().isoformat()}", "lineup_persist")
+        # (b) Rebuild F5 SP labels from fresh Statcast (nightly retrain)
         run_step("build_f5_sp_labels.py", "f5_labels")
         # (b) Retrain script classifiers on updated labels
         run_step("train_script_a2.py", "train_a2")
@@ -306,7 +308,8 @@ def run_refresh(label: str, send_email: bool = False) -> None:
         if rc != 0:
             log.warning("picks step exited non-zero — check model_scores.csv for errors.")
 
-        # ── Step 9b: SGP picks — v4.4 ────────────────────────────────────────
+        # ── Step 9b: SGP picks — v4.5 ────────────────────────────────────────
+        run_step(f"p_complete_game.py --date {date.today().isoformat()}", "lineup_persist")
         run_step("correlation_matrix.py --build", "corr_matrix")
         run_step("rebuild_bullpen_burn_2026.py", "bullpen_burn")
         run_step("fetch_live_odds.py", "sgp_live_edge")

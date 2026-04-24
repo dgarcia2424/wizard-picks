@@ -312,6 +312,7 @@ def assemble(years: list[int], dry_run: bool = False) -> pd.DataFrame:
     base = _compute_exp_pa_heuristic(base)
     base = _join_bullpen_burn(base)
     base = _compute_thermal_expansion(base)
+    base = _compute_rolling_xwoba_delta(base, years)
 
     # 4a) Batter Statcast percentiles (prior-season leakage-safe). Join (year-1, player_id).
     # Columns: hard_hit_percent, sprint_speed, chase_percent, bat_speed, squared_up_rate, whiff_percent
@@ -576,6 +577,106 @@ def _compute_thermal_expansion(df: pd.DataFrame) -> pd.DataFrame:
     alt_factor = 1.0 + alt / 5280.0
     df["altitude_ft"] = alt
     df["thermal_expansion"] = (temp - 72.0) * alt_factor
+    return df
+
+
+_XWOBA_REGRESSION_THRESHOLD = 0.100   # wOBA - xwOBA delta to flag regression candidate
+
+
+def _compute_rolling_xwoba_delta(df: pd.DataFrame, years: list[int]) -> pd.DataFrame:
+    """Compute rolling 7-day xwOBA delta per batter.
+
+    delta = actual_woba_7d - xwoba_7d
+    regression_candidate = 1 if delta > 0.100 (primary anchor for UNDER TB props).
+
+    Sources game-grain estimated_woba and woba_value from statcast per year.
+    Degrades to null columns if statcast is unavailable.
+    """
+    import numpy as np
+
+    df["rolling_7d_xwoba_delta"] = np.nan
+    df["regression_candidate"]   = np.int8(0)
+
+    needed = ["batter", "game_pk", "game_date",
+              "estimated_woba_using_speedangle", "woba_value", "woba_denom"]
+    frames = []
+    for yr in years:
+        sc_path = STATCAST_DIR / f"statcast_{yr}.parquet"
+        if not sc_path.exists():
+            continue
+        try:
+            sc = pd.read_parquet(sc_path, columns=needed)
+        except Exception:
+            try:
+                sc = pd.read_parquet(sc_path)
+                sc = sc[[c for c in needed if c in sc.columns]]
+            except Exception:
+                continue
+        if "batter" not in sc.columns:
+            continue
+        sc["game_date"] = pd.to_datetime(sc["game_date"])
+        frames.append(sc)
+
+    if not frames:
+        return df
+
+    sc_all = pd.concat(frames, ignore_index=True)
+    sc_all["xwoba_val"] = pd.to_numeric(
+        sc_all.get("estimated_woba_using_speedangle"), errors="coerce")
+    sc_all["woba_val"]  = pd.to_numeric(sc_all.get("woba_value"),  errors="coerce")
+    sc_all["woba_denom"] = pd.to_numeric(sc_all.get("woba_denom"), errors="coerce")
+
+    # Aggregate to per-batter per-game (PA-weighted means)
+    pa = sc_all[sc_all["woba_denom"].fillna(0) > 0].copy()
+    if pa.empty:
+        return df
+
+    game_grain = (pa.groupby(["batter", "game_date"])
+                    .agg(xwoba_game=("xwoba_val", "mean"),
+                         woba_game=("woba_val",   "mean"),
+                         n_pa=("woba_denom",      "sum"))
+                    .reset_index())
+    game_grain = game_grain.sort_values(["batter", "game_date"])
+
+    # 7-day rolling averages per batter
+    rolling_rows = []
+    for batter_id, grp in game_grain.groupby("batter"):
+        grp = grp.set_index("game_date").sort_index()
+        full_idx = pd.date_range(grp.index.min(), grp.index.max(), freq="D")
+        grp = grp.reindex(full_idx)
+        xw7 = grp["xwoba_game"].rolling("7D", min_periods=1).mean()
+        w7  = grp["woba_game"].rolling("7D",  min_periods=1).mean()
+        delta7 = w7 - xw7
+        orig = game_grain[game_grain["batter"] == batter_id]["game_date"]
+        for gd in orig:
+            if gd in delta7.index:
+                rolling_rows.append({
+                    "player_id":              int(batter_id),
+                    "game_date":              gd,
+                    "rolling_7d_xwoba_delta": float(delta7.loc[gd])
+                    if not pd.isna(delta7.loc[gd]) else np.nan,
+                })
+
+    if not rolling_rows:
+        return df
+
+    roll_df = pd.DataFrame(rolling_rows)
+    roll_df["game_date"] = pd.to_datetime(roll_df["game_date"])
+
+    # Join onto base matrix
+    df["game_date"] = pd.to_datetime(df["game_date"])
+    df["player_id"] = pd.to_numeric(df["player_id"], errors="coerce")
+    before = len(df)
+    df = df.merge(roll_df, on=["player_id", "game_date"], how="left")
+    assert len(df) == before, "rolling xwOBA delta merge expanded rows"
+
+    df["regression_candidate"] = (
+        df["rolling_7d_xwoba_delta"].fillna(0) > _XWOBA_REGRESSION_THRESHOLD
+    ).astype("int8")
+
+    n_reg = df["regression_candidate"].sum()
+    cov   = df["rolling_7d_xwoba_delta"].notna().mean()
+    print(f"  [xwoba_delta] coverage={cov:.1%}  regression_candidates={n_reg:,}")
     return df
 
 

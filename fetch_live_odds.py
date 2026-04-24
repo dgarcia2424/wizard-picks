@@ -50,6 +50,10 @@ BOOK_CORR_TAX_SHARP    = 0.20   # Pinnacle
 MIN_EDGE_DEFAULT       = 0.05
 F5_FRACTION            = 0.571  # empirical from correlation_matrix (was 0.56)
 
+# Script D gate thresholds (v4.5)
+BP_BURN_5D_75TH   = 280   # approx 75th pctile of home_bullpen_burn_5d (2026)
+STUFF_ELITE_PCTILE = 0.70  # whiff_pctl > this = elite SP (Stuff+ proxy)
+
 
 # ── American odds helpers ─────────────────────────────────────────────────────
 def _implied(odds: float) -> float:
@@ -421,6 +425,67 @@ def score_game_sgp(
         "adi_note":         adi_note,
         "book_corr_tax":    book_corr_tax,
         "action":           c_action,
+    })
+
+    # ── Script D: F5_Under | Game_Over (Late Inning Divergence) ────────────
+    # GATE: (home OR away bullpen_burn_5d > 75th pctile) AND elite SP
+    # Thesis: dominant SP suppresses F5 total; gassed bullpen surrenders
+    # late runs → Full Game Over fires after the F5 result is set.
+    # Books price F5_Under and Game_Over as negatively correlated (~r=-0.74).
+    # In the gassed-bullpen + elite-SP universe, the relationship flips toward
+    # mildly positive (r≈+0.10), creating structural alpha.
+    home_burn_5d = float(ctx_row.get("home_bullpen_burn_5d") or 0) if ctx_row is not None else 0.0
+    away_burn_5d = float(ctx_row.get("away_bullpen_burn_5d") or 0) if ctx_row is not None else 0.0
+    home_whiff   = float(ctx_row.get("home_sp_whiff_pctl")   or 0) if ctx_row is not None else 0.0
+    away_whiff   = float(ctx_row.get("away_sp_whiff_pctl")   or 0) if ctx_row is not None else 0.0
+
+    bullpen_gassed_d = (home_burn_5d > BP_BURN_5D_75TH) or (away_burn_5d > BP_BURN_5D_75TH)
+    elite_sp_d       = (home_whiff > STUFF_ELITE_PCTILE) or (away_whiff > STUFF_ELITE_PCTILE)
+    script_d_gate    = bullpen_gassed_d and elite_sp_d
+
+    if script_d_gate:
+        r_f5u_go = _rho("f5_under_vs_game_over_conditional") or 0.10
+        p_joint_d_copula = _copula_joint_2way(p_f5_under, p_true_over, r_f5u_go)
+        p_indep_d = p_f5_under * p_true_over
+        p_book_d  = p_indep_d * (1.0 - book_corr_tax)
+        edge_d    = (p_joint_d_copula / p_book_d - 1.0) if p_book_d > 0 else 0.0
+        d_action  = "PLAY" if edge_d >= MIN_EDGE_DEFAULT else "pass"
+        d_note    = (f"bp5d_home={home_burn_5d:.0f} away={away_burn_5d:.0f} | "
+                     f"whiff_home={home_whiff:.2f} away={away_whiff:.2f}")
+    else:
+        p_joint_d_copula = p_indep_d = p_book_d = edge_d = 0.0
+        d_action = "GATE"
+        d_note   = ("gate_not_met: "
+                    + ("bullpen_ok" if not bullpen_gassed_d else "")
+                    + ("sp_not_elite" if not elite_sp_d else ""))
+
+    results.append({
+        "game":              f"{away} @ {home}",
+        "home_team":         home,
+        "away_team":         away,
+        "script":            "D_LateDivergence",
+        "legs":              f"F5_Under_{close_total * F5_FRACTION:.1f} | Game_Over_{close_total}",
+        "home_sp":           home_sp,
+        "away_sp":           away_sp,
+        "close_total":       close_total,
+        "home_k_matched":    True,
+        "script_d_gate":     script_d_gate,
+        "home_burn_5d":      round(home_burn_5d, 1),
+        "away_burn_5d":      round(away_burn_5d, 1),
+        "p_leg_f5_under":    round(p_f5_under, 4),
+        "p_leg_game_over":   round(p_true_over, 4),
+        "p_joint_copula":    round(p_joint_d_copula, 4),
+        "p_joint_indep":     round(p_indep_d, 4),
+        "p_book_sgp":        round(p_book_d, 4),
+        "sgp_edge":          round(edge_d, 4),
+        "corr_lift":         round(p_joint_d_copula / p_indep_d, 3) if p_indep_d > 0 else None,
+        "synergy_home":      round(synergy_home, 2),
+        "home_bp_gassed":    home_bp_gassed,
+        "away_bp_gassed":    away_bp_gassed,
+        "adi_note":          adi_note,
+        "book_corr_tax":     book_corr_tax,
+        "d_note":            d_note,
+        "action":            d_action,
     })
 
     return results

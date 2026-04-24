@@ -70,6 +70,16 @@ PAIRS = {
         "col_b": "close_flag",         # 1 if |margin| <= 1
         "direction_b": 1,
     },
+    "sp_k_vs_star_hitter_tb": {
+        "description": "Home SP F5 Ks vs Home Team Total Score (star-hitter TB proxy)",
+        "rationale":   ("High-K SP on home side correlates with SP dominating, which "
+                        "means less bullpen usage and the home lineup gets full at-bats. "
+                        "Star hitter TB = home score proxy (same direction as game_total_vs_home_score "
+                        "but conditioned on home SP dominance)."),
+        "col_a": "home_sp_k_f5",
+        "col_b": "home_score",
+        "direction_b": 1,
+    },
 }
 
 
@@ -303,8 +313,23 @@ def build_correlation_matrix(verbose: bool = True) -> dict:
             print(f"    Empirical F5/Game fraction (median): {f5_fraction:.3f}  "
                   f"(model uses 0.56)")
 
+    # Seed Script D conditional pair — r in the gassed-bullpen + elite-SP universe.
+    # Cannot be computed from unconditional data; set from domain reasoning:
+    # F5_Under and Full_Game_Over are normally anti-correlated (r≈-0.74 via
+    # f5_total_vs_game_total), but after conditioning on gassed bullpen, late
+    # runs reverse the relationship. Seeded at r=+0.10 pending conditional backtest.
+    result_pairs.setdefault("f5_under_vs_game_over_conditional", {
+        "rho":         0.10,
+        "pval":        float("nan"),
+        "n_obs":       0,
+        "description": "F5 Under vs Full Game Over (conditioned: gassed BP + elite SP)",
+        "rationale":   ("Seeded r=+0.10. In the gassed-bullpen + elite-SP universe, "
+                        "dominant SP produces F5 Under then exhausted BP surrenders "
+                        "late runs, flipping the normally-negative F5/game correlation."),
+    })
+
     matrix = {
-        "version":    "v4.3",
+        "version":    "v4.5",
         "built_date": pd.Timestamp.now().isoformat(),
         "n_games":    int(len(sl)),
         "pairs":      result_pairs,
