@@ -390,8 +390,10 @@ def enrich_ump_synergy(context: pd.DataFrame) -> pd.DataFrame:
                     if pred_col in merged_pred.columns:
                         if col not in context.columns:
                             context[col] = np.nan
-                        context[col] = context[col].fillna(
-                            merged_pred[pred_col].values)
+                        fill_vals = pd.array(
+                            merged_pred[pred_col].to_numpy(dtype=object, na_value=None)
+                        )
+                        context[col] = context[col].fillna(pd.Series(fill_vals))
                 n_filled = context.get("ump_hp_id", pd.Series()).notna().sum()
                 print(f"  [ump]  rotation predictor filled {n_filled}/{len(context)} HP assignments")
         except Exception as exc:
