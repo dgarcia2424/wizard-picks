@@ -1,4 +1,4 @@
-Correlation Matrix — v4.3
+Correlation Matrix â€” v4.3
 ============================================================
 
 sp_k_vs_team_total

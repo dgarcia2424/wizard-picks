@@ -1,2 +1,4 @@
 date,total_picks,picks_with_result,correct,accuracy_pct,actionable_picks,actionable_correct,actionable_accuracy_pct
 2026-04-21,240,240,120,50.0,29,16,55.172413793103445
+2026-04-22,130,130,77,59.23076923076923,18,11,61.111111111111114
+2026-04-23,80,80,40,50.0,8,3,37.5
