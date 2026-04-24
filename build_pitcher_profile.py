@@ -752,10 +752,79 @@ def build_buyllow_signals(verbose: bool = True) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# SECTION 7 — ASSEMBLE FINAL PROFILE
+# SECTION 7 — TTO SENSITIVITY
 # ---------------------------------------------------------------------------
 
-def assemble_profiles(vel, dist, trail, flags, stuff, age_arm, buyllow,
+def build_tto_sensitivity(verbose: bool = True) -> pd.DataFrame:
+    """
+    Times-Through-Order (TTO) sensitivity from raw Statcast.
+
+    Uses n_thruorder_pitcher (1, 2, 3+) to measure per-pitcher K% and xwOBA
+    degradation as the lineup sees them more. Grain: one row per pitcher.
+
+    Outputs:
+        tto1_k_pct, tto2_k_pct, tto3_k_pct
+        tto1_xwoba, tto2_xwoba, tto3_xwoba
+        tto_k_decay      : K%_TTO1 - K%_TTO3  (positive = pitcher declines)
+        tto_xwoba_climb  : xwOBA_TTO3 - xwOBA_TTO1  (positive = gets harder to retire)
+        tto_cliff_flag   : 1 if tto_k_decay > 0.05 (material cliff)
+    """
+    if verbose:
+        print("  [TTO] Building TTO sensitivity from 2026 Statcast ...")
+
+    need = ["pitcher", "player_name", "n_thruorder_pitcher",
+            "events", "estimated_woba_using_speedangle", "woba_denom"]
+    try:
+        sc = _load_statcast(2026, need)
+    except Exception as exc:
+        print(f"    [warn] TTO: could not load statcast — {exc}")
+        return pd.DataFrame(columns=["pitcher", "tto_k_decay", "tto_xwoba_climb",
+                                      "tto_cliff_flag"])
+
+    sc = sc.dropna(subset=["n_thruorder_pitcher", "woba_denom"])
+    sc = sc[sc["woba_denom"] > 0]
+    sc["tto"]      = sc["n_thruorder_pitcher"].clip(upper=3).astype(int)
+    sc["is_k"]     = sc["events"].isin(["strikeout", "strikeout_double_play"]).astype(int)
+    sc["xwoba_val"] = pd.to_numeric(sc["estimated_woba_using_speedangle"], errors="coerce")
+
+    rows = []
+    for pitcher_id, grp in sc.groupby("pitcher"):
+        row = {"pitcher": pitcher_id}
+        for tto in (1, 2, 3):
+            t = grp[grp["tto"] == tto]
+            n = len(t)
+            if n < 10:
+                row[f"tto{tto}_k_pct"]  = float("nan")
+                row[f"tto{tto}_xwoba"]  = float("nan")
+                row[f"tto{tto}_n"]      = n
+            else:
+                row[f"tto{tto}_k_pct"] = t["is_k"].sum() / n
+                row[f"tto{tto}_xwoba"] = t["xwoba_val"].mean()
+                row[f"tto{tto}_n"]     = n
+        rows.append(row)
+
+    tto = pd.DataFrame(rows)
+    if tto.empty:
+        return tto
+
+    tto["tto_k_decay"]     = tto["tto1_k_pct"] - tto["tto3_k_pct"]
+    tto["tto_xwoba_climb"] = tto["tto3_xwoba"] - tto["tto1_xwoba"]
+    tto["tto_cliff_flag"]  = (tto["tto_k_decay"] > 0.05).astype("int8")
+
+    n_cliff = tto["tto_cliff_flag"].sum()
+    if verbose:
+        print(f"      {len(tto)} pitchers | cliff (K-decay>5%): {n_cliff}")
+
+    return tto[["pitcher", "tto1_k_pct", "tto2_k_pct", "tto3_k_pct",
+                "tto1_xwoba", "tto2_xwoba", "tto3_xwoba",
+                "tto_k_decay", "tto_xwoba_climb", "tto_cliff_flag"]]
+
+
+# ---------------------------------------------------------------------------
+# SECTION 8 — ASSEMBLE FINAL PROFILE
+# ---------------------------------------------------------------------------
+
+def assemble_profiles(vel, dist, trail, flags, stuff, age_arm, buyllow, tto,
                       verbose: bool = True) -> pd.DataFrame:
     """
     Merge all sections on pitcher_id. Derive Monte Carlo sigma (age-adjusted).
@@ -795,6 +864,9 @@ def assemble_profiles(vel, dist, trail, flags, stuff, age_arm, buyllow,
 
     # Merge age + arm angle
     df = df.merge(age_arm, on="pitcher", how="left")
+
+    # Merge TTO sensitivity
+    df = df.merge(tto, on="pitcher", how="left")
 
     # Merge FanGraphs signals on name
     # FanGraphs stores "FIRST LAST" after our normalization; statcast is "Last, First"
@@ -942,7 +1014,8 @@ def main():
     stuff   = build_stuff_proxy()
     age_arm = build_age_arm_signals()
     buyllow = build_buyllow_signals()
-    profiles = assemble_profiles(vel, dist, trail, flags, stuff, age_arm, buyllow)
+    tto     = build_tto_sensitivity()
+    profiles = assemble_profiles(vel, dist, trail, flags, stuff, age_arm, buyllow, tto)
 
     # ---- Save outputs ------------------------------------------------------
     out_parquet = OUTPUT_DIR / "pitcher_profiles_2026.parquet"

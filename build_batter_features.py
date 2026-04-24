@@ -310,6 +310,40 @@ def assemble(years: list[int], dry_run: bool = False) -> pd.DataFrame:
     base = _compute_velocity_decay_risk(base)
     base = _compute_lineup_fragility(base)
     base = _compute_exp_pa_heuristic(base)
+    base = _join_bullpen_burn(base)
+    base = _compute_thermal_expansion(base)
+
+    # 4a) Batter Statcast percentiles (prior-season leakage-safe). Join (year-1, player_id).
+    # Columns: hard_hit_percent, sprint_speed, chase_percent, bat_speed, squared_up_rate, whiff_percent
+    pctile_frames = []
+    for yr in range(2023, 2027):
+        p = STATCAST_DIR / f"batter_percentiles_{yr}.parquet"
+        if p.exists():
+            pf = pd.read_parquet(p, engine="pyarrow")
+            pf["_pctile_year"] = yr
+            pctile_frames.append(pf)
+    if pctile_frames:
+        pctile = pd.concat(pctile_frames, ignore_index=True)
+        id_col = next((c for c in ("player_id", "batter", "mlbam_id") if c in pctile.columns), None)
+        if id_col:
+            if id_col != "player_id":
+                pctile = pctile.rename(columns={id_col: "player_id"})
+            pctile["player_id"] = pd.to_numeric(pctile["player_id"], errors="coerce")
+            sticky_cols = [c for c in ("hard_hit_percent", "sprint_speed", "chase_percent",
+                                        "bat_speed", "squared_up_rate", "whiff_percent")
+                           if c in pctile.columns]
+            pctile = pctile[["player_id", "_pctile_year"] + sticky_cols].copy()
+            pctile = pctile.drop_duplicates(subset=["player_id", "_pctile_year"], keep="last")
+            base["_join_pctile_year"] = base["year"].astype("int16") - 1
+            base["player_id"] = pd.to_numeric(base["player_id"], errors="coerce")
+            base = base.merge(
+                pctile.rename(columns={"_pctile_year": "_join_pctile_year"}),
+                on=["player_id", "_join_pctile_year"], how="left", suffixes=("", "_pctile"))
+            base = base.drop(columns=["_join_pctile_year"], errors="ignore")
+            print(f"  [batter_pctile] joined {sticky_cols} | "
+                  f"coverage: {base['sprint_speed'].notna().mean():.1%}" if "sprint_speed" in base.columns else "")
+        else:
+            print("  [warn] batter_percentiles: no player_id column found; skipped.")
 
     # 4) Batter xStats (prior-season leakage-safe). Join (year-1, player_id).
     if not xstats.empty:
@@ -479,6 +513,69 @@ _EXP_PA_MAP = {1: 4.6, 2: 4.4, 3: 4.2, 4: 4.0, 5: 3.8,
 def _compute_exp_pa_heuristic(df: pd.DataFrame) -> pd.DataFrame:
     bo = pd.to_numeric(df.get("batting_order"), errors="coerce")
     df["exp_pa_heuristic"] = bo.map(_EXP_PA_MAP).astype("float64")
+    return df
+
+
+_BULLPEN_BURN = Path("data/batter_features/bullpen_burn_by_game.parquet")
+
+
+def _join_bullpen_burn(df: pd.DataFrame) -> pd.DataFrame:
+    """Join 3-day rolling HL-reliever pitch count (pre-game safe) by
+    (game_date, home_park_id). Game-level feature: same for all batters
+    in the same game."""
+    if not _BULLPEN_BURN.exists():
+        print(f"  [warn] {_BULLPEN_BURN} missing; bullpen_burn_3d will be null")
+        df["bullpen_burn_3d"] = float("nan")
+        return df
+    bb = pd.read_parquet(_BULLPEN_BURN,
+                          columns=["game_date", "home_team", "bullpen_burn_3d"])
+    bb["game_date"] = pd.to_datetime(bb["game_date"])
+    bb = bb.rename(columns={"home_team": "home_park_id"})
+    # Deduplicate: one row per (game_date, home_park_id) — keep max burn
+    bb = bb.groupby(["game_date", "home_park_id"], as_index=False)["bullpen_burn_3d"].max()
+    gd = pd.to_datetime(df["game_date"])
+    park = df["home_park_id"]
+    key_df = pd.DataFrame({"game_date": gd, "home_park_id": park})
+    merged = key_df.merge(bb, on=["game_date", "home_park_id"], how="left")
+    df["bullpen_burn_3d"] = merged["bullpen_burn_3d"].values
+    return df
+
+
+# Altitude per park (from stadium_metadata); preloaded at module level lazily.
+_ALT_MAP: dict[str, float] = {}
+
+
+def _load_alt_map() -> dict[str, float]:
+    global _ALT_MAP
+    if _ALT_MAP:
+        return _ALT_MAP
+    import json
+    meta_path = Path("config/stadium_metadata.json")
+    if not meta_path.exists():
+        return {}
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    _ALT_MAP = {p: v.get("altitude_ft", 0.0)
+                for p, v in meta.get("parks", {}).items()}
+    return _ALT_MAP
+
+
+def _compute_thermal_expansion(df: pd.DataFrame) -> pd.DataFrame:
+    """thermal_expansion_2.0 = air density interaction.
+
+    Formula: (temp_f - 72) * altitude_factor
+    altitude_factor = 1 + altitude_ft / 5280  (ratio above sea level)
+    Humidity is flagged as a gap — not in any local data source.
+
+    Physics: higher altitude + higher temp → lower air density → more carry.
+    This is a multiplicative effect: Coors at 100F swings harder than Tropicana.
+    """
+    alt_map = _load_alt_map()
+    import numpy as np
+    temp = pd.to_numeric(df.get("temp_f"), errors="coerce")
+    alt = df["home_park_id"].map(alt_map).fillna(0.0).astype("float64")
+    alt_factor = 1.0 + alt / 5280.0
+    df["altitude_ft"] = alt
+    df["thermal_expansion"] = (temp - 72.0) * alt_factor
     return df
 
 

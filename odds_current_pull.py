@@ -952,6 +952,170 @@ def fetch_pitcher_strikeout_props(target_date: str) -> pd.DataFrame:
     return df
 
 
+def fetch_batter_props(target_date: str) -> pd.DataFrame:
+    """
+    Fetch batter Total Bases and Hits over/under props from The Odds API.
+    Mirrors fetch_pitcher_strikeout_props() — per-event endpoint, FanDuel preferred.
+
+    Markets: batter_total_bases, batter_hits
+    Saves to data/statcast/batter_props_{target_date}.parquet
+
+    Returns DataFrame with columns:
+        game_date, event_id, home_team, away_team,
+        batter_name, market, line, over_odds, under_odds, book, pull_timestamp
+    """
+    global _odds_api_quota_remaining, _odds_api_quota_used
+
+    if not ODDS_API_KEY:
+        log.warning("ODDS_API_KEY not set — skipping batter props fetch")
+        return pd.DataFrame()
+
+    if (
+        _odds_api_quota_remaining is not None
+        and _odds_api_quota_remaining < ODDS_API_QUOTA_THRESHOLD + 30
+    ):
+        log.warning(
+            "Odds API quota too low for batter props (%d remaining)",
+            _odds_api_quota_remaining or 0,
+        )
+        return pd.DataFrame()
+
+    cache_path = OUTPUT_DIR / f"batter_props_{target_date}.parquet"
+    if cache_path.exists():
+        age_hours = (datetime.utcnow().timestamp() - cache_path.stat().st_mtime) / 3600
+        if age_hours < 4:
+            log.info("Loading batter props from cache: %s", cache_path)
+            return pd.read_parquet(cache_path, engine="pyarrow")
+
+    global _odds_api_us_cache
+    if _odds_api_us_cache is None:
+        _odds_api_us_cache = fetch_odds_api(target_date) or []
+
+    if not _odds_api_us_cache:
+        log.warning("No game-level US odds available — cannot fetch batter props")
+        return pd.DataFrame()
+
+    props_rows   = []
+    events_tried = 0
+
+    for game in _odds_api_us_cache:
+        event_id  = game.get("id", "")
+        if not event_id:
+            continue
+
+        home_team = normalize_team(game.get("home_team", ""))
+        away_team = normalize_team(game.get("away_team", ""))
+
+        url    = f"https://api.the-odds-api.com/v4/sports/baseball_mlb/events/{event_id}/odds"
+        params = {
+            "apiKey":     ODDS_API_KEY,
+            "regions":    "us",
+            "markets":    "batter_total_bases,batter_hits",
+            "bookmakers": "draftkings,fanduel,betmgm",
+            "oddsFormat": "american",
+        }
+
+        try:
+            resp = requests.get(url, params=params, timeout=15)
+            resp.raise_for_status()
+        except requests.HTTPError as exc:
+            status = getattr(exc.response, "status_code", None)
+            if status == 404:
+                log.info(
+                    "Batter props not yet posted for %s @ %s",
+                    away_team, home_team,
+                )
+            else:
+                log.warning(
+                    "Batter props fetch failed for %s @ %s: %s", away_team, home_team, exc
+                )
+            continue
+        except requests.RequestException as exc:
+            log.warning(
+                "Batter props fetch failed for %s @ %s: %s", away_team, home_team, exc
+            )
+            continue
+
+        remaining = resp.headers.get("x-requests-remaining")
+        used      = resp.headers.get("x-requests-used")
+        if remaining is not None:
+            _odds_api_quota_remaining = int(remaining)
+        if used is not None:
+            _odds_api_quota_used = int(used)
+        events_tried += 1
+
+        if (
+            _odds_api_quota_remaining is not None
+            and _odds_api_quota_remaining < ODDS_API_QUOTA_THRESHOLD
+        ):
+            log.warning("Batter props: quota hit threshold after %d events", events_tried)
+            _log_quota(_odds_api_quota_remaining, _odds_api_quota_used)
+            break
+
+        try:
+            data = resp.json()
+        except Exception:
+            continue
+
+        for bk in data.get("bookmakers", []):
+            book_key = bk.get("key", "")
+            for market in bk.get("markets", []):
+                mkt_key = market.get("key", "")
+                if mkt_key not in ("batter_total_bases", "batter_hits"):
+                    continue
+                batter_lines: dict = {}
+                for out in market.get("outcomes", []):
+                    batter = out.get("description", out.get("name", ""))
+                    side   = out.get("name", "").lower()
+                    price  = out.get("price")
+                    point  = out.get("point")
+                    if not batter or price is None or point is None:
+                        continue
+                    key = (batter, mkt_key)
+                    if key not in batter_lines:
+                        batter_lines[key] = {"line": float(point), "market": mkt_key}
+                    if "over" in side:
+                        batter_lines[key]["over_odds"] = int(price)
+                    elif "under" in side:
+                        batter_lines[key]["under_odds"] = int(price)
+
+                for (batter, mkt), info in batter_lines.items():
+                    props_rows.append({
+                        "game_date":      target_date,
+                        "event_id":       event_id,
+                        "home_team":      home_team,
+                        "away_team":      away_team,
+                        "batter_name":    batter,
+                        "market":         mkt,
+                        "line":           info.get("line"),
+                        "over_odds":      info.get("over_odds"),
+                        "under_odds":     info.get("under_odds"),
+                        "book":           book_key,
+                        "pull_timestamp": datetime.utcnow(),
+                    })
+
+        time.sleep(0.3)
+
+    _log_quota(_odds_api_quota_remaining, _odds_api_quota_used)
+    log.info("Batter props: %d rows from %d events", len(props_rows), events_tried)
+
+    if not props_rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(props_rows)
+    df["line"]      = pd.to_numeric(df["line"],      errors="coerce")
+    df["over_odds"] = pd.to_numeric(df["over_odds"], errors="coerce")
+    df["under_odds"]= pd.to_numeric(df["under_odds"],errors="coerce")
+
+    try:
+        df.to_parquet(cache_path, engine="pyarrow", index=False)
+        log.info("Batter props saved: %s (%d rows)", cache_path, len(df))
+    except Exception as exc:
+        log.warning("Could not save batter props: %s", exc)
+
+    return df
+
+
 def get_k_prop_for_pitcher(pitcher_name: str, target_date: str) -> Optional[dict]:
     """
     Look up the consensus K prop line for a specific pitcher on target_date.
@@ -1561,6 +1725,17 @@ def main() -> None:
             "Pitcher K props: %d rows fetched for %d pitchers",
             len(k_props),
             k_props["pitcher_name"].nunique(),
+        )
+
+    # Batter TB + Hits props — same quota envelope, FanDuel preferred
+    batter_props = fetch_batter_props(date_str)
+    if not batter_props.empty:
+        tb  = batter_props[batter_props["market"] == "batter_total_bases"]
+        hits = batter_props[batter_props["market"] == "batter_hits"]
+        log.info(
+            "Batter props: TB=%d rows (%d batters), Hits=%d rows (%d batters)",
+            len(tb),  tb["batter_name"].nunique()  if not tb.empty  else 0,
+            len(hits), hits["batter_name"].nunique() if not hits.empty else 0,
         )
 
 

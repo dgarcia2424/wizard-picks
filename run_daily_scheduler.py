@@ -196,10 +196,16 @@ def run_all() -> None:
         # ── Step 5b: PrizePicks player prop lines ─────────────────────────
         run_step("prizepicks_pull.py", "prizepicks")
 
+        # ── Step 5c: SGP context (actuals recovery + enriched slate) ──────
+        run_step("data_orchestrator.py", "sgp_context")
+
         # ── Step 6: Generate today's card ─────────────────────────────────
         rc, _ = run_step("wizard_agents/main.py", "picks")
         if rc != 0:
             log.warning("run_today.py exited non-zero — check model_scores.csv for errors.")
+
+        # ── Step 6b: SGP picks (Script A correlation scorer) ──────────────
+        run_step("score_sgp_today.py", "sgp_picks")
 
         # ── Step 7: Upload results to Supabase ────────────────────────────
         run_step("supabase_upload.py", "upload")
@@ -276,11 +282,17 @@ def run_refresh(label: str, send_email: bool = False) -> None:
             log.error("Odds pull failed — predictions will degrade to retail-only fallback.")
         run_step("prizepicks_pull.py", "prizepicks")
 
+        # ── Step 8b: SGP context (actuals recovery + enriched slate) ─────────
+        run_step("data_orchestrator.py", "sgp_context")
+
         # ── Step 9: Generate card ─────────────────────────────────────────────
         card_cmd = "wizard_agents/main.py" if send_email else "run_today.py --csv"
         rc, _ = run_step(card_cmd, "picks")
         if rc != 0:
             log.warning("picks step exited non-zero — check model_scores.csv for errors.")
+
+        # ── Step 9b: SGP picks (Script A correlation scorer) ─────────────────
+        run_step("score_sgp_today.py", "sgp_picks")
 
         # ── Step 10: Upload to Supabase ───────────────────────────────────────
         run_step("supabase_upload.py", "upload")
