@@ -169,6 +169,7 @@ def run_all() -> None:
         # ── Step 2b: Umpire assignments + tendencies ──────────────────────
         run_step("ump_pull.py", "ump_pull")
         run_step("build_ump_stats.py --years 2026", "ump_stats")
+        run_step(f"predict_home_plate_ump.py --date {date.today().isoformat()}", "ump_predict")
         run_step("build_bullpen_avail.py", "bullpen_avail")
         run_step("build_batter_splits.py --years 2026", "batter_splits")
 
@@ -213,9 +214,9 @@ def run_all() -> None:
         run_step("train_script_c.py",  "train_c")
         # (c) Build correlation matrix (fast, empirical r-values)
         run_step("correlation_matrix.py --build", "corr_matrix")
-        # (d) Full SGP alpha report (script-model based)
-        run_step("sgp_alpha_report.py", "sgp_alpha")
-        # (e) Live edge report (copula + odds API, correlation-tax aware)
+        # (d) Rebuild 2026 bullpen burn windows from fresh statcast
+        run_step("rebuild_bullpen_burn_2026.py", "bullpen_burn")
+        # (e) Live edge report — rigorous scorer (copula + NO_PROP gate + odds API)
         run_step("fetch_live_odds.py", "sgp_live_edge")
         # (f) Legacy SGP scorer (kept for backward compatibility)
         run_step("score_sgp_today.py", "sgp_picks")
@@ -268,6 +269,7 @@ def run_refresh(label: str, send_email: bool = False) -> None:
         # ── Step 2: Umpire assignments + tendencies ───────────────────────────
         run_step("ump_pull.py", "ump_pull")
         run_step("build_ump_stats.py --years 2026", "ump_stats")
+        run_step(f"predict_home_plate_ump.py --date {date.today().isoformat()}", "ump_predict")
 
         # ── Step 3: Refresh raw data (Savant + MLB Stats API) ────────────────
         run_step("refresh_raw_data.py", "raw_data")
@@ -304,9 +306,9 @@ def run_refresh(label: str, send_email: bool = False) -> None:
         if rc != 0:
             log.warning("picks step exited non-zero — check model_scores.csv for errors.")
 
-        # ── Step 9b: SGP picks — v4.3 ────────────────────────────────────────
+        # ── Step 9b: SGP picks — v4.4 ────────────────────────────────────────
         run_step("correlation_matrix.py --build", "corr_matrix")
-        run_step("sgp_alpha_report.py", "sgp_alpha")
+        run_step("rebuild_bullpen_burn_2026.py", "bullpen_burn")
         run_step("fetch_live_odds.py", "sgp_live_edge")
         run_step("score_sgp_today.py", "sgp_picks")
 

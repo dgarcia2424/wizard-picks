@@ -361,7 +361,8 @@ def enrich_ump_synergy(context: pd.DataFrame) -> pd.DataFrame:
     ump_k_synergy_home = 1.2 if wide-zone ump AND home SP is stuff+, else 1.0
     ump_k_synergy_away = 1.2 if wide-zone ump AND away SP is stuff+, else 1.0
 
-    Also saves today's ump assignments to umpire_assignments_2026.parquet.
+    Pre-game: MLB officials API returns empty, so falls back to predict_home_plate_ump
+    (yesterday's 1B ump -> today's HP via crew rotation rule).
     """
     context = context.copy().reset_index(drop=True)
     uf = _load_ump_features()
@@ -371,7 +372,32 @@ def enrich_ump_synergy(context: pd.DataFrame) -> pd.DataFrame:
         if col not in context.columns:
             context[col] = np.nan if "synergy" not in col else 1.0
 
-    # Populate from today's ump assignments (pulled in pull_today via officials)
+    # Pre-game fallback: officials API empty -> use rotation predictor
+    hp_id_missing = ("ump_hp_id" not in context.columns or
+                     context["ump_hp_id"].isna().all())
+    if hp_id_missing:
+        try:
+            from predict_home_plate_ump import predict_hp_umps
+            today_str = str(pd.Timestamp.now().date())
+            ump_preds = predict_hp_umps(today_str, verbose=False)
+            if not ump_preds.empty and "game_pk" in context.columns:
+                keep = [c for c in ("game_pk", "ump_hp_name", "ump_hp_id",
+                                    "ump_k_above_avg") if c in ump_preds.columns]
+                merged_pred = context.merge(ump_preds[keep], on="game_pk",
+                                            how="left", suffixes=("", "_pred"))
+                for col in ("ump_hp_name", "ump_hp_id", "ump_k_above_avg"):
+                    pred_col = f"{col}_pred"
+                    if pred_col in merged_pred.columns:
+                        if col not in context.columns:
+                            context[col] = np.nan
+                        context[col] = context[col].fillna(
+                            merged_pred[pred_col].values)
+                n_filled = context.get("ump_hp_id", pd.Series()).notna().sum()
+                print(f"  [ump]  rotation predictor filled {n_filled}/{len(context)} HP assignments")
+        except Exception as exc:
+            print(f"  [ump]  rotation predictor failed: {exc}")
+
+    # Populate K stats from career ump features
     if "ump_hp_id" in context.columns and not uf.empty:
         context["ump_hp_id"] = pd.to_numeric(context["ump_hp_id"], errors="coerce")
         uf["ump_hp_id"] = pd.to_numeric(uf["ump_hp_id"], errors="coerce")

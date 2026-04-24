@@ -1,4 +1,12 @@
 """
+DEPRECATED (v4.4) — sgp_alpha_report.py is superseded by fetch_live_odds.py.
+fetch_live_odds.py is the single rigorous SGP scorer:
+  - Gaussian copula correlation engine
+  - NO_PROP integrity gate (requires matched retail K-prop line)
+  - F5_FRACTION = 0.571 (empirical)
+  - ABS-adjusted ump synergy
+Do not run this script directly. It remains for reference only.
+
 sgp_alpha_report.py — SGP Correlation Auditor & Action Report.
 
 Formula:

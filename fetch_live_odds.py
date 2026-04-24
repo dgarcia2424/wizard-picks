@@ -176,28 +176,38 @@ def _load_models() -> dict:
 
 
 # ── K-prop lookup ─────────────────────────────────────────────────────────────
-def _find_k_prop(kprops: pd.DataFrame, starter_name: str) -> tuple[float, float | None]:
+_NO_PROP = (None, None)   # sentinel: no retail line found
+
+
+def _find_k_prop(kprops: pd.DataFrame, starter_name: str
+                 ) -> tuple[float | None, float | None]:
     """Return (p_k_over, line) for the given starter from K-props.
 
-    Matches on last name (case-insensitive). Returns (0.45, None) if not found.
+    Returns (None, None) — NOT a default — if the starter has no retail line.
+    Callers MUST check for None before using the probability; any script that
+    relies on a K-prop leg must gate on prop_matched=True.
     """
     if kprops.empty or not starter_name:
-        return 0.45, None
+        return _NO_PROP
     last = starter_name.strip().split()[-1].lower()
     mask = kprops["pitcher_name"].str.lower().str.contains(last, na=False)
     matches = kprops[mask]
     if matches.empty:
-        return 0.45, None
+        return _NO_PROP
     row = matches.iloc[0]
-    line      = float(row.get("line", 4.5) or 4.5)
-    over_odds = row.get("over_odds")
+    line       = float(row.get("line", 4.5) or 4.5)
+    over_odds  = row.get("over_odds")
     under_odds = row.get("under_odds")
-    if over_odds and under_odds:
-        p = _fair(over_odds, under_odds)
-    elif over_odds:
-        p = _implied(over_odds)
-    else:
-        p = 0.45
+    try:
+        if over_odds is not None and not pd.isna(over_odds) and \
+           under_odds is not None and not pd.isna(under_odds):
+            p = _fair(over_odds, under_odds)
+        elif over_odds is not None and not pd.isna(over_odds):
+            p = _implied(over_odds)
+        else:
+            return _NO_PROP
+    except (TypeError, ValueError):
+        return _NO_PROP
     return float(np.clip(p, 0.05, 0.95)), line
 
 
@@ -251,64 +261,81 @@ def score_game_sgp(
         home_sp = str(ctx_row.get("home_starter_name") or "")
         away_sp = str(ctx_row.get("away_starter_name") or "")
 
-    # K props
-    p_home_k, home_k_line = _find_k_prop(kprops, home_sp)
-    p_away_k, away_k_line = _find_k_prop(kprops, away_sp)
+    # K props — None means no retail line exists (MUST gate on this)
+    p_home_k_raw, home_k_line = _find_k_prop(kprops, home_sp)
+    p_away_k_raw, away_k_line = _find_k_prop(kprops, away_sp)
+    home_k_matched = p_home_k_raw is not None
+    away_k_matched = p_away_k_raw is not None
 
     # Ump synergy multipliers (from context)
     synergy_home = float(ctx_row.get("ump_k_synergy_home") or 1.0) if ctx_row is not None else 1.0
     synergy_away = float(ctx_row.get("ump_k_synergy_away") or 1.0) if ctx_row is not None else 1.0
-    p_home_k = float(np.clip(p_home_k * synergy_home, 0.05, 0.95))
-    p_away_k = float(np.clip(p_away_k * synergy_away, 0.05, 0.95))
 
-    # F5 under (proportional)
-    p_f5_under = float(np.clip(p_true_under * 1.04, 0.05, 0.95))  # F5 slightly more likely under
+    # Apply synergy only when we have a real prop — never on a default
+    p_home_k = float(np.clip((p_home_k_raw or 0.45) * synergy_home, 0.05, 0.95))
+    p_away_k = float(np.clip((p_away_k_raw or 0.45) * synergy_away, 0.05, 0.95))
 
-    # ADI note
-    rho_val = _rho("sp_k_vs_team_total")
+    # F5 under (proportional from game total)
+    p_f5_under = float(np.clip(p_true_under * 1.04, 0.05, 0.95))
+
+    # ADI context note
     adi = float(ctx_row.get("air_density_rho") or 1.20) if ctx_row is not None else 1.20
     adi_note = f"ADI={adi:.3f} ({'dense/drag->under' if adi > 1.18 else 'light/carry->over'})"
+
+    # Bullpen gassed flags (from context)
+    home_bp_gassed = int(ctx_row.get("home_bp_gassed") or 0) if ctx_row is not None else 0
+    away_bp_gassed  = int(ctx_row.get("away_bp_gassed")  or 0) if ctx_row is not None else 0
 
     results = []
 
     # ── Script A2: SP_K_F5>=4 | F5_Under | Game_Under ────────────────────
-    r_ku  = _rho("sp_k_vs_team_total")    # K <-> under
-    r_kf5 = _rho("sp_k_vs_team_total")    # K <-> F5 (same direction)
+    # INTEGRITY GATE: home SP must have a matched retail K-prop line
+    r_ku  = _rho("sp_k_vs_team_total")
+    r_kf5 = _rho("sp_k_vs_team_total")
     r_f5g = _rho("f5_total_vs_game_total") or 0.74
 
-    p_joint_a2_copula = _copula_joint_3way(
-        p_home_k, p_f5_under, p_true_under,
-        r_ku, r_kf5, r_f5g)
-    p_indep_a2  = p_home_k * p_f5_under * p_true_under
-    p_book_a2   = p_indep_a2 * (1.0 - book_corr_tax)
-    edge_a2     = (p_joint_a2_copula / p_book_a2 - 1.0) if p_book_a2 > 0 else 0.0
+    if home_k_matched:
+        p_joint_a2_copula = _copula_joint_3way(
+            p_home_k, p_f5_under, p_true_under, r_ku, r_kf5, r_f5g)
+        p_indep_a2 = p_home_k * p_f5_under * p_true_under
+        p_book_a2  = p_indep_a2 * (1.0 - book_corr_tax)
+        edge_a2    = (p_joint_a2_copula / p_book_a2 - 1.0) if p_book_a2 > 0 else 0.0
+        a2_action  = "PLAY" if edge_a2 >= MIN_EDGE_DEFAULT else "pass"
+    else:
+        # No retail line — cannot compute a real edge; force pass
+        p_joint_a2_copula = p_indep_a2 = p_book_a2 = edge_a2 = 0.0
+        a2_action = "NO_PROP"
 
     results.append({
-        "game":          f"{away} @ {home}",
-        "home_team":     home,
-        "away_team":     away,
-        "script":        "A2_Dominance",
-        "legs":          f"Home_SP_K_F5>=4({home_sp}) | F5_Under_{close_total * F5_FRACTION:.1f} | Game_Under_{close_total}",
-        "home_sp":       home_sp,
-        "away_sp":       away_sp,
-        "close_total":   close_total,
-        "p_leg_k":       round(p_home_k, 4),
-        "p_leg_f5_under": round(p_f5_under, 4),
+        "game":             f"{away} @ {home}",
+        "home_team":        home,
+        "away_team":        away,
+        "script":           "A2_Dominance",
+        "legs":             f"Home_SP_K_F5>=4({home_sp}) | F5_Under_{close_total * F5_FRACTION:.1f} | Game_Under_{close_total}",
+        "home_sp":          home_sp,
+        "away_sp":          away_sp,
+        "close_total":      close_total,
+        "home_k_line":      home_k_line,
+        "home_k_matched":   home_k_matched,
+        "p_leg_k":          round(p_home_k, 4) if home_k_matched else None,
+        "p_leg_f5_under":   round(p_f5_under, 4),
         "p_leg_game_under": round(p_true_under, 4),
-        "p_joint_copula":round(p_joint_a2_copula, 4),
-        "p_joint_indep": round(p_indep_a2, 4),
-        "p_book_sgp":    round(p_book_a2, 4),
-        "sgp_edge":      round(edge_a2, 4),
-        "corr_lift":     round(p_joint_a2_copula / p_indep_a2, 3) if p_indep_a2 > 0 else 1.0,
-        "synergy_home":  round(synergy_home, 2),
-        "adi_note":      adi_note,
-        "book_corr_tax": book_corr_tax,
-        "action":        "PLAY" if edge_a2 >= MIN_EDGE_DEFAULT else "pass",
+        "p_joint_copula":   round(p_joint_a2_copula, 4),
+        "p_joint_indep":    round(p_indep_a2, 4),
+        "p_book_sgp":       round(p_book_a2, 4),
+        "sgp_edge":         round(edge_a2, 4),
+        "corr_lift":        round(p_joint_a2_copula / p_indep_a2, 3) if p_indep_a2 > 0 else None,
+        "synergy_home":     round(synergy_home, 2),
+        "home_bp_gassed":   home_bp_gassed,
+        "adi_note":         adi_note,
+        "book_corr_tax":    book_corr_tax,
+        "action":           a2_action,
     })
 
     # ── Script B: Home_Score>=5 | Game_Over | Home_ML_Win ────────────────
+    # Script B uses game total + ML (no pitcher K-prop needed) — always scoreable
     r_score_total = _rho("game_total_vs_home_score")
-    p_home_score5 = float(np.clip(p_home_win * 0.80, 0.05, 0.95))  # proxy
+    p_home_score5 = float(np.clip(p_home_win * 0.80, 0.05, 0.95))
 
     p_joint_b_copula = _copula_joint_3way(
         p_home_score5, p_true_over, p_home_win,
@@ -316,16 +343,19 @@ def score_game_sgp(
     p_indep_b  = p_home_score5 * p_true_over * p_home_win
     p_book_b   = p_indep_b * (1.0 - book_corr_tax)
     edge_b     = (p_joint_b_copula / p_book_b - 1.0) if p_book_b > 0 else 0.0
+    # Boost Script B when away bullpen is gassed (late-innings run scoring elevated)
+    b_note = " [away_BP_GASSED]" if away_bp_gassed else ""
 
     results.append({
-        "game":          f"{away} @ {home}",
-        "home_team":     home,
-        "away_team":     away,
-        "script":        "B_Explosion",
-        "legs":          f"Home_Score>=5 | Game_Over_{close_total} | {home}_ML_Win",
-        "home_sp":       home_sp,
-        "away_sp":       away_sp,
-        "close_total":   close_total,
+        "game":             f"{away} @ {home}",
+        "home_team":        home,
+        "away_team":        away,
+        "script":           "B_Explosion",
+        "legs":             f"Home_Score>=5 | Game_Over_{close_total} | {home}_ML_Win{b_note}",
+        "home_sp":          home_sp,
+        "away_sp":          away_sp,
+        "close_total":      close_total,
+        "home_k_matched":   True,   # B doesn't use K-prop
         "p_leg_home_score5":  round(p_home_score5, 4),
         "p_leg_game_over":    round(p_true_over, 4),
         "p_leg_home_win":     round(p_home_win, 4),
@@ -333,47 +363,64 @@ def score_game_sgp(
         "p_joint_indep":      round(p_indep_b, 4),
         "p_book_sgp":         round(p_book_b, 4),
         "sgp_edge":           round(edge_b, 4),
-        "corr_lift":          round(p_joint_b_copula / p_indep_b, 3) if p_indep_b > 0 else 1.0,
+        "corr_lift":          round(p_joint_b_copula / p_indep_b, 3) if p_indep_b > 0 else None,
         "synergy_home":       round(synergy_home, 2),
+        "away_bp_gassed":     away_bp_gassed,
         "adi_note":           adi_note,
         "book_corr_tax":      book_corr_tax,
         "action":             "PLAY" if edge_b >= MIN_EDGE_DEFAULT else "pass",
     })
 
     # ── Script C: Game_Under | Both_SP_K>=3 | Close_Game(+1.5) ──────────
+    # INTEGRITY GATE: BOTH starters must have matched retail K-prop lines
     r_both_k_close = _rho("both_sp_k_vs_close_game")
     r_k_under      = _rho("sp_k_vs_team_total")
-    p_both_k = _copula_joint_2way(p_home_k, p_away_k, r_k_under)
 
-    p_joint_c_copula = _copula_joint_3way(
-        p_true_under, p_both_k, p_close_game,
-        r_k_under, r_both_k_close, r_both_k_close)
-    p_indep_c  = p_true_under * p_both_k * p_close_game
-    p_book_c   = p_indep_c * (1.0 - book_corr_tax)
-    edge_c     = (p_joint_c_copula / p_book_c - 1.0) if p_book_c > 0 else 0.0
+    if home_k_matched and away_k_matched:
+        p_both_k = _copula_joint_2way(p_home_k, p_away_k, r_k_under)
+        p_joint_c_copula = _copula_joint_3way(
+            p_true_under, p_both_k, p_close_game,
+            r_k_under, r_both_k_close, r_both_k_close)
+        p_indep_c  = p_true_under * p_both_k * p_close_game
+        p_book_c   = p_indep_c * (1.0 - book_corr_tax)
+        edge_c     = (p_joint_c_copula / p_book_c - 1.0) if p_book_c > 0 else 0.0
+        c_action   = "PLAY" if edge_c >= MIN_EDGE_DEFAULT else "pass"
+    else:
+        # One or both starters missing retail line
+        missing = []
+        if not home_k_matched: missing.append(home_sp or "home_SP")
+        if not away_k_matched: missing.append(away_sp or "away_SP")
+        p_joint_c_copula = p_indep_c = p_book_c = edge_c = 0.0
+        p_both_k = 0.0
+        c_action = f"NO_PROP:{','.join(missing)}"
 
     results.append({
-        "game":          f"{away} @ {home}",
-        "home_team":     home,
-        "away_team":     away,
-        "script":        "C_EliteDuel",
-        "legs":          f"Game_Under_{close_total} | Both_SP_K_F5>=3({home_sp}/{away_sp}) | {away}_RL+1.5",
-        "home_sp":       home_sp,
-        "away_sp":       away_sp,
-        "close_total":   close_total,
-        "p_leg_game_under":   round(p_true_under, 4),
-        "p_leg_both_sp_k":    round(p_both_k, 4),
-        "p_leg_close_game":   round(p_close_game, 4),
-        "p_joint_copula":     round(p_joint_c_copula, 4),
-        "p_joint_indep":      round(p_indep_c, 4),
-        "p_book_sgp":         round(p_book_c, 4),
-        "sgp_edge":           round(edge_c, 4),
-        "corr_lift":          round(p_joint_c_copula / p_indep_c, 3) if p_indep_c > 0 else 1.0,
-        "synergy_home":       round(synergy_home, 2),
-        "synergy_away":       round(synergy_away, 2),
-        "adi_note":           adi_note,
-        "book_corr_tax":      book_corr_tax,
-        "action":             "PLAY" if edge_c >= MIN_EDGE_DEFAULT else "pass",
+        "game":             f"{away} @ {home}",
+        "home_team":        home,
+        "away_team":        away,
+        "script":           "C_EliteDuel",
+        "legs":             f"Game_Under_{close_total} | Both_SP_K_F5>=3({home_sp}/{away_sp}) | {away}_RL+1.5",
+        "home_sp":          home_sp,
+        "away_sp":          away_sp,
+        "close_total":      close_total,
+        "home_k_line":      home_k_line,
+        "away_k_line":      away_k_line,
+        "home_k_matched":   home_k_matched,
+        "away_k_matched":   away_k_matched,
+        "p_leg_game_under": round(p_true_under, 4),
+        "p_leg_both_sp_k":  round(p_both_k, 4) if (home_k_matched and away_k_matched) else None,
+        "p_leg_close_game": round(p_close_game, 4),
+        "p_joint_copula":   round(p_joint_c_copula, 4),
+        "p_joint_indep":    round(p_indep_c, 4),
+        "p_book_sgp":       round(p_book_c, 4),
+        "sgp_edge":         round(edge_c, 4),
+        "corr_lift":        round(p_joint_c_copula / p_indep_c, 3) if p_indep_c > 0 else None,
+        "synergy_home":     round(synergy_home, 2),
+        "synergy_away":     round(synergy_away, 2),
+        "home_bp_gassed":   home_bp_gassed,
+        "adi_note":         adi_note,
+        "book_corr_tax":    book_corr_tax,
+        "action":           c_action,
     })
 
     return results
