@@ -1,0 +1,265 @@
+{
+  "generated": "2026-04-24",
+  "min_n": 20,
+  "2025_oof": {
+    "ML": {
+      "optimal": {
+        "cutoff": 0.62,
+        "n": 419,
+        "hit_rate": 0.649164677804296
+      },
+      "less_optimal": {
+        "cutoff": 0.6,
+        "n": 865,
+        "hit_rate": 0.6346820809248555
+      },
+      "stay_away": {
+        "cutoff": 0.5,
+        "n": 5028,
+        "hit_rate": 0.5550914876690533
+      }
+    },
+    "Runline": {
+      "optimal": {
+        "cutoff": 0.75,
+        "n": 271,
+        "hit_rate": 0.7675276752767528
+      },
+      "less_optimal": {
+        "cutoff": 0.7,
+        "n": 1101,
+        "hit_rate": 0.7266121707538601
+      },
+      "stay_away": {
+        "cutoff": 0.5,
+        "n": 4796,
+        "hit_rate": 0.6390742285237698
+      }
+    },
+    "F5": {
+      "optimal": {
+        "cutoff": 0.8,
+        "n": 40,
+        "hit_rate": 0.875
+      },
+      "less_optimal": {
+        "cutoff": 0.75,
+        "n": 177,
+        "hit_rate": 0.7344632768361582
+      },
+      "stay_away": {
+        "cutoff": 0.5,
+        "n": 2436,
+        "hit_rate": 0.5595238095238095
+      }
+    },
+    "NRFI": {
+      "optimal": {
+        "cutoff": 0.9,
+        "n": 153,
+        "hit_rate": 0.9281045751633987
+      },
+      "less_optimal": {
+        "cutoff": 0.85,
+        "n": 267,
+        "hit_rate": 0.898876404494382
+      },
+      "stay_away": {
+        "cutoff": 0.5,
+        "n": 2436,
+        "hit_rate": 0.6888341543513957
+      }
+    },
+    "K-over": {
+      "optimal": {
+        "cutoff": 0.54,
+        "n": 113,
+        "hit_rate": 0.6902654867256637
+      },
+      "less_optimal": {
+        "cutoff": 0.52,
+        "n": 251,
+        "hit_rate": 0.6215139442231076
+      },
+      "stay_away": {
+        "cutoff": 0.5,
+        "n": 432,
+        "hit_rate": 0.5856481481481481
+      }
+    }
+  },
+  "2026_ytd": {
+    "ML": {
+      "optimal": {
+        "cutoff": 0.8,
+        "n": 59,
+        "hit_rate": 0.8135593220338984
+      },
+      "less_optimal": {
+        "cutoff": 0.75,
+        "n": 98,
+        "hit_rate": 0.7959183673469388
+      },
+      "stay_away": {
+        "cutoff": 0.5,
+        "n": 368,
+        "hit_rate": 0.6385869565217391
+      }
+    },
+    "Runline": {
+      "optimal": {
+        "cutoff": 0.85,
+        "n": 24,
+        "hit_rate": 0.625
+      },
+      "less_optimal": {
+        "cutoff": 0.8,
+        "n": 64,
+        "hit_rate": 0.578125
+      },
+      "stay_away": {
+        "cutoff": 0.5,
+        "n": 302,
+        "hit_rate": 0.4271523178807947
+      }
+    },
+    "F5": {
+      "optimal": {
+        "cutoff": 0.7,
+        "n": 53,
+        "hit_rate": 0.5660377358490566
+      },
+      "less_optimal": {
+        "cutoff": 0.65,
+        "n": 115,
+        "hit_rate": 0.5478260869565217
+      },
+      "stay_away": {
+        "cutoff": 0.5,
+        "n": 299,
+        "hit_rate": 0.4816053511705686
+      }
+    },
+    "NRFI": {
+      "optimal": {
+        "cutoff": 0.8,
+        "n": 36,
+        "hit_rate": 0.6388888888888888
+      },
+      "less_optimal": {
+        "cutoff": 0.62,
+        "n": 183,
+        "hit_rate": 0.5300546448087432
+      },
+      "stay_away": {
+        "cutoff": 0.5,
+        "n": 233,
+        "hit_rate": 0.4978540772532189
+      }
+    },
+    "K-over": {
+      "optimal": {
+        "cutoff": 0.75,
+        "n": 122,
+        "hit_rate": 0.6557377049180327
+      },
+      "less_optimal": {
+        "cutoff": 0.62,
+        "n": 233,
+        "hit_rate": 0.630901287553648
+      },
+      "stay_away": {
+        "cutoff": 0.5,
+        "n": 310,
+        "hit_rate": 0.5741935483870968
+      }
+    }
+  },
+  "last_30d": {
+    "ML": {
+      "optimal": {
+        "cutoff": 0.8,
+        "n": 59,
+        "hit_rate": 0.8135593220338984
+      },
+      "less_optimal": {
+        "cutoff": 0.75,
+        "n": 98,
+        "hit_rate": 0.7959183673469388
+      },
+      "stay_away": {
+        "cutoff": 0.5,
+        "n": 368,
+        "hit_rate": 0.6385869565217391
+      }
+    },
+    "Runline": {
+      "optimal": {
+        "cutoff": 0.85,
+        "n": 24,
+        "hit_rate": 0.625
+      },
+      "less_optimal": {
+        "cutoff": 0.8,
+        "n": 64,
+        "hit_rate": 0.578125
+      },
+      "stay_away": {
+        "cutoff": 0.5,
+        "n": 302,
+        "hit_rate": 0.4271523178807947
+      }
+    },
+    "F5": {
+      "optimal": {
+        "cutoff": 0.7,
+        "n": 53,
+        "hit_rate": 0.5660377358490566
+      },
+      "less_optimal": {
+        "cutoff": 0.65,
+        "n": 115,
+        "hit_rate": 0.5478260869565217
+      },
+      "stay_away": {
+        "cutoff": 0.5,
+        "n": 299,
+        "hit_rate": 0.4816053511705686
+      }
+    },
+    "NRFI": {
+      "optimal": {
+        "cutoff": 0.8,
+        "n": 36,
+        "hit_rate": 0.6388888888888888
+      },
+      "less_optimal": {
+        "cutoff": 0.62,
+        "n": 183,
+        "hit_rate": 0.5300546448087432
+      },
+      "stay_away": {
+        "cutoff": 0.5,
+        "n": 233,
+        "hit_rate": 0.4978540772532189
+      }
+    },
+    "K-over": {
+      "optimal": {
+        "cutoff": 0.75,
+        "n": 122,
+        "hit_rate": 0.6557377049180327
+      },
+      "less_optimal": {
+        "cutoff": 0.62,
+        "n": 233,
+        "hit_rate": 0.630901287553648
+      },
+      "stay_away": {
+        "cutoff": 0.5,
+        "n": 310,
+        "hit_rate": 0.5741935483870968
+      }
+    }
+  }
+}

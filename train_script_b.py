@@ -14,6 +14,7 @@ Outputs:
     data/logs/script_b_v1_metrics.txt
 """
 from __future__ import annotations
+import argparse
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -36,7 +37,7 @@ FEATURES = [
     # Away bullpen (deteriorates as game goes on)
     "away_bullpen_vulnerability", "away_bp_fatigue_72h",
     # Game state
-    "close_total", "elo_diff",
+    "elo_diff",
     # Home team form
     "home_pyth_win_pct_15g", "home_rolling_rd_15g",
     # Umpire
@@ -70,7 +71,7 @@ def _load_features() -> pd.DataFrame:
     return data, feat_cols
 
 
-def main():
+def main(val_year: int = 2025):
     import xgboost as xgb
     from sklearn.metrics import roc_auc_score, log_loss, brier_score_loss
 
@@ -96,7 +97,7 @@ def main():
     print(f"    Corr ratio:       {corr_ratio:.3f}  "
           f"({'EDGE' if corr_ratio > 1 else 'AVOID'})")
 
-    is_valid = data["year"] == 2025
+    is_valid = data["year"] == val_year
     X_tr = data.loc[~is_valid, feat_cols]
     X_va = data.loc[is_valid,  feat_cols]
     y_tr = y[~is_valid]
@@ -152,4 +153,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Train Script B — Offensive Explosion SGP")
+    parser.add_argument("--val-year", type=int, default=2025)
+    args = parser.parse_args()
+    main(val_year=args.val_year)

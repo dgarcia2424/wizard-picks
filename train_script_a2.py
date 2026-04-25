@@ -11,6 +11,7 @@ Outputs:
     data/logs/script_a2_v1_metrics.txt
 """
 from __future__ import annotations
+import argparse
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -35,7 +36,7 @@ FEATURES = [
     "home_park_factor", "temp_f", "air_density_rho", "roof_closed_flag",
     "wind_mph",
     # Game state
-    "close_total", "mc_f5_expected_total", "elo_diff",
+    "mc_f5_expected_total", "elo_diff",
     # Bullpen (less relevant in F5 but affects book total pricing)
     "home_bullpen_vulnerability", "away_bullpen_vulnerability",
 ]
@@ -66,7 +67,7 @@ def _load_features() -> pd.DataFrame:
     return data, feat_cols
 
 
-def main():
+def main(val_year: int = 2025):
     import xgboost as xgb
     from sklearn.metrics import roc_auc_score, log_loss, brier_score_loss
 
@@ -93,7 +94,7 @@ def main():
     print(f"    Corr ratio:      {corr_ratio:.3f}  "
           f"({'EDGE' if corr_ratio > 1 else 'AVOID'})")
 
-    is_valid = data["year"] == 2025
+    is_valid = data["year"] == val_year
     X_tr = data.loc[~is_valid, feat_cols]
     X_va = data.loc[is_valid,  feat_cols]
     y_tr = y[~is_valid]
@@ -149,4 +150,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Train Script A2 — Enhanced 3-leg SGP")
+    parser.add_argument("--val-year", type=int, default=2025)
+    args = parser.parse_args()
+    main(val_year=args.val_year)

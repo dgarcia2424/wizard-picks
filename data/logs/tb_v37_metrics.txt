@@ -1,30 +1,30 @@
 TB Stacker v3.7 metrics
 rows_train: 103104
 rows_valid: 9008
-auc: 0.5379970270723953
-logloss: 0.6179134385657301
-brier: 0.2112753689289093
-ap: 0.3361814579727263
-best_iter: 20
+auc: 0.5374035499681346
+logloss: 0.6167048440919034
+brier: 0.21095553040504456
+ap: 0.3361323192132753
+best_iter: 19
 base_rate_valid: 0.29484902309058614
 
               feature       gain  rank
-        batting_order 249.595322     1
-     exp_pa_heuristic 215.136963     2
-              stand_R 121.174713     3
-              stand_L  52.828053     4
-              stand_S  22.490028     5
-             wind_mph  19.684074     6
-pull_side_wind_vector  16.898369     7
-               temp_f  13.907108     8
-    platoon_same_hand  11.098411     9
-             est_woba   8.829285    10
-       opp_sp_ff_velo   8.671421    11
-         wind_bearing   8.204757    12
-                   ba   7.477416    13
-     lineup_fragility   7.179575    14
-              est_slg   6.987965    15
-  velocity_decay_risk   6.950291    16
-               est_ba   6.767725    17
-                  slg   6.136221    18
-                 woba   5.283424    19
+        batting_order 253.536560     1
+     exp_pa_heuristic 207.887253     2
+              stand_R 121.195259     3
+              stand_L  64.049286     4
+              stand_S  22.513836     5
+             wind_mph  21.407494     6
+pull_side_wind_vector  18.226318     7
+               temp_f  13.408650     8
+    platoon_same_hand  12.337173     9
+       opp_sp_ff_velo   9.107139    10
+             est_woba   8.498999    11
+         wind_bearing   8.094889    12
+                   ba   7.435053    13
+     lineup_fragility   7.216945    14
+               est_ba   7.086440    15
+              est_slg   6.912500    16
+  velocity_decay_risk   6.591038    17
+                  slg   6.133751    18
+                 woba   5.076631    19

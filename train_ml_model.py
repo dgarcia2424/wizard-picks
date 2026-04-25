@@ -914,10 +914,11 @@ def _fixed_bin_calibration(y_true: np.ndarray, y_prob: np.ndarray, label: str = 
               f"{grp['pred'].mean():>7.3f}  {grp['actual'].mean():>7.3f}  {diff:>+8.3f}")
 
 
-def train_default(df: pd.DataFrame, feat_cols: list[str]):
-    print("\n[3] Default split: train 2023+2024 / validate 2025  [label: home_win]")
-    train = df[df["year"].isin([2023, 2024])]
-    val   = df[df["year"] == 2025]
+def train_default(df: pd.DataFrame, feat_cols: list[str], val_year: int = 2025):
+    train_years = [y for y in [2023, 2024, 2025] if y < val_year]
+    print(f"\n[3] Default split: train {train_years} / validate {val_year}  [label: home_win]")
+    train = df[df["year"].isin(train_years)]
+    val   = df[df["year"] == val_year]
     print(f"    Train: {len(train)} | Val: {len(val)}")
 
     X_tr  = train[feat_cols].fillna(0).values.astype(np.float32)
@@ -932,9 +933,9 @@ def train_default(df: pd.DataFrame, feat_cols: list[str]):
     print("\n  Raw XGBoost:")
     _print_metrics("Validation 2025", y_val, raw_val)
 
-    print("\n[3b] Generating OOF predictions (LOYO on 2023+2024) …")
+    print(f"\n[3b] Generating OOF predictions (LOYO on {train_years}) …")
     oof_probs, oof_labels, oof_df, oof_segs = _generate_oof_for_stacker(
-        df, feat_cols, years=[2023, 2024],
+        df, feat_cols, years=train_years,
     )
 
     cal = LogisticRegression(C=1.0, solver="lbfgs", max_iter=1000)
@@ -1090,6 +1091,8 @@ def main():
                         help="Include 2026 partial data in final training")
     parser.add_argument("--matrix", type=str, default="feature_matrix_enriched_v2.parquet",
                         help="Feature matrix parquet path")
+    parser.add_argument("--val-year", type=int, default=2025,
+                        help="Holdout year for validation (default: 2025)")
     args = parser.parse_args()
 
     print("=" * 70)
@@ -1105,7 +1108,7 @@ def main():
     print(f"\n  Saved feature list → {OUTPUT_FEAT_COLS} ({len(feat_cols)} features)")
 
     # Default split
-    model_val, cal_val, stacker, _, val_df, _log_odds_val = train_default(df, feat_cols)
+    model_val, cal_val, stacker, _, val_df, _log_odds_val = train_default(df, feat_cols, val_year=args.val_year)
 
     # Final model on all data
     model_final, cal_final, stacker_final = train_final(df, feat_cols, with_2026=args.with_2026)

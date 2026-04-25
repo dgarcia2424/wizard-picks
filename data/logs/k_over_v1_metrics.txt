@@ -1,30 +1,30 @@
 K-Over v1 metrics
-rows_train: 2738
+rows_train: 3586
 rows_valid: 2733
 k_threshold: 5.5
-auc: 0.611909313529239
-logloss: 0.6602863470370736
-brier: 0.23382192850112915
-ap: 0.5119271992587633
-best_iter: 33
+auc: 0.6237797595217125
+logloss: 0.658129422461359
+brier: 0.23275437951087952
+ap: 0.527184639372275
+best_iter: 19
 base_rate_valid: 0.4039517014270033
 
           feature      gain  rank
-    sp_whiff_pctl 10.560892     1
-         sp_k_pct  6.831591     2
-       sp_ff_velo  6.813870     3
-     sp_arm_angle  5.941533     4
-        sp_bb_pct  5.921746     5
-   opp_bat_k_rate  5.793393     6
-sp_k_bb_ratio_10d  5.749177     7
-     sp_1st_k_pct  5.670302     8
-  ump_k_above_avg  5.666576     9
- home_park_factor  5.522626    10
-     sp_k_pct_10d  5.470011    11
-           temp_f  5.435300    12
-    sp_k_minus_bb  5.338212    13
-        sp_gb_pct  5.184319    14
-       sp_age_pit  5.096070    15
-    sp_bb_pct_10d  5.025183    16
- sp_xwoba_against  4.964352    17
-    sp_k_bb_ratio  4.811462    18
+    sp_whiff_pctl 14.656626     1
+         sp_k_pct 10.733484     2
+  ump_k_above_avg  7.289764     3
+        sp_bb_pct  6.800332     4
+       sp_ff_velo  6.464971     5
+     sp_arm_angle  6.369896     6
+   opp_bat_k_rate  6.163491     7
+ sp_xwoba_against  6.151367     8
+           temp_f  6.100897     9
+     sp_k_pct_10d  5.856065    10
+        sp_gb_pct  5.740295    11
+ home_park_factor  5.615292    12
+    sp_k_minus_bb  5.537539    13
+       sp_age_pit  5.415247    14
+    sp_k_bb_ratio  5.390049    15
+sp_k_bb_ratio_10d  5.333064    16
+     sp_1st_k_pct  5.317922    17
+    sp_bb_pct_10d  4.691797    18

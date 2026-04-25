@@ -12,15 +12,17 @@ Outputs:
     data/logs/k_over_v1_importance.png
 """
 from __future__ import annotations
+import argparse
 from pathlib import Path
 import numpy as np
 import pandas as pd
 
 SP_LABELS  = Path("data/batter_features/sp_k_labels.parquet")
 FEATURE_MTX = Path("feature_matrix_enriched_v2.parquet")
-OUT_MODEL  = Path("models/k_over_v1.json")
-OUT_TXT    = Path("data/logs/k_over_v1_metrics.txt")
-OUT_PNG    = Path("data/logs/k_over_v1_importance.png")
+OUT_MODEL      = Path("models/k_over_v1.json")
+OUT_TXT        = Path("data/logs/k_over_v1_metrics.txt")
+OUT_PNG        = Path("data/logs/k_over_v1_importance.png")
+OUT_VAL_PREDS  = Path("k_val_predictions.csv")
 K_THRESHOLD = 5.5
 
 SP_FEATURES = [
@@ -115,7 +117,8 @@ def build_sp_grain(labels: pd.DataFrame, fm: pd.DataFrame) -> pd.DataFrame:
     return joined
 
 
-def main():
+def main(val_year: int = 2025, matrix: Path | None = None,
+         val_preds_out: Path | None = None, no_save_model: bool = False):
     labels = pd.read_parquet(SP_LABELS)
     labels["year"] = pd.to_datetime(labels["game_date"]).dt.year
     print(f"SP-game labels: {len(labels):,}  K mean={labels['k_total'].mean():.2f}")
@@ -138,7 +141,7 @@ def main():
                "ump_k_above_avg", "home_park_factor", "temp_f"]
     fm_cols = [c for c in fm_cols if c in pd.read_parquet(
         FEATURE_MTX, columns=["game_pk"]).columns or True]
-    fm = pd.read_parquet(FEATURE_MTX)
+    fm = pd.read_parquet(matrix if matrix is not None else FEATURE_MTX)
     fm["game_date"] = pd.to_datetime(fm["game_date"]).dt.strftime("%Y-%m-%d")
 
     # Simple join: match on game_pk, determine side by home_team == home_team in labels
@@ -192,7 +195,7 @@ def main():
 
     y = (data["k_total"] >= K_THRESHOLD).astype("int8")
     data["year"] = pd.to_datetime(data["game_date"]).dt.year
-    is_valid = data["year"] == 2025
+    is_valid = data["year"] == val_year
     X_tr, X_va = data.loc[~is_valid, feat_cols], data.loc[is_valid, feat_cols]
     y_tr, y_va = y[~is_valid], y[is_valid]
     print(f"Train {len(X_tr):,}  Valid {len(X_va):,}")
@@ -227,7 +230,8 @@ def main():
         print(f"  {k}: {v}")
 
     OUT_MODEL.parent.mkdir(parents=True, exist_ok=True)
-    booster.save_model(str(OUT_MODEL))
+    if not no_save_model:
+        booster.save_model(str(OUT_MODEL))
 
     imp = booster.get_score(importance_type="gain")
     imp_df = (pd.DataFrame({"feature": list(imp), "gain": list(imp.values())})
@@ -241,6 +245,16 @@ def main():
         for k, v in metrics.items():
             f.write(f"{k}: {v}\n")
         f.write("\n"); f.write(imp_df.to_string(index=False))
+
+    # Save validation predictions
+    out_path = val_preds_out if val_preds_out is not None else OUT_VAL_PREDS
+    val_df = data.loc[is_valid, ["game_pk", "game_date", "home_team", "away_team",
+                                  "sp_is_home", "k_total"]].copy()
+    val_df["k_line"]       = K_THRESHOLD
+    val_df["k_over_actual"] = y_va.values
+    val_df["k_over_pred"]  = pred
+    val_df.to_csv(out_path, index=False)
+    print(f"\n  Saved validation predictions -> {out_path}")
 
     try:
         import matplotlib; matplotlib.use("Agg")
@@ -258,4 +272,17 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Train K-Over v1 classifier")
+    parser.add_argument("--val-year", type=int, default=2025,
+                        help="Holdout year for validation (default: 2025)")
+    parser.add_argument("--matrix", type=str, default=None,
+                        help="Feature matrix parquet path (overrides default)")
+    parser.add_argument("--val-preds-out", type=str, default=None,
+                        help="Path to save val predictions CSV (default: k_val_predictions.csv)")
+    parser.add_argument("--no-save-model", action="store_true",
+                        help="Skip saving model files (only writes val predictions)")
+    args = parser.parse_args()
+    main(val_year=args.val_year,
+         matrix=Path(args.matrix) if args.matrix else None,
+         val_preds_out=Path(args.val_preds_out) if args.val_preds_out else None,
+         no_save_model=args.no_save_model)

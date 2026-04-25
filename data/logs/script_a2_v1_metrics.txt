@@ -1,40 +1,41 @@
 Script A2: The Dominance (3-leg F5)
 script: A2_Dominance_F5
 legs: SP_F5_K>=4 | F5_Total<4.5 | Game_Under
-rows_train: 2407
-rows_valid: 2414
-auc: 0.6011416892404755
-logloss: 0.573591295213296
-brier: 0.19360513985157013
-best_iter: 62
-base_rate_valid: 0.27009113504556753
-corr_ratio: 1.5881060001916754
-p_joint_actual: 0.26260112009956443
-p_joint_indep: 0.1653549070829466
+rows_train: 4867
+rows_valid: 313
+auc: 0.6713999783620037
+logloss: 0.5556173388006701
+brier: 0.18511982262134552
+best_iter: 6
+base_rate_valid: 0.2523961661341853
+corr_ratio: 1.5833020024324014
+p_joint_actual: 0.26235521235521236
+p_joint_indep: 0.1657013077430334
 
-                   feature     gain
-        home_sp_whiff_pctl 7.164061
-            home_sp_avg_ip 6.550750
- home_catcher_framing_runs 6.548740
-            home_sp_bb_pct 6.525257
-            home_sp_gb_pct 6.443969
-           home_sp_ff_velo 6.133651
-           ump_k_above_avg 6.066228
-             home_sp_k_pct 6.046485
-  away_lineup_xwoba_vs_lhp 6.025567
-         home_sp_1st_k_pct 6.012691
-home_bullpen_vulnerability 6.006013
-  away_lineup_xwoba_vs_rhp 6.005831
-        home_sp_k_bb_ratio 5.985047
-    home_sp_fatigue_signal 5.974946
-away_bullpen_vulnerability 5.923709
-                    temp_f 5.855373
-         away_bat_k_vs_lhp 5.734735
-      mc_f5_expected_total 5.424422
-         away_bat_k_vs_rhp 5.369174
-           air_density_rho 5.350332
-          home_park_factor 5.210431
-                  wind_mph 5.101696
-     home_sp_xwoba_against 5.054786
-         home_sp_days_rest 4.875127
-         home_sp_k_pct_10d 4.873157
+                   feature      gain
+        home_sp_whiff_pctl 16.023079
+            home_sp_avg_ip 11.611666
+             home_sp_k_pct 11.113400
+     home_sp_xwoba_against  9.804454
+home_bullpen_vulnerability  8.912165
+         away_bat_k_vs_rhp  8.835794
+         away_bat_k_vs_lhp  8.534760
+         home_sp_1st_k_pct  8.264494
+           air_density_rho  8.185167
+          home_park_factor  8.177093
+            home_sp_bb_pct  8.010293
+            home_sp_gb_pct  7.693934
+  away_lineup_xwoba_vs_lhp  7.675025
+      mc_f5_expected_total  7.537230
+         home_sp_k_pct_10d  7.337873
+        home_sp_k_bb_ratio  7.291688
+                  wind_mph  7.212010
+ home_catcher_framing_runs  7.210707
+          roof_closed_flag  7.192875
+  away_lineup_xwoba_vs_rhp  7.097034
+away_bullpen_vulnerability  7.085593
+                    temp_f  6.890332
+    home_sp_fatigue_signal  6.297257
+           home_sp_ff_velo  6.133740
+           ump_k_above_avg  5.722655
+         home_sp_days_rest  5.621170

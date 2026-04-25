@@ -215,12 +215,14 @@ def run_all() -> None:
         run_step("train_script_a2.py", "train_a2")
         run_step("train_script_b.py",  "train_b")
         run_step("train_script_c.py",  "train_c")
-        # (b2) Retrain K-Over, F5, NRFI, ML, run-dist, TB v6.0, RL v1
+        # (b2) Retrain K-Over, F5, NRFI, ML, run-dist, TB v3.5, TB v3.7, TB v6.0, RL v1
         run_step("train_k_over_v1.py",              "train_k_over")
         run_step("train_f5_model.py --with-2026",   "train_f5")
         run_step("train_nrfi_model.py --with-2026", "train_nrfi")
         run_step("train_ml_model.py --with-2026",   "train_ml")
         run_step("train_run_dist_model.py --with-2026", "train_run_dist")
+        run_step("train_tb_v35.py",                 "train_tb35")
+        run_step("train_tb_v37.py",                 "train_tb37")
         run_step("retrain_tb_v60.py",               "train_tb60")
         run_step("train_rl_v1.py",                  "train_rl_v1")
         # (c) Build correlation matrix (fast, empirical r-values)
@@ -231,6 +233,8 @@ def run_all() -> None:
         run_step("fetch_live_odds.py", "sgp_live_edge")
         # (f) Legacy SGP scorer (kept for backward compatibility)
         run_step("score_sgp_today.py", "sgp_picks")
+        # (g) TB v3.5 / v3.7 slate projections
+        run_step("score_slate_today.py", "tb_slate")
 
         # ── Step 7: Upload results to Supabase ────────────────────────────
         run_step("supabase_upload.py", "upload")
@@ -324,6 +328,7 @@ def run_refresh(label: str, send_email: bool = False) -> None:
         run_step("rebuild_bullpen_burn_2026.py", "bullpen_burn")
         run_step("fetch_live_odds.py", "sgp_live_edge")
         run_step("score_sgp_today.py", "sgp_picks")
+        run_step("score_slate_today.py", "tb_slate")
 
         # ── Step 10: Upload to Supabase ───────────────────────────────────────
         run_step("supabase_upload.py", "upload")

@@ -4,6 +4,7 @@ Drops pa_count; adds exp_pa_heuristic, velocity_decay_risk, lineup_fragility.
 """
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -25,7 +26,7 @@ NUMERIC_FEATURES = [
 ]
 
 
-def main():
+def main(val_year: int = 2025):
     df = pd.read_parquet(MATRIX)
     df["game_date"] = pd.to_datetime(df["game_date"])
     df = df.sort_values("game_date").reset_index(drop=True)
@@ -42,7 +43,7 @@ def main():
     assert "pa_count" not in feat_cols, "pa_count must be dropped in v3.5"
 
     y = (df["total_bases"].astype(float) > 1.5).astype("int8")
-    is_valid = df["year"] == 2026
+    is_valid = df["year"] == val_year
     X_train, X_valid = df.loc[~is_valid, feat_cols], df.loc[is_valid, feat_cols]
     y_train, y_valid = y[~is_valid], y[is_valid]
     print(f"Train: {len(X_train):,} | Valid: {len(X_valid):,}")
@@ -120,4 +121,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Train TB Stacker v3.5")
+    parser.add_argument("--val-year", type=int, default=2025,
+                        help="Holdout year (default: 2025)")
+    args = parser.parse_args()
+    main(val_year=args.val_year)

@@ -306,11 +306,6 @@ STACKING_FEATURES = [
     "bp_era_diff", "bp_whip_diff", "batting_matchup_edge",
     "home_sp_il_return_flag", "away_sp_il_return_flag",
     "sp_k_pct_10d_diff", "sp_xwoba_10d_diff", "batting_matchup_edge_10d",
-    # Vegas-model gap: when model disagrees with closing ML by >10%,
-    # empirical win rate jumps from 57% → 65% (2025 val set analysis).
-    # Making this explicit lets the stacker LR learn to boost conviction
-    # on those contrarian calls.  Computed as xgb_ml_raw - true_home_prob
-    # at training time; at inference it comes from the stacking_feats dict.
     "ml_model_vs_vegas_gap",
 ]
 
@@ -1369,6 +1364,14 @@ def main():
             df["year"] = df[c]; break
     if "year" not in df.columns:
         raise ValueError("Feature matrix must contain 'year' or 'season'.")
+
+    # Override split column so --val-year is respected in standard mode.
+    # The matrix's pre-baked split only covers 2025; this handles 2026 holdout.
+    _train_years = [y for y in [2023, 2024, 2025] if y < args.val_year]
+    df["split"] = np.where(df["year"].isin(_train_years), "train",
+                  np.where(df["year"] == args.val_year,   "val",   "other"))
+    print(f"  Split override: train={df['split'].eq('train').sum()}  "
+          f"val={df['split'].eq('val').sum()}  other={df['split'].eq('other').sum()}")
 
     X_all, feature_cols = prep_features(df)
 

@@ -75,6 +75,51 @@ def build_f5_sp_labels() -> pd.DataFrame:
     return out
 
 
+def _enrich_fm_2026(fm: pd.DataFrame) -> pd.DataFrame:
+    """Fill 2026 FM rows with actuals + closing odds from daily files."""
+    act_path = STATCAST_DIR / "actuals_2026.parquet"
+    if act_path.exists():
+        act = pd.read_parquet(act_path)
+        act["actual_game_total"] = act["home_score_final"] + act["away_score_final"]
+        act["actual_f5_total"]   = act["f5_total"]
+        act["actual_home_win"]   = (act["home_score_final"] > act["away_score_final"]).astype("int8")
+        act["home_score"]        = act["home_score_final"]
+        act["away_score"]        = act["away_score_final"]
+        act_cols = ["actual_game_total", "actual_f5_total",
+                    "actual_home_win", "home_score", "away_score"]
+        act_idx = act.set_index("game_pk")
+        mask26 = fm["year"] == 2026
+        for col in act_cols:
+            if col not in fm.columns:
+                fm[col] = np.nan
+            mapped = (fm.loc[mask26, "game_pk"]
+                      .map(act_idx[col])
+                      .to_numpy(dtype=float, na_value=np.nan))
+            fm.loc[mask26, col] = mapped
+        filled = (fm["year"] == 2026) & fm["actual_game_total"].notna()
+        print(f"  [enrich] Filled {filled.sum()} 2026 rows from actuals_2026")
+
+    # Combine daily odds files for 2026 closing lines
+    odds_files = sorted(STATCAST_DIR.glob("odds_current_2026_*.parquet"))
+    if odds_files:
+        odds_frames = [pd.read_parquet(f)[["game_pk", "close_total",
+                        "close_ml_home", "close_ml_away"]].dropna(subset=["close_total"])
+                       for f in odds_files]
+        odds26 = pd.concat(odds_frames).drop_duplicates("game_pk", keep="last")
+        odds_idx = odds26.set_index("game_pk")
+        for col in ["close_total", "close_ml_home", "close_ml_away"]:
+            if col not in fm.columns:
+                fm[col] = np.nan
+            mapped = (fm.loc[mask26, "game_pk"]
+                      .map(odds_idx[col])
+                      .to_numpy(dtype=float, na_value=np.nan))
+            fm.loc[mask26, col] = mapped
+        filled_odds = (fm["year"] == 2026) & fm["close_total"].notna()
+        print(f"  [enrich] Filled {filled_odds.sum()} 2026 rows with closing odds "
+              f"({len(odds_files)} daily files)")
+    return fm
+
+
 def build_script_labels(sp_labels: pd.DataFrame) -> pd.DataFrame:
     """
     Merge SP labels with FM game-level actuals to build per-game script labels.
@@ -91,6 +136,8 @@ def build_script_labels(sp_labels: pd.DataFrame) -> pd.DataFrame:
     fm_keep = [c for c in fm_cols if c in fm.columns]
     fm = fm[fm_keep].drop_duplicates("game_pk")
     fm["game_date"] = pd.to_datetime(fm["game_date"])
+    fm["year"] = fm["game_date"].dt.year
+    fm = _enrich_fm_2026(fm)
 
     # Pivot SP labels to game-grain: home_sp and away_sp columns
     home_sp = sp_labels[sp_labels["sp_is_home"]].copy()
@@ -109,7 +156,8 @@ def build_script_labels(sp_labels: pd.DataFrame) -> pd.DataFrame:
 
     game = fm.merge(home_sp, on="game_pk", how="inner")\
              .merge(away_sp, on="game_pk", how="inner")
-    game = game.dropna(subset=["actual_game_total", "close_total"])
+    game["close_total"] = game["close_total"].fillna(8.5)
+    game = game.dropna(subset=["actual_game_total"])
     game["year"] = game["game_date"].dt.year
     game["home_margin"] = game.get("home_score", pd.Series(dtype=float)) \
                         - game.get("away_score", pd.Series(dtype=float))

@@ -656,13 +656,14 @@ def _fit_rl_stacker(oof: pd.DataFrame, out_pkl: Path, out_npz: Path
 # ---------------------------------------------------------------------------
 # DEFAULT SPLIT DIAGNOSTICS (2023+2024 → 2025)
 # ---------------------------------------------------------------------------
-def train_default(df: pd.DataFrame, feat_cols: list[str]):
-    print("\n[3] Default split: train 2023+2024 / validate 2025")
-    train = df[df["year"].isin([2023, 2024])].reset_index(drop=True)
-    val   = df[df["year"] == 2025].reset_index(drop=True)
+def train_default(df: pd.DataFrame, feat_cols: list[str], val_year: int = 2025):
+    train_years = [y for y in [2023, 2024, 2025] if y < val_year]
+    print(f"\n[3] Default split: train {train_years} / validate {val_year}")
+    train = df[df["year"].isin(train_years)].reset_index(drop=True)
+    val   = df[df["year"] == val_year].reset_index(drop=True)
     print(f"    Train: {len(train)}  Val: {len(val)}")
     if len(val) == 0:
-        print("    [skip] no 2025 rows")
+        print(f"    [skip] no {val_year} rows")
         return None
 
     # DC fit on train
@@ -703,9 +704,8 @@ def train_default(df: pd.DataFrame, feat_cols: list[str]):
     print(f"    Cover AUC: DC={_safe_auc(y_cov, dc_val['p_cover_dc'].values):.4f}  "
           f"XGB={_safe_auc(y_cov, p_cover_xgb):.4f}")
 
-    # [3b] LOYO OOF on 2023+2024 → fit both stackers → eval on 2025
-    print("\n[3b] LOYO OOF on 2023+2024 for default-split stackers …")
-    oof_23_24 = _generate_oof(df, feat_cols, years=[2023, 2024])
+    print(f"\n[3b] LOYO OOF on {train_years} for default-split stackers …")
+    oof_23_24 = _generate_oof(df, feat_cols, years=train_years)
     print(f"    OOF rows: {len(oof_23_24)}")
 
     st_totals = _fit_totals_stacker(oof_23_24,
@@ -817,6 +817,8 @@ def main():
     parser.add_argument("--with-2026", action="store_true")
     parser.add_argument("--matrix", type=str,
                         default="feature_matrix_enriched_v2.parquet")
+    parser.add_argument("--val-year", type=int, default=2025,
+                        help="Holdout year for validation (default: 2025)")
     parser.add_argument("--feat-cols", type=str, default=None,
                         help="Path to feature-column manifest JSON. Default: "
                              "run_dist_feature_cols.json (live model). Pass "
@@ -852,7 +854,7 @@ def main():
     print(f"  Total-line source: {total_line_src}")
 
     # Default split diagnostics
-    train_default(df, feat_cols)
+    train_default(df, feat_cols, val_year=args.val_year)
 
     # Final artifacts
     train_final(df, feat_cols, with_2026=args.with_2026)

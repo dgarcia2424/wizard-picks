@@ -892,6 +892,265 @@ def render_full_table(df: pd.DataFrame) -> str:
     )
 
 
+# ─── Signal accuracy tracker ─────────────────────────────────────────────────
+
+# Fixed signal definitions matching tier_alerts.py calibration
+# (display_name, tier, market_code, cutoff, is_maxconf, k_line)
+_SIGNAL_DEFS = [
+    ("ML",  "ELITE",  "ML", 0.85, True,  None),
+    ("ML",  "STRONG", "ML", 0.70, True,  None),
+    ("F5",  "STRONG", "F5", 0.70, False, None),
+    ("NRFI","STRONG", "NR", 0.80, False, None),
+]
+
+_SIG_ROOT = Path(__file__).resolve().parent
+
+
+def _load_signal_data():
+    """Return (combined_df, kover_df) for signal accuracy computation."""
+    frames = []
+    for fname in ("backtest_full_all_predictions.csv", "live_predictions_2026.csv"):
+        p = _SIG_ROOT / fname
+        if not p.exists():
+            continue
+        try:
+            frames.append(pd.read_csv(p, usecols=["market", "model_prob", "actual", "game_date"], low_memory=False))
+        except Exception:
+            pass
+    combined = pd.DataFrame()
+    if frames:
+        combined = pd.concat(frames, ignore_index=True).drop_duplicates()
+        combined["game_date"]  = pd.to_datetime(combined["game_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        combined["model_prob"] = pd.to_numeric(combined["model_prob"], errors="coerce")
+        combined["actual"]     = pd.to_numeric(combined["actual"],     errors="coerce")
+        combined = combined.dropna(subset=["model_prob", "actual"])
+
+    # K-over from daily cards + actuals
+    import glob as _glob
+    card_files = sorted(_glob.glob(str(_SIG_ROOT / "daily_cards" / "daily_card_2026-*.csv")))
+    kover = pd.DataFrame()
+    if card_files:
+        try:
+            cards = pd.concat([
+                pd.read_csv(f, low_memory=False).assign(
+                    game_date=Path(f).stem.replace("daily_card_", ""))
+                for f in card_files
+            ], ignore_index=True)
+            act_p = _SIG_ROOT / "data" / "statcast" / "actuals_2026.parquet"
+            if act_p.exists():
+                act = pd.read_parquet(act_p)
+                act["game_date"] = pd.to_datetime(act["game_date"]).dt.strftime("%Y-%m-%d")
+                merged = cards.merge(act[["home_team", "game_date", "home_sp_k", "away_sp_k"]],
+                                     on=["home_team", "game_date"], how="left")
+                rows = []
+                for _, r in merged.iterrows():
+                    for side in ("home", "away"):
+                        ak = pd.to_numeric(r.get(f"{side}_sp_k"), errors="coerce")
+                        sp = r.get(f"{side}_sp", "?")
+                        for line in (3.5, 4.5):
+                            col = str(line).replace(".", "")
+                            p = pd.to_numeric(r.get(f"mc_{side}_sp_k_over_{col}"), errors="coerce")
+                            if pd.isna(ak) or pd.isna(p):
+                                continue
+                            conf = p if p >= 0.5 else 1 - p
+                            hit  = float(ak > line) if p >= 0.5 else float(ak <= line)
+                            rows.append({"game_date": r["game_date"], "conf": conf, "hit": hit,
+                                         "dir": f"{sp} {'O' if p>=0.5 else 'U'}{line}",
+                                         "home_team": r.get("home_team", ""),
+                                         "away_team": r.get("away_team", ""),
+                                         "k_line": line})
+                if rows:
+                    kover = pd.DataFrame(rows)
+        except Exception:
+            pass
+    return combined, kover
+
+
+def _sig_wl(combined: pd.DataFrame, kover: pd.DataFrame,
+            mkt_code, cutoff: float, is_maxconf: bool,
+            days: int | None = None, k_line: float | None = None):
+    """Return dict(w, l, n, acc) or None."""
+    if mkt_code is None:
+        df = kover.copy()
+        if df.empty:
+            return None
+        if k_line is not None and "k_line" in df.columns:
+            df = df[df["k_line"] == k_line]
+        if df.empty:
+            return None
+        prob_col, hit_col = "conf", "hit"
+    else:
+        df = combined[combined["market"] == mkt_code].copy()
+        if df.empty:
+            return None
+        if is_maxconf:
+            df["conf"] = df["model_prob"].where(df["model_prob"] >= 0.5, 1 - df["model_prob"])
+            df["hit"]  = df.apply(lambda x: x["actual"] if x["model_prob"] >= 0.5 else 1 - x["actual"], axis=1)
+        else:
+            df["conf"] = df["model_prob"]
+            df["hit"]  = df["actual"]
+        prob_col, hit_col = "conf", "hit"
+
+    if days is not None and "game_date" in df.columns:
+        cutoff_date = (datetime.now() - pd.Timedelta(days=days)).strftime("%Y-%m-%d")
+        df = df[df["game_date"] >= cutoff_date]
+
+    sub = df[pd.to_numeric(df[prob_col], errors="coerce") >= cutoff].dropna(subset=[hit_col])
+    if sub.empty:
+        return None
+    w = int((pd.to_numeric(sub[hit_col], errors="coerce") == 1).sum())
+    l = int((pd.to_numeric(sub[hit_col], errors="coerce") == 0).sum())
+    n = w + l
+    return {"w": w, "l": l, "n": n, "acc": w / n if n else 0.0}
+
+
+def _build_signal_accuracy_html() -> str:
+    combined, kover = _load_signal_data()
+
+    windows = [
+        ("Full 2026", None),
+        ("Last 30d",  30),
+        ("Last 7d",   7),
+    ]
+
+    def _acc_cell(stats) -> str:
+        if not stats:
+            return "<td class='acc-cell'><span class='muted'>—</span></td>"
+        acc = stats["acc"]
+        cls = "sig-acc-hi" if acc >= 0.70 else ("sig-acc-mid" if acc >= 0.58 else "sig-acc-lo")
+        return (
+            f"<td class='acc-cell'>"
+            f"<div class='{cls}'><b>{acc:.0%}</b></div>"
+            f"<div class='muted' style='font-size:11px'>{stats['w']}W {stats['l']}L ({stats['n']})</div>"
+            f"</td>"
+        )
+
+    rows_html = []
+    for sig, tier, mkt_code, cutoff, is_maxconf, k_line in _SIGNAL_DEFS:
+        tier_cls = "sig-elite-badge" if tier == "ELITE" else "sig-strong-badge"
+        base_sig = sig.split(" ")[0]
+        color = MARKET_BADGE.get(base_sig, ("#607d8b", base_sig[:4]))[0]
+        if base_sig == "K-over":
+            color = "#7b1fa2"
+        badge = f'<span class="mkt-badge" style="background:{color}">{sig}</span>'
+        tier_span = f'<span class="{tier_cls}">{tier}</span>'
+        cut_str = f"≥{int(cutoff * 100)}%"
+        cells = [f"<td>{badge} {tier_span} <span class='muted'>{cut_str}</span></td>"]
+        for _, days in windows:
+            stats = _sig_wl(combined, kover, mkt_code, cutoff, is_maxconf, days, k_line)
+            cells.append(_acc_cell(stats))
+        rows_html.append(f"<tr>{''.join(cells)}</tr>")
+
+    hdr = ("<thead><tr><th>Signal / Tier</th>"
+           + "".join(f"<th>{l}</th>" for l, _ in windows)
+           + "</tr></thead>")
+    return (
+        "<section class='card'>"
+        "<h2>🎯 Signal Accuracy Tracker</h2>"
+        "<p class='muted'>Fixed cutoffs calibrated from full 2026 backtest. "
+        "<span class='sig-acc-hi'>Green ≥70%</span> · "
+        "<span class='sig-acc-mid' style='color:#fbbf24'>Amber ≥58%</span> · "
+        "<span class='sig-acc-lo' style='color:#f87171'>Red &lt;58%</span></p>"
+        f"<table class='tbl acc-tbl'>{hdr}<tbody>{''.join(rows_html)}</tbody></table>"
+        "</section>"
+    )
+
+
+# ─── Today's signal alerts ────────────────────────────────────────────────────
+
+def _build_today_alerts_html(df: pd.DataFrame) -> str:
+    """Show which of today's picks fire ELITE/STRONG signal criteria."""
+    import glob as _glob
+
+    elite_fires = []
+    strong_fires = []
+
+    # ── ML from model_scores ──────────────────────────────────────────────────
+    ml_rows = df[df["model"] == "ML"].copy() if "model" in df.columns else pd.DataFrame()
+    for _, r in ml_rows.iterrows():
+        p = pd.to_numeric(r.get("model_prob"), errors="coerce")
+        if pd.isna(p):
+            continue
+        conf = p if p >= 0.5 else 1 - p
+        direction = "HOME" if p >= 0.5 else "AWAY"
+        game = str(r.get("game", ""))
+        if "@" in game:
+            away_nm, home_nm = [x.strip() for x in game.split("@", 1)]
+            team = home_nm if direction == "HOME" else away_nm
+        else:
+            team = direction
+        entry = {
+            "sig": "ML", "game": game, "pick": team,
+            "conf": conf, "edge": r.get("edge"), "odds": r.get("retail_american_odds"),
+        }
+        if conf >= 0.80:
+            elite_fires.append(entry)
+        elif conf >= 0.75:
+            strong_fires.append(entry)
+
+    # ── F5, NRFI from model_scores ────────────────────────────────────────────
+    for mkt_label, mkt_model, cutoff, tier_list in [
+        ("F5",   "F5",   0.70, strong_fires),
+        ("NRFI", "NRFI", 0.80, strong_fires),
+    ]:
+        sub = df[df["model"] == mkt_model].copy() if "model" in df.columns else pd.DataFrame()
+        for _, r in sub.iterrows():
+            p = pd.to_numeric(r.get("model_prob"), errors="coerce")
+            if pd.isna(p) or p < cutoff:
+                continue
+            tier_list.append({
+                "sig": mkt_label, "game": str(r.get("game", "")),
+                "pick": _pick_label(r), "conf": p,
+                "edge": r.get("edge"), "odds": r.get("retail_american_odds"),
+            })
+
+    today_str = datetime.now().strftime("%Y-%m-%d")
+
+    def _alert_card(f: dict, tier: str) -> str:
+        cls = "alert-card-elite" if tier == "ELITE" else "alert-card-strong"
+        tier_badge = f'<span class="{"sig-elite-badge" if tier == "ELITE" else "sig-strong-badge"}">{tier}</span>'
+        base_sig = f["sig"].split(" ")[0]
+        sig_color = MARKET_BADGE.get(base_sig, ("#607d8b", base_sig[:4]))[0]
+        if base_sig == "K-over":
+            sig_color = "#7b1fa2"
+        sig_badge = f'<span class="mkt-badge" style="background:{sig_color}">{f["sig"]}</span>'
+        edge_str = _fmt_edge(f.get("edge")) if not pd.isna(f.get("edge", float("nan"))) else "—"
+        odds_str = _fmt_odds(f.get("odds")) if not pd.isna(f.get("odds", float("nan"))) else "—"
+        return (
+            f"<article class='alert-card {cls}'>"
+            f"<div class='alert-head'>{sig_badge} {tier_badge} "
+            f"<span class='alert-game'>{_html.escape(f['game'])}</span></div>"
+            f"<div class='alert-pick'>{_html.escape(str(f['pick']))}</div>"
+            f"<div class='alert-meta'>"
+            f"<span>Prob <b>{f['conf']:.0%}</b></span>"
+            f"<span>Edge <b>{edge_str}</b></span>"
+            f"<span>Odds <b>{odds_str}</b></span>"
+            f"</div>"
+            f"</article>"
+        )
+
+    elite_html  = "".join(_alert_card(f, "ELITE")  for f in sorted(elite_fires,  key=lambda x: -x["conf"]))
+    strong_html = "".join(_alert_card(f, "STRONG") for f in sorted(strong_fires, key=lambda x: -x["conf"]))
+
+    if not elite_fires and not strong_fires:
+        inner = "<p class='muted'>No signal fires today — check back after lineups post.</p>"
+    else:
+        inner = ""
+        if elite_fires:
+            inner += f"<h3 class='alert-tier-hdr elite-hdr'>🔥 ELITE — {len(elite_fires)} alert{'s' if len(elite_fires)!=1 else ''}</h3>"
+            inner += f"<div class='alert-grid'>{elite_html}</div>"
+        if strong_fires:
+            inner += f"<h3 class='alert-tier-hdr strong-hdr'>◆ STRONG — {len(strong_fires)} alert{'s' if len(strong_fires)!=1 else ''}</h3>"
+            inner += f"<div class='alert-grid'>{strong_html}</div>"
+
+    return (
+        "<section class='card hero'>"
+        f"<h2>🚨 Today's Signal Alerts — {today_str}</h2>"
+        + inner +
+        "</section>"
+    )
+
+
 # ─── Assembly ─────────────────────────────────────────────────────────────────
 
 CSS = """
@@ -996,6 +1255,29 @@ details summary::-webkit-details-marker{display:none}
 @media (max-width:480px){
   .bc-grid{grid-template-columns:repeat(2,1fr)}
 }
+
+/* ── Signal accuracy tracker ──────────────────────────────────────────────── */
+.sig-elite-badge{display:inline-block;padding:1px 7px;border-radius:999px;font-size:10px;
+  font-weight:700;background:#14532d;color:#4ade80;letter-spacing:.05em;border:1px solid #4ade80}
+.sig-strong-badge{display:inline-block;padding:1px 7px;border-radius:999px;font-size:10px;
+  font-weight:700;background:#451a03;color:#fbbf24;letter-spacing:.05em;border:1px solid #f5b301}
+.sig-acc-hi{color:#4ade80;font-size:15px}
+.sig-acc-mid{color:#fbbf24;font-size:15px}
+.sig-acc-lo{color:#f87171;font-size:15px}
+
+/* ── Today's alert cards ──────────────────────────────────────────────────── */
+.alert-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-top:8px}
+.alert-card{border-radius:10px;padding:14px 16px;border:1px solid #262a33;border-left-width:4px}
+.alert-card-elite{background:rgba(20,83,45,.25);border-left-color:#4ade80}
+.alert-card-strong{background:rgba(69,26,3,.25);border-left-color:#fbbf24}
+.alert-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+.alert-game{color:#9ca3af;font-size:12px;margin-left:2px}
+.alert-pick{font-size:16px;font-weight:700;color:#e4e7eb;margin-bottom:8px}
+.alert-meta{display:flex;gap:16px;font-size:12px;color:#9ca3af}
+.alert-meta b{color:#e4e7eb}
+.alert-tier-hdr{margin:16px 0 4px;font-size:14px;letter-spacing:.04em}
+.elite-hdr{color:#4ade80}
+.strong-hdr{color:#fbbf24}
 """
 
 JS_TEMPLATE = """
@@ -1032,27 +1314,16 @@ def render(df: pd.DataFrame) -> str:
         title_date = str(today)
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    accuracy_windows = _fetch_accuracy_stats()
-    accuracy_html    = _build_accuracy_html(accuracy_windows)
-
-    summary_stats = _calculate_summary_stats(df)
-    summary_html  = _render_summary_tiles(summary_stats)
-
-    cutoff_html = _build_cutoff_html()
+    signal_accuracy_html = _build_signal_accuracy_html()
+    today_alerts_html   = _build_today_alerts_html(df)
 
     body = (
         "<header>"
         f"<h1>⚾ The Wizard Report — {title_date}</h1>"
         f"<div class='sub'>Generated {ts}</div>"
         "</header>"
-        + summary_html
-        + "<div id='stats' class='stats-bar'></div>"
-        # New order per user: overall accuracy first, then optimal cutoff table,
-        # THEN the Alpha Markets picks list (calibration showcase), then
-        # actionable bets detail, pending results, full table.
-        + accuracy_html
-        + cutoff_html
-        + render_alpha(df)
+        + signal_accuracy_html
+        + today_alerts_html
     )
 
     js = JS_TEMPLATE.replace("__PORT__", str(TRACKER_PORT))

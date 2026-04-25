@@ -787,7 +787,7 @@ def _compute_log_odds_ratio(p_home: np.ndarray, p_away: np.ndarray) -> np.ndarra
     return lo_h - lo_a
 
 
-def train_team_model(df: pd.DataFrame, feat_cols: list[str]):
+def train_team_model(df: pd.DataFrame, feat_cols: list[str], val_year: int = 2025):
     """
     Train the doubled-dataset team perspective model and compare to single-perspective.
 
@@ -807,8 +807,9 @@ def train_team_model(df: pd.DataFrame, feat_cols: list[str]):
     print("\n[TEAM] Building doubled-dataset team perspective model …")
 
     # ── Training split ────────────────────────────────────────────────────
-    train_df_raw = df[df["year"].isin([2023, 2024])].reset_index(drop=True)
-    val_df_raw   = df[df["year"] == 2025].reset_index(drop=True)
+    _train_years = [y for y in [2023, 2024, 2025] if y < val_year]
+    train_df_raw = df[df["year"].isin(_train_years)].reset_index(drop=True)
+    val_df_raw   = df[df["year"] == val_year].reset_index(drop=True)
     print(f"  Single-perspective: train={len(train_df_raw)}  val={len(val_df_raw)}")
 
     # Build doubled training set
@@ -1166,17 +1167,18 @@ def _compute_rolling_adj_f5_form(merged: pd.DataFrame) -> pd.DataFrame:
     return merged
 
 
-def train_default(df: pd.DataFrame, feat_cols: list[str]):
+def train_default(df: pd.DataFrame, feat_cols: list[str], val_year: int = 2025):
     """
-    Train 2023+2024 → validate 2025.
+    Train on all years before val_year → validate on val_year.
     Label: f5_home_cover (+0.5) = home wins or ties after 5 innings.
 
     Calibration fix: Platt layer is now fitted on TRUE OOF predictions
-    (year-swap CV on 2023+2024), not on in-sample training scores.
+    (year-swap CV on train years), not on in-sample training scores.
     """
-    print("\n[3] Default split: train 2023+2024 / validate 2025  [label: f5_home_cover +0.5]")
-    train = df[df["year"].isin([2023, 2024])]
-    val   = df[df["year"] == 2025]
+    train_years = [y for y in [2023, 2024, 2025] if y < val_year]
+    print(f"\n[3] Default split: train {train_years} / validate {val_year}  [label: f5_home_cover +0.5]")
+    train = df[df["year"].isin(train_years)]
+    val   = df[df["year"] == val_year]
     print(f"    Train: {len(train)} | Val: {len(val)}")
 
     X_tr  = train[feat_cols].fillna(0).values.astype(np.float32)
@@ -1198,9 +1200,9 @@ def train_default(df: pd.DataFrame, feat_cols: list[str]):
     # train_default() holds 2025 out as the true validation year, so OOF
     # generation is pinned to [2023, 2024] to preserve 2025's holdout purity.
     # (train_final() uses the full LOYO range.)
-    print("\n[3b] Generating OOF predictions (LOYO on 2023+2024) …")
+    print(f"\n[3b] Generating OOF predictions (LOYO on {train_years}) …")
     oof_probs, oof_labels, oof_df, oof_segs = _generate_oof_for_stacker(
-        df, feat_cols, years=[2023, 2024],
+        df, feat_cols, years=train_years,
     )
 
     # ── Platt calibration fitted on OOF probs (not in-sample raw_tr) ─────────
@@ -1564,6 +1566,12 @@ def main():
                         help="Comma-separated list of EXTRA features to allow from a v2 matrix. "
                              "When set, features are restricted to the v1 baseline list "
                              "(models/f5_feature_cols_v1.json) plus these extra columns.")
+    parser.add_argument("--val-year", type=int, default=2025,
+                        help="Holdout year for validation (default: 2025)")
+    parser.add_argument("--val-preds-out", type=str, default=None,
+                        help="Override path for val predictions CSV")
+    parser.add_argument("--no-save-model", action="store_true",
+                        help="Skip saving model files (only writes val predictions)")
     args = parser.parse_args()
 
     print("=" * 70)
@@ -1604,19 +1612,25 @@ def main():
     if args.ncv:
         train_ncv(df, feat_cols)
 
-    # Default validation split (includes stacker training + L1 vs L2 comparison)
-    model_val, cal_val, stacker, _, val_df, _log_odds_val = train_default(df, feat_cols)
+    # Override val predictions output path if requested
+    if args.val_preds_out:
+        global OUTPUT_VAL_PREDS
+        OUTPUT_VAL_PREDS = Path(args.val_preds_out)
 
-    # Final model on all data
-    model_final, cal_final, stacker_final = train_final(df, feat_cols, with_2026=args.with_2026)
-    model_final.save_model(str(OUTPUT_MODEL))
-    pickle.dump(cal_final, open(OUTPUT_CALIB, "wb"))
-    print(f"\n  Saved final model → {OUTPUT_MODEL}")
-    print(f"  Saved calibrator  → {OUTPUT_CALIB}")
+    # Default validation split (includes stacker training + L1 vs L2 comparison)
+    model_val, cal_val, stacker, _, val_df, _log_odds_val = train_default(df, feat_cols, val_year=args.val_year)
+
+    if not args.no_save_model:
+        # Final model on all data
+        model_final, cal_final, stacker_final = train_final(df, feat_cols, with_2026=args.with_2026)
+        model_final.save_model(str(OUTPUT_MODEL))
+        pickle.dump(cal_final, open(OUTPUT_CALIB, "wb"))
+        print(f"\n  Saved final model -> {OUTPUT_MODEL}")
+        print(f"  Saved calibrator  -> {OUTPUT_CALIB}")
 
     # Team-perspective model (optional but recommended)
     if args.team_model:
-        train_team_model(df, feat_cols)
+        train_team_model(df, feat_cols, val_year=args.val_year)
 
     # Compare to yesterday's actuals (default: always show)
     _compare_yesterday(model_val, cal_val, feat_cols, val_df, stacker=stacker)

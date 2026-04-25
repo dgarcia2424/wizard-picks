@@ -243,7 +243,8 @@ def build_rl_features(df: pd.DataFrame,
 def build_dataset(fm: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
     """Filter to labelled rows, build features, return (X, y)."""
     df = fm.dropna(subset=["home_covers_rl"]).copy()
-    df = df.dropna(subset=["close_total", "home_sp_k_pct_10d", "away_sp_k_pct_10d"])
+    # close_total uses fillna(8.8) in build_rl_features — don't gate on it
+    df = df.dropna(subset=["home_sp_k_pct_10d", "away_sp_k_pct_10d"])
     print(f"  [rl_v1] Labelled rows: {len(df):,} "
           f"(cover rate={df['home_covers_rl'].mean():.3f})")
 
@@ -252,19 +253,48 @@ def build_dataset(fm: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
     return X, y
 
 
-def train(rounds: int = DEFAULT_ROUNDS) -> dict:
+def _enrich_with_2026(fm: pd.DataFrame) -> pd.DataFrame:
+    """Fill home_covers_rl for 2026 rows from actuals_2026.parquet."""
+    act_path = Path("data/statcast/actuals_2026.parquet")
+    if not act_path.exists():
+        print("  [rl_v1] actuals_2026.parquet not found — skipping 2026 enrichment")
+        return fm
+    act = pd.read_parquet(act_path)[["game_pk", "home_covers_rl"]].dropna()
+    fm = fm.copy()
+    mask_2026 = fm["year"] == 2026
+    fm.loc[mask_2026, "home_covers_rl"] = fm.loc[mask_2026, "game_pk"].map(
+        act.set_index("game_pk")["home_covers_rl"]
+    )
+    filled = fm.loc[mask_2026, "home_covers_rl"].notna().sum()
+    print(f"  [rl_v1] Enriched {filled} 2026 rows with home_covers_rl from actuals")
+    return fm
+
+
+def train(rounds: int = DEFAULT_ROUNDS, val_year: int | None = None,
+          with_2026: bool = False) -> dict:
     print(f"[rl_v1] Loading feature matrix: {FM_PATH}")
     fm = pd.read_parquet(FM_PATH)
     fm["game_date"] = pd.to_datetime(fm["game_date"])
+    if "year" not in fm.columns:
+        fm["year"] = fm["game_date"].dt.year
+
+    if with_2026:
+        fm = _enrich_with_2026(fm)
 
     X, y = build_dataset(fm)
 
-    # Temporal split: last 20% of games as validation (date-ordered)
-    dates = fm.loc[X.index, "game_date"].values
-    sort_idx   = np.argsort(dates)
-    n_val      = max(1, int(len(sort_idx) * 0.20))
-    val_mask   = np.zeros(len(X), dtype=bool)
-    val_mask[sort_idx[-n_val:]] = True
+    if val_year is not None:
+        # Year-based split for walk-forward validation
+        train_years = [yr for yr in [2023, 2024, 2025] if yr < val_year]
+        val_mask = fm.loc[X.index, "year"] == val_year
+        print(f"  [rl_v1] Year split: train {train_years} | val {val_year}")
+    else:
+        # Temporal split: last 20% of games as validation (date-ordered)
+        dates    = fm.loc[X.index, "game_date"].values
+        sort_idx = np.argsort(dates)
+        n_val    = max(1, int(len(sort_idx) * 0.20))
+        val_mask = pd.Series(False, index=X.index)
+        val_mask.iloc[sort_idx[-n_val:]] = True
 
     X_tr, X_va = X.loc[~val_mask], X.loc[val_mask]
     y_tr, y_va = y.loc[~val_mask], y.loc[val_mask]
@@ -463,7 +493,17 @@ def main() -> None:
     parser.add_argument("--rounds",   type=int,  default=DEFAULT_ROUNDS)
     parser.add_argument("--no-train", action="store_true",
                         help="Feature dry-run only — do not train or save model")
+    parser.add_argument("--val-year", type=int, default=None,
+                        help="Holdout year (year-based split). Default: temporal 80/20.")
+    parser.add_argument("--matrix", type=str, default=None,
+                        help="Feature matrix parquet path override")
+    parser.add_argument("--with-2026", action="store_true",
+                        help="Load actuals_2026.parquet to fill 2026 labels")
     args = parser.parse_args()
+
+    global FM_PATH
+    if args.matrix:
+        FM_PATH = Path(args.matrix)
 
     if args.no_train:
         print("[rl_v1] Dry-run: building features only …")
@@ -473,7 +513,8 @@ def main() -> None:
         print(f"\nNull rates:\n{X.isna().mean().round(4).to_string()}")
         return
 
-    metrics = train(rounds=args.rounds)
+    metrics = train(rounds=args.rounds, val_year=args.val_year,
+                    with_2026=args.with_2026)
     target_auc = 0.540
     verdict = "[TARGET MET]" if metrics["auc"] >= target_auc else f"[below {target_auc} target]"
     print(f"\n  Final AUC: {metrics['auc']:.4f}  {verdict}")

@@ -18,6 +18,7 @@ Outputs:
     data/logs/script_a_correlation_stats.txt
 """
 from __future__ import annotations
+import argparse
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -41,10 +42,21 @@ FEATURES = [
 ]
 
 
-def main():
+def main(val_year: int = 2025, matrix: Path | None = None, with_2026: bool = False):
     labels = pd.read_parquet(SP_LABELS)
-    fm = pd.read_parquet(FEATURE_MTX)
+    fm = pd.read_parquet(matrix if matrix is not None else FEATURE_MTX)
     fm["game_date"] = pd.to_datetime(fm["game_date"]).dt.strftime("%Y-%m-%d")
+
+    if with_2026:
+        act_path = Path("data/statcast/actuals_2026.parquet")
+        if act_path.exists():
+            act = pd.read_parquet(act_path)[["game_pk", "home_score_final", "away_score_final"]].dropna()
+            act["actual_game_total_2026"] = act["home_score_final"] + act["away_score_final"]
+            fm = fm.merge(act[["game_pk", "actual_game_total_2026"]], on="game_pk", how="left")
+            mask = fm["actual_game_total"].isna() & fm["actual_game_total_2026"].notna()
+            fm.loc[mask, "actual_game_total"] = fm.loc[mask, "actual_game_total_2026"]
+            fm = fm.drop(columns=["actual_game_total_2026"])
+            print(f"  [script_a] Enriched {mask.sum()} 2026 rows with actual_game_total")
 
     # Rename home/away SP features to side-neutral for each row
     fm_h = fm[["game_pk", "home_team",
@@ -131,7 +143,7 @@ def main():
         if c not in data.columns: data[c] = np.nan
         data[c] = pd.to_numeric(data[c], errors="coerce")
 
-    is_valid = data["year"] == 2025
+    is_valid = data["year"] == val_year
     X_tr, X_va = data.loc[~is_valid, feat_cols], data.loc[is_valid, feat_cols]
     y_tr, y_va = y_joint[~is_valid], y_joint[is_valid]
     print(f"Train {len(X_tr):,} pos={y_tr.mean():.3f}  Valid {len(X_va):,} pos={y_va.mean():.3f}")
@@ -190,4 +202,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Train Script A — SP K + Under SGP")
+    parser.add_argument("--val-year", type=int, default=2025)
+    parser.add_argument("--matrix", type=str, default=None)
+    parser.add_argument("--with-2026", action="store_true",
+                        help="Load actuals_2026.parquet to fill 2026 actual_game_total")
+    args = parser.parse_args()
+    main(val_year=args.val_year,
+         matrix=Path(args.matrix) if args.matrix else None,
+         with_2026=args.with_2026)
