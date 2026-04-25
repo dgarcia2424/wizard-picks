@@ -560,7 +560,7 @@ def build_pitcher_ewma_stats(years: list[int], verbose: bool = True) -> pd.DataF
         "estimated_woba_using_speedangle",
         "delta_pitcher_run_exp",
         "woba_denom",
-        "release_speed", "inning",
+        "release_speed", "inning", "pitch_type",
     ]
 
     all_game_frames = []
@@ -637,6 +637,32 @@ def build_pitcher_ewma_stats(years: list[int], verbose: bool = True) -> pd.DataF
             game_agg = game_agg.merge(_vd, on=["pitcher", "game_pk"], how="left")
         else:
             game_agg["velo_decay"] = np.nan
+
+        # Per-game FF/SI velocity decay (inning 1 vs inning 5+, fastball/sinker only)
+        # NaN intentionally preserved when pitcher didn't reach inn 5 (opener/early exit).
+        # The cross-year rolling 3-start window is computed below after concat.
+        _FB_TYPES = {"FF", "SI"}
+        _fb = df[df["pitch_type"].isin(_FB_TYPES) & df["rs"].notna()]
+        if not _fb.empty:
+            _fb_early = (
+                _fb[_fb["inn"] == 1]
+                .groupby(["pitcher", "game_pk"])["rs"]
+                .mean().rename("_fb_velo_inn1")
+            )
+            _fb_late = (
+                _fb[_fb["inn"] >= 5]
+                .groupby(["pitcher", "game_pk"])["rs"]
+                .mean().rename("_fb_velo_inn5p")
+            )
+            _vd3 = (
+                pd.concat([_fb_early, _fb_late], axis=1)
+                .reset_index()
+                .assign(velo_decay_per_game=lambda x: x["_fb_velo_inn1"] - x["_fb_velo_inn5p"])
+                [["pitcher", "game_pk", "velo_decay_per_game"]]
+            )
+            game_agg = game_agg.merge(_vd3, on=["pitcher", "game_pk"], how="left")
+        else:
+            game_agg["velo_decay_per_game"] = np.nan
 
         # ── Spring training filter ────────────────────────────────────────
         # Spring training pitches have woba_denom=0 (not official PAs) but
@@ -820,6 +846,27 @@ def build_pitcher_ewma_stats(years: list[int], verbose: bool = True) -> pd.DataF
 
     # Drop the very first start per pitcher (shift gives NaN — no prior history)
     all_games = all_games.dropna(subset=["k_pct"]).reset_index(drop=True)
+
+    # ── 3-start rolling FF/SI velocity decay (velo_decay_3s) ─────────────────
+    # For game T: mean(velo_decay_per_game_{T-1}, T-2, T-3).
+    # shift(1) before rolling enforces strict temporal isolation.
+    # min_periods=3 requires all 3 prior starts to have measurable inn-5+ FF/SI
+    # data — a pitcher with any opener/early-exit start in the window gets NaN.
+    # NO median fill: NaN propagates to XGBoost, which routes missing observations
+    # via its native learned "missing" branch. This is strictly preferable to
+    # imputing a constant that collapses the differential to 0.0 for early-season
+    # games and creates false "no advantage" signal at the diff layer.
+    all_games = all_games.sort_values(["pitcher", "game_date"]).reset_index(drop=True)
+    if "velo_decay_per_game" in all_games.columns:
+        all_games["velo_decay_3s"] = (
+            all_games
+            .groupby("pitcher", sort=False)["velo_decay_per_game"]
+            .transform(lambda s: s.shift(1).rolling(window=3, min_periods=3).mean())
+        )
+        # NaN intentionally preserved: insufficient prior deep-start data.
+        # XGBoost routes these via its learned missing-value branch per split.
+    else:
+        all_games["velo_decay_3s"] = np.nan
 
     # ── Trailing 10-day stats (Roadmap #2) ────────────────────────────────────
     # For each start, compute the average of raw stats over the preceding
@@ -2260,6 +2307,8 @@ def assemble_matrix(
             "k_pct_10d", "bb_pct_10d", "xwoba_10d",
             # Quick Win: BABIP luck + velocity decay trend
             "babip_game", "velo_decay",
+            # 3-start rolling FF/SI intra-game decay (strict temporal window)
+            "velo_decay_3s",
             # NOTE: Phase 2 arsenal/movement/swing-rv features omitted — data files
             # (pitcher_arsenal_stats, pitcher_run_value, pitcher_pitch_movement)
             # are not yet populated; they are 100% NaN and add no signal.
@@ -2325,6 +2374,21 @@ def assemble_matrix(
     # Quick Win: velocity decay diff (positive = home SP loses less velo late)
     if "home_sp_velo_decay" in df.columns:
         df["sp_velo_decay_diff"] = df["home_sp_velo_decay"] - df["away_sp_velo_decay"]
+
+    # 3-start rolling FF/SI decay diff (positive = home SP has less acute fatigue trend).
+    # Opener games: concept is inapplicable (pitcher never reaches inn 5 by design),
+    # so the diff is forced to 0.0 rather than propagating a NaN that the model would
+    # route the same way as "insufficient data" — these are semantically distinct.
+    # Non-opener games where either side lacks 3 qualifying starts: NaN propagates,
+    # letting XGBoost learn the missing-value direction from training.
+    if "home_sp_velo_decay_3s" in df.columns:
+        df["sp_velo_decay_3s_diff"] = df["home_sp_velo_decay_3s"] - df["away_sp_velo_decay_3s"]
+
+        # Opener gate: zero out the diff when either SP is flagged as an opener.
+        # home_is_opener_flag / away_is_opener_flag come from build_pitcher_game_state().
+        _home_opener = df.get("home_is_opener_flag", pd.Series(0, index=df.index)).fillna(0).astype(bool)
+        _away_opener = df.get("away_is_opener_flag", pd.Series(0, index=df.index)).fillna(0).astype(bool)
+        df.loc[_home_opener | _away_opener, "sp_velo_decay_3s_diff"] = 0.0
 
     # ── Team batting EWMA lookup: join via (team, game_pk) ───────────────
     bat_lookup = batting.set_index(["batting_team", "game_pk"])
@@ -2788,7 +2852,7 @@ def assemble_matrix(
                     odds_frames.append(_combined)
                     if verbose:
                         print(f"      Market lines fallback ({yr}): "
-                              f"{len(daily_paths)} daily files → {len(_combined)} rows "
+                              f"{len(daily_paths)} daily files -> {len(_combined)} rows "
                               f"(run pull_odds_history_api.py --year {yr} to build annual file)")
     if odds_frames:
         odds_all = pd.concat(odds_frames, ignore_index=True)
