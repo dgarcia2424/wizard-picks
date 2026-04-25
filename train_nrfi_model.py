@@ -63,8 +63,9 @@ DATA_DIR      = BASE_DIR / "data" / "statcast"
 MODELS_DIR    = BASE_DIR / "models"
 MODELS_DIR.mkdir(exist_ok=True)
 
-FEAT_MATRIX   = BASE_DIR / "feature_matrix.parquet"
-ACTUALS_2026  = DATA_DIR / "actuals_2026.parquet"
+FEAT_MATRIX      = BASE_DIR / "feature_matrix.parquet"
+ACTUALS_2026     = DATA_DIR / "actuals_2026.parquet"
+ABS_FEATURES_2026 = DATA_DIR / "abs_features_2026.parquet"
 
 OUTPUT_MODEL      = MODELS_DIR / "xgb_nrfi.json"
 OUTPUT_CALIB      = MODELS_DIR / "xgb_nrfi_calibrator.pkl"
@@ -156,6 +157,13 @@ NRFI_STACKING_FEATURES = [
     "pois_lam_f1_home",
     "pois_lam_f1_away",
     "pois_p_nrfi",
+    # ABS-regime features (2026 only; NaN for 2023-2025 — no backfill)
+    "home_sp_fi_whiff_pct",
+    "away_sp_fi_whiff_pct",
+    "sp_fi_whiff_diff",
+    "home_sp_zone_pct",
+    "away_sp_zone_pct",
+    "sp_zone_pct_diff",
 ]
 
 POISSON_XGB_PARAMS = {
@@ -258,7 +266,9 @@ class BayesianStackerNRFI:
             X[col] = feat_df[col] if col in feat_df.columns else self.fill_values.get(col, 0.0)
         for col, val in self.fill_values.items():
             if col in X.columns:
-                X[col] = X[col].fillna(val)
+                fill = val if not pd.isna(val) else 0.0
+                X[col] = X[col].fillna(fill)
+        X = X.fillna(0.0)  # final safety: catch any remaining NaN
         return X.values.astype(float)
 
     def predict(self, xgb_raw, feat_df, segment_id=None) -> np.ndarray:
@@ -289,7 +299,10 @@ def train_nrfi_stacker(
     num_chains:  int = 2,
 ) -> BayesianStackerNRFI:
     feat_names = [c for c in NRFI_STACKING_FEATURES if c in oof_feat_df.columns]
-    fill_vals  = {c: float(oof_feat_df[c].median()) for c in feat_names}
+    fill_vals  = {
+        c: (m if not pd.isna(m := float(oof_feat_df[c].median())) else 0.0)
+        for c in feat_names
+    }
 
     X_feat = oof_feat_df[feat_names].copy()
     for col, val in fill_vals.items():
@@ -444,6 +457,25 @@ def build_dataset(include_2026: bool = False) -> tuple[pd.DataFrame, list[str]]:
     print("\n[1] Loading feature matrix …")
     fm = pd.read_parquet(FEAT_MATRIX)
     print(f"    Feature matrix: {fm.shape[0]} rows × {fm.shape[1]} cols")
+
+    # Merge ABS features (2026 only; NaN for prior years = temporal leakage guard)
+    if ABS_FEATURES_2026.exists():
+        abs_cols = [
+            "game_pk",
+            "home_sp_fi_whiff_pct", "away_sp_fi_whiff_pct",
+            "home_sp_zone_pct",     "away_sp_zone_pct",
+            "sp_zone_pct_diff",
+        ]
+        abs_df = pd.read_parquet(ABS_FEATURES_2026, columns=abs_cols)
+        abs_df["sp_fi_whiff_diff"] = (
+            abs_df["home_sp_fi_whiff_pct"] - abs_df["away_sp_fi_whiff_pct"]
+        )
+        fm = fm.merge(abs_df, on="game_pk", how="left")
+        n_matched = fm[fm["home_sp_fi_whiff_pct"].notna()].shape[0]
+        print(f"    ABS features merged: {n_matched} rows with 2026 whiff/zone data "
+              f"({fm.shape[0] - n_matched} rows NaN — correct for 2023-2025)")
+    else:
+        print(f"    [WARN] {ABS_FEATURES_2026} not found — ABS features skipped")
 
     print("\n[2] Extracting NRFI labels …")
     f1 = load_nrfi_labels()

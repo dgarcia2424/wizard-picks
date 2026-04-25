@@ -40,6 +40,8 @@ from train_f5_model import (
     _compute_log_odds_ratio,
     _derive_segment_id,
     _flip_team_perspective,
+    _prob_home_cover_from_lambdas,
+    _prob_tie_from_lambdas,
 )
 
 # ---------------------------------------------------------------------------
@@ -56,6 +58,8 @@ XGB_CAL_PATH    = MODELS_DIR / "xgb_f5_calibrator.pkl"
 STACKER_PATH    = MODELS_DIR / "stacking_lr_f5.pkl"
 TEAM_MODEL_PATH = MODELS_DIR / "team_f5_model.json"
 TEAM_FEAT_PATH  = MODELS_DIR / "team_f5_feat_cols.json"
+POIS_HOME_PATH  = MODELS_DIR / "f5_pois_home.json"
+POIS_AWAY_PATH  = MODELS_DIR / "f5_pois_away.json"
 ACTUALS_2026    = DATA_DIR   / "actuals_2026.parquet"
 
 
@@ -84,6 +88,17 @@ def load_models():
 
     cal = pickle.load(open(XGB_CAL_PATH, "rb"))
 
+    # Poisson boosters for Skellam sidecar (λ_home, λ_away → P(tie), P(cover))
+    pois_home = pois_away = None
+    if POIS_HOME_PATH.exists() and POIS_AWAY_PATH.exists():
+        import xgboost as _xgb
+        pois_home = _xgb.Booster()
+        pois_home.load_model(str(POIS_HOME_PATH))
+        pois_away = _xgb.Booster()
+        pois_away.load_model(str(POIS_AWAY_PATH))
+    else:
+        print(f"[WARN] Poisson boosters not found — Skellam features will use training medians")
+
     # Stacker pickle was saved when train_f5_model was __main__, so
     # BayesianStackerF5 is stored as __main__.BayesianStackerF5.
     # Inject the class into __main__ before unpickling so it resolves
@@ -94,7 +109,7 @@ def load_models():
         _main.BayesianStackerF5 = BayesianStackerF5
     stacker = pickle.load(open(STACKER_PATH, "rb"))
 
-    return xgb_model, cal, feat_cols, stacker, team_model, team_feat_cols
+    return xgb_model, cal, feat_cols, stacker, team_model, team_feat_cols, pois_home, pois_away
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +365,7 @@ def compute_team_log_odds(
 def predict_games(date_str: str) -> pd.DataFrame:
     """Score all games on date_str and print L1 + L2 predictions."""
     print(f"Loading models …")
-    xgb_model, cal, feat_cols, stacker, team_model, team_feat_cols = load_models()
+    xgb_model, cal, feat_cols, stacker, team_model, team_feat_cols, pois_home, pois_away = load_models()
 
     print(f"Loading feature matrix from {FEAT_MATRIX} …")
     fm = pd.read_parquet(FEAT_MATRIX)
@@ -400,6 +415,12 @@ def predict_games(date_str: str) -> pd.DataFrame:
         feat["away_rolling_adj_f5_form"] = away_form
         feat["rolling_adj_f5_form_diff"] = home_form - away_form
 
+        # Ensure feat has all feat_cols (ABS features absent from enriched matrix → 0.0)
+        feat = feat.copy()
+        for _c in feat_cols:
+            if _c not in feat.index:
+                feat[_c] = 0.0
+
         # ── L1: XGBoost + OOF-fitted Platt ───────────────────────────────
         feat_df = pd.DataFrame([feat.reindex(feat_cols, fill_value=0.0).fillna(0.0)], columns=feat_cols)
 
@@ -420,12 +441,29 @@ def predict_games(date_str: str) -> pd.DataFrame:
         # ── Team log-odds (stacker domain feature) ────────────────────────
         team_lo = compute_team_log_odds(feat, feat_cols, team_model, team_feat_cols)
 
+        # ── Skellam sidecar: compute λ_home, λ_away → P(cover), P(tie) ───────
+        pois_lam_home = pois_lam_away = pois_p_cover = pois_p_tie = None
+        if pois_home is not None and pois_away is not None:
+            import xgboost as _xgb
+            _dmat = _xgb.DMatrix(X_l1)
+            pois_lam_home = float(pois_home.predict(_dmat)[0])
+            pois_lam_away = float(pois_away.predict(_dmat)[0])
+            pois_p_cover  = float(_prob_home_cover_from_lambdas(
+                np.array([pois_lam_home]), np.array([pois_lam_away]))[0])
+            pois_p_tie    = float(_prob_tie_from_lambdas(
+                np.array([pois_lam_home]), np.array([pois_lam_away]))[0])
+
         # ── L2: Bayesian Hierarchical Stacker ─────────────────────────────
-        # Augment the feature Series with the two stacker-only columns,
-        # then build a 1-row DataFrame for the stacker's _build_X_domain().
+        # Augment the feature Series with stacker-only columns, including
+        # real-time Skellam features (not training-median fill).
         feat_aug = feat.copy()
         feat_aug["team_f5_log_odds"]    = team_lo
         feat_aug["rolling_f5_tie_rate"] = rolling_tie
+        if pois_lam_home is not None:
+            feat_aug["pois_lam_home"] = pois_lam_home
+            feat_aug["pois_lam_away"] = pois_lam_away
+            feat_aug["pois_p_cover"]  = pois_p_cover
+            feat_aug["pois_p_tie"]    = pois_p_tie
         feat_row_df = pd.DataFrame([feat_aug])
 
         seg   = _derive_segment_id(feat_row_df)

@@ -96,8 +96,9 @@ DATA_DIR      = BASE_DIR / "data" / "statcast"
 MODELS_DIR    = BASE_DIR / "models"
 MODELS_DIR.mkdir(exist_ok=True)
 
-FEAT_MATRIX   = BASE_DIR / "feature_matrix.parquet"
-ACTUALS_2026  = DATA_DIR / "actuals_2026.parquet"
+FEAT_MATRIX      = BASE_DIR / "feature_matrix.parquet"
+ACTUALS_2026     = DATA_DIR / "actuals_2026.parquet"
+ABS_FEATURES_2026 = DATA_DIR / "abs_features_2026.parquet"
 
 OUTPUT_MODEL      = MODELS_DIR / "xgb_f5.json"
 OUTPUT_CALIB      = MODELS_DIR / "xgb_f5_calibrator.pkl"
@@ -222,7 +223,15 @@ F5_STACKING_FEATURES = [
     # target carries signal the binary classifier misses (~0.012 Brier gain in isolation).
     "pois_lam_home",           # predicted home F5 runs (Poisson regression)
     "pois_lam_away",           # predicted away F5 runs (Poisson regression)
-    "pois_p_cover",            # P(home_runs >= away_runs) from convolution of the two Poissons
+    "pois_p_cover",            # P(home_runs >= away_runs) via Skellam CDF
+    "pois_p_tie",              # P(home_runs == away_runs) via Skellam PMF — tie-rate signal
+    # ABS-regime features (2026 only; NaN for 2023-2025 — no backfill)
+    "home_sp_whiff_pct",       # actual whiff rate (ABS-immune, replaces stale whiff_pctl)
+    "away_sp_whiff_pct",
+    "sp_whiff_pct_diff",
+    "home_sp_abs_vulnerability",   # called K3 / all K3 — ump-reliance penalty under ABS
+    "away_sp_abs_vulnerability",
+    "sp_abs_vulnerability_diff",
 ]
 
 
@@ -265,13 +274,23 @@ def _poisson_predict(booster, X: np.ndarray) -> np.ndarray:
 
 def _prob_home_cover_from_lambdas(lam_home: np.ndarray,
                                   lam_away: np.ndarray) -> np.ndarray:
-    """P(home_runs >= away_runs) under independent Poisson(lam_home), Poisson(lam_away)."""
-    from scipy.stats import poisson as _poisson
-    k = np.arange(_POISSON_MAX_RUNS + 1)
-    pmf_home = _poisson.pmf(k[None, :], mu=lam_home[:, None])
-    pmf_away = _poisson.pmf(k[None, :], mu=lam_away[:, None])
-    cdf_away = np.cumsum(pmf_away, axis=1)
-    return (pmf_home * cdf_away).sum(axis=1)
+    """P(home_runs >= away_runs) = P(D >= 0) where D ~ Skellam(lam_home, lam_away)."""
+    from scipy.stats import skellam as _sk
+    return 1.0 - _sk.cdf(-1, mu1=np.asarray(lam_home), mu2=np.asarray(lam_away))
+
+
+def _prob_tie_from_lambdas(lam_home: np.ndarray,
+                           lam_away: np.ndarray) -> np.ndarray:
+    """P(home_runs == away_runs) = P(D = 0) where D ~ Skellam(lam_home, lam_away)."""
+    from scipy.stats import skellam as _sk
+    return _sk.pmf(0, mu1=np.asarray(lam_home), mu2=np.asarray(lam_away))
+
+
+def _prob_home_win_from_lambdas(lam_home: np.ndarray,
+                                lam_away: np.ndarray) -> np.ndarray:
+    """P(home_runs > away_runs) = P(D > 0) where D ~ Skellam(lam_home, lam_away)."""
+    from scipy.stats import skellam as _sk
+    return 1.0 - _sk.cdf(0, mu1=np.asarray(lam_home), mu2=np.asarray(lam_away))
 
 # Fixed probability bins for calibration reliability diagrams.
 # Using pd.cut (equal-width) rather than pd.qcut (equal-frequency) so that
@@ -345,7 +364,9 @@ class BayesianStackerF5:
             X[col] = feat_df[col] if col in feat_df.columns else self.fill_values.get(col, 0.0)
         for col, val in self.fill_values.items():
             if col in X.columns:
-                X[col] = X[col].fillna(val)
+                fill = val if not pd.isna(val) else 0.0
+                X[col] = X[col].fillna(fill)
+        X = X.fillna(0.0)
         return X.values.astype(float)
 
     def predict(self, xgb_raw, feat_df, segment_id=None) -> np.ndarray:
@@ -380,7 +401,10 @@ def train_f5_stacker(
     Saves model to OUTPUT_STACKER and trace to OUTPUT_STACKER_NPZ.
     """
     feat_names = [c for c in F5_STACKING_FEATURES if c in oof_feat_df.columns]
-    fill_vals  = {c: float(oof_feat_df[c].median()) for c in feat_names}
+    fill_vals  = {
+        c: (m if not pd.isna(m := float(oof_feat_df[c].median())) else 0.0)
+        for c in feat_names
+    }
 
     X_feat = oof_feat_df[feat_names].copy()
     for col, val in fill_vals.items():
@@ -550,6 +574,21 @@ def build_dataset(include_2026: bool = False) -> tuple[pd.DataFrame, list[str]]:
     print("\n[1] Loading feature matrix …")
     fm = pd.read_parquet(FEAT_MATRIX)
     print(f"    Feature matrix: {fm.shape[0]} rows × {fm.shape[1]} cols")
+
+    # Merge ABS features (2026 only; NaN for prior years = temporal leakage guard)
+    if ABS_FEATURES_2026.exists():
+        abs_cols = [
+            "game_pk",
+            "home_sp_whiff_pct",        "away_sp_whiff_pct",        "sp_whiff_pct_diff",
+            "home_sp_abs_vulnerability", "away_sp_abs_vulnerability", "sp_abs_vulnerability_diff",
+        ]
+        abs_df = pd.read_parquet(ABS_FEATURES_2026, columns=abs_cols)
+        fm = fm.merge(abs_df, on="game_pk", how="left")
+        n_matched = fm["home_sp_whiff_pct"].notna().sum()
+        print(f"    ABS features merged: {n_matched} rows with 2026 whiff/abs_vulnerability data "
+              f"({fm.shape[0] - n_matched} rows NaN — correct for 2023-2025)")
+    else:
+        print(f"    [WARN] {ABS_FEATURES_2026} not found — ABS features skipped")
 
     # Check whether MC F5 residual columns are present
     missing_mc = [c for c in MC_F5_RESIDUAL_COLS if c not in fm.columns]
@@ -936,6 +975,7 @@ def _generate_oof_for_stacker(
     oof_lam_home     = np.zeros(n_oof, dtype=float)
     oof_lam_away     = np.zeros(n_oof, dtype=float)
     oof_p_cover_poi  = np.zeros(n_oof, dtype=float)
+    oof_p_tie_poi    = np.zeros(n_oof, dtype=float)
     oof_labels       = oof_df["f5_home_cover"].values.astype(int)
 
     # Row positions in oof_df for each held-out year (for scatter writes)
@@ -992,6 +1032,7 @@ def _generate_oof_for_stacker(
         lam_h_fold = _poisson_predict(bst_hr, X_va)
         lam_a_fold = _poisson_predict(bst_ar, X_va)
         p_cov_fold = _prob_home_cover_from_lambdas(lam_h_fold, lam_a_fold)
+        p_tie_fold = _prob_tie_from_lambdas(lam_h_fold, lam_a_fold)
 
         # Scatter into the concatenated OOF arrays
         pos = year_pos[val_yr]
@@ -1000,6 +1041,7 @@ def _generate_oof_for_stacker(
         oof_lam_home[pos]     = lam_h_fold
         oof_lam_away[pos]     = lam_a_fold
         oof_p_cover_poi[pos]  = p_cov_fold
+        oof_p_tie_poi[pos]    = p_tie_fold
 
         # Per-fold diagnostics (guard single-class AUC edge case)
         def _safe_auc(y, p):
@@ -1007,10 +1049,11 @@ def _generate_oof_for_stacker(
         print(f"    Fold {val_yr}: tr={len(tr):>5,}  va={len(va):>5,}  "
               f"XGB-AUC={_safe_auc(y_va, raw):.4f}  "
               f"team-logodds-AUC={_safe_auc(y_va, lo_fold):.4f}  "
-              f"poi-AUC={_safe_auc(y_va, p_cov_fold):.4f}")
+              f"poi-AUC={_safe_auc(y_va, p_cov_fold):.4f}  "
+              f"tie-mean={p_tie_fold.mean():.3f}")
 
         # Release per-fold artefacts before the next loop iteration.
-        del m, raw, bst_hr, bst_ar, lam_h_fold, lam_a_fold, p_cov_fold
+        del m, raw, bst_hr, bst_ar, lam_h_fold, lam_a_fold, p_cov_fold, p_tie_fold
         del X_tr, y_tr, sw_tr, X_va, y_va, tr, va, lo_fold, p_h, p_a
         gc.collect()
 
@@ -1030,6 +1073,7 @@ def _generate_oof_for_stacker(
     oof_df["pois_lam_home"]    = oof_lam_home
     oof_df["pois_lam_away"]    = oof_lam_away
     oof_df["pois_p_cover"]     = oof_p_cover_poi
+    oof_df["pois_p_tie"]       = oof_p_tie_poi
 
     oof_segs = _derive_segment_id(oof_df)
     return oof_probs, oof_labels, oof_df, oof_segs
@@ -1262,12 +1306,15 @@ def train_default(df: pd.DataFrame, feat_cols: list[str], val_year: int = 2025):
     lam_h_val = _poisson_predict(bst_hr_full, X_val)
     lam_a_val = _poisson_predict(bst_ar_full, X_val)
     p_cov_val = _prob_home_cover_from_lambdas(lam_h_val, lam_a_val)
+    p_tie_val = _prob_tie_from_lambdas(lam_h_val, lam_a_val)
     val["pois_lam_home"] = lam_h_val
     val["pois_lam_away"] = lam_a_val
     val["pois_p_cover"]  = p_cov_val
+    val["pois_p_tie"]    = p_tie_val
     auc_poi_val = roc_auc_score(y_val, p_cov_val)
     print(f"  Poisson p_cover on 2025: AUC={auc_poi_val:.4f}  "
-          f"mean lam_home={lam_h_val.mean():.3f}  lam_away={lam_a_val.mean():.3f}")
+          f"mean lam_home={lam_h_val.mean():.3f}  lam_away={lam_a_val.mean():.3f}  "
+          f"mean tie_prob={p_tie_val.mean():.3f}")
 
     # Persist boosters for inference (score_f5_today.py).
     bst_hr_full.save_model(str(MODELS_DIR / "f5_pois_home.json"))

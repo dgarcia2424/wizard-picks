@@ -142,5 +142,11 @@
   "mc_f5_away_win_pct",
   "mc_f5_tie_pct",
   "mc_f5_expected_total",
-  "mc_f5_home_cover_pct"
+  "mc_f5_home_cover_pct",
+  "home_sp_fi_whiff_pct",
+  "away_sp_fi_whiff_pct",
+  "home_sp_zone_pct",
+  "away_sp_zone_pct",
+  "sp_zone_pct_diff",
+  "sp_fi_whiff_diff"
 ]

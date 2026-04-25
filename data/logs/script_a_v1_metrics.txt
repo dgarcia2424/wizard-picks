@@ -1,41 +1,41 @@
 Script A: The Dominance
 script: A_Dominance
 legs: SP_K>=5.5 AND Game_Total<8.0
-rows_train: 5287
-rows_valid: 626
-auc: 0.6634978229317853
-logloss: 0.45309451009787577
-brier: 0.1399562954902649
-best_iter: 12
-base_rate_valid: 0.16932907348242812
-corr_ratio: 1.1169929820095954
-p_joint_actual: 0.20835447319465583
-p_joint_indep: 0.1865315866352202
+rows_train: 2636
+rows_valid: 2651
+auc: 0.6111555451004993
+logloss: 0.5007835921800247
+brier: 0.16085556149482727
+best_iter: 10
+base_rate_valid: 0.2055827989437948
+corr_ratio: 1.1170490292933586
+p_joint_actual: 0.21297522224323814
+p_joint_indep: 0.19065879532428898
 
 Script A Correlation Stats  (K>=5.5 AND Total<8.0)
-  n games:           5,913
-  P(K over):         0.4218
-  P(Total under):    0.4422
-  P(joint, actual):  0.2084
-  P(joint, indep):   0.1865
-  Correlation ratio: 1.117  (POSITIVE corr — script has edge)
+  n games:           5,287
+  P(K over):         0.4280
+  P(Total under):    0.4454
+  P(joint, actual):  0.2130
+  P(joint, indep):   0.1907
+  Correlation ratio: 1.117  (POSITIVE corr â€” script has edge)
 
 Feature importance
                    feature      gain  rank
-             sp_whiff_pctl 13.209938     1
-               close_total 12.234385     2
-                  sp_k_pct 10.489465     3
-home_bullpen_vulnerability  8.800552     4
-          sp_xwoba_against  8.404212     5
-                    temp_f  8.018222     6
-             sp_k_bb_ratio  7.905190     7
-            opp_bat_k_rate  7.653243     8
-                 sp_gb_pct  7.016848     9
-                  elo_diff  6.908346    10
-              sp_k_pct_10d  6.902976    11
-                sp_ff_velo  6.897729    12
-              sp_1st_k_pct  6.861482    13
-away_bullpen_vulnerability  6.652610    14
-                 sp_bb_pct  6.549153    15
-          home_park_factor  6.501393    16
-           ump_k_above_avg  6.147515    17
+               close_total 11.312995     1
+                  sp_k_pct  8.158841     2
+                sp_ff_velo  7.056962     3
+             sp_whiff_pctl  6.782985     4
+              sp_k_pct_10d  6.667152     5
+home_bullpen_vulnerability  6.619931     6
+          home_park_factor  6.503742     7
+                  elo_diff  6.400718     8
+              sp_1st_k_pct  6.294553     9
+           ump_k_above_avg  5.936301    10
+             sp_k_bb_ratio  5.891224    11
+away_bullpen_vulnerability  5.775017    12
+                    temp_f  5.504950    13
+            opp_bat_k_rate  5.491483    14
+                 sp_bb_pct  5.484486    15
+          sp_xwoba_against  5.144813    16
+                 sp_gb_pct  5.139191    17

@@ -1,46 +1,45 @@
 Script C: Elite Duel
 script: C_EliteDuel
 legs: Game_Under | Both_SP_F5_K>=3 | Close_Game(|margin|<=1)
-rows_train: 4867
-rows_valid: 313
-auc: 0.5645562770562771
-logloss: 0.3360896747776587
-brier: 0.09408636391162872
-best_iter: 9
-base_rate_valid: 0.10543130990415335
+rows_train: 2744
+rows_valid: 2436
+auc: 0.5847057437234411
+logloss: 0.3885972655040967
+brier: 0.11412614583969116
+best_iter: 12
+base_rate_valid: 0.13177339901477833
 corr_ratio: 1.3529348483242956
 p_joint_actual: 0.12104247104247104
 p_joint_indep: 0.08946659271316029
 
                     feature     gain
-         home_sp_whiff_pctl 9.855818
-      away_sp_xwoba_against 9.709823
-              sp_k_pct_diff 9.210207
-              away_sp_k_pct 9.090132
-              home_sp_k_pct 8.752828
-      home_sp_xwoba_against 8.581817
-               sp_velo_diff 8.436349
-  home_catcher_framing_runs 8.401116
-            away_sp_ff_velo 8.135127
-          home_bat_k_vs_lhp 8.025790
-             home_sp_gb_pct 8.000041
-            air_density_rho 7.961500
-                   wind_mph 7.828923
-            ump_k_above_avg 7.827698
-           roof_closed_flag 7.810210
-             away_sp_gb_pct 7.808515
-          away_bat_k_vs_lhp 7.805703
-                     temp_f 7.800086
-              sp_xwoba_diff 7.555590
- home_bullpen_vulnerability 7.548797
-          away_sp_k_pct_10d 7.542199
-          home_sp_k_pct_10d 7.521327
-       batting_matchup_edge 7.309306
-          home_bat_k_vs_rhp 7.218446
-            home_sp_ff_velo 7.137794
-ump_called_strike_above_avg 6.891844
-          away_bat_k_vs_rhp 6.756775
- away_bullpen_vulnerability 6.488594
-           home_park_factor 6.470346
-         away_sp_whiff_pctl 6.162904
-  away_catcher_framing_runs 4.358749
+          away_bat_k_vs_rhp 8.375444
+              away_sp_k_pct 8.196051
+            ump_k_above_avg 7.616196
+          home_bat_k_vs_lhp 7.172622
+            air_density_rho 7.053196
+         home_sp_whiff_pctl 6.961202
+          away_bat_k_vs_lhp 6.955018
+ home_bullpen_vulnerability 6.695512
+                     temp_f 6.651333
+            home_sp_ff_velo 6.634819
+                   wind_mph 6.615679
+              sp_k_pct_diff 6.530243
+  away_catcher_framing_runs 6.526950
+ away_bullpen_vulnerability 6.501259
+ump_called_strike_above_avg 6.496022
+          home_bat_k_vs_rhp 6.407682
+  home_catcher_framing_runs 6.359879
+      away_sp_xwoba_against 6.211443
+          home_sp_k_pct_10d 6.206479
+             away_sp_gb_pct 6.204889
+               sp_velo_diff 6.034724
+      home_sp_xwoba_against 6.027432
+         away_sp_whiff_pctl 5.974136
+             home_sp_gb_pct 5.937492
+            away_sp_ff_velo 5.930237
+              sp_xwoba_diff 5.858156
+          away_sp_k_pct_10d 5.723993
+       batting_matchup_edge 5.625091
+           home_park_factor 5.558037
+              home_sp_k_pct 5.394155

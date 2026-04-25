@@ -1,7 +1,7 @@
 Script A Correlation Stats  (K>=5.5 AND Total<8.0)
-  n games:           5,913
-  P(K over):         0.4218
-  P(Total under):    0.4422
-  P(joint, actual):  0.2084
-  P(joint, indep):   0.1865
-  Correlation ratio: 1.117  (POSITIVE corr — script has edge)
+  n games:           5,287
+  P(K over):         0.4280
+  P(Total under):    0.4454
+  P(joint, actual):  0.2130
+  P(joint, indep):   0.1907
+  Correlation ratio: 1.117  (POSITIVE corr â€” script has edge)
