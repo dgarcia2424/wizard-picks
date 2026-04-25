@@ -16,7 +16,7 @@ TIERS_FIXED = {
     "ML":          (0.85,    0.70),   # 91.7% / 80.8%  (max-conf, home+away)
     "ML-edge":     (0.07,    0.02),   # 80.0% / 78.6%  (home edge vs closing line)
     "Runline":     (None,    0.85),   # no elite; 62.5%
-    "F5":          (None,    0.70),   # no elite; 56.6% full hist (caution: low signal)
+    "F5":          (None,    0.65),   # no elite; 60-65% bucket now valid after ABS/TTO refit
     "NRFI":        (None,    0.80),   # no elite; 63.9%
     "K-over 3.5":  (0.80,    0.75),   # 66.1% / 65.6%
     "K-over 4.5":  (None,    0.75),   # no elite; 57.4%

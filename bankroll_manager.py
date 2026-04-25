@@ -541,7 +541,7 @@ def main() -> None:
     parser.add_argument("--save",          action="store_true",
                         help="Save stakes to data/bankroll/kelly_stakes_{date}.csv")
     parser.add_argument("--clv-boost",     action="store_true",
-                        help=f"Apply {CLV_BOOST_MULT:.0%} CLV confidence boost for "
+                        help=f"Apply {int(CLV_BOOST_MULT*100)}pct CLV confidence boost for "
                              f"scripts with positive {CLV_LOOKBACK_DAYS}-day rolling edge")
     args = parser.parse_args()
 

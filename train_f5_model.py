@@ -98,7 +98,8 @@ MODELS_DIR.mkdir(exist_ok=True)
 
 FEAT_MATRIX      = BASE_DIR / "feature_matrix.parquet"
 ACTUALS_2026     = DATA_DIR / "actuals_2026.parquet"
-ABS_FEATURES_2026 = DATA_DIR / "abs_features_2026.parquet"
+ABS_FEATURES_2026   = DATA_DIR / "abs_features_2026.parquet"
+TTO_PROFILES_2026   = DATA_DIR / "pitcher_profiles_2026.parquet"
 
 OUTPUT_MODEL      = MODELS_DIR / "xgb_f5.json"
 OUTPUT_CALIB      = MODELS_DIR / "xgb_f5_calibrator.pkl"
@@ -232,6 +233,22 @@ F5_STACKING_FEATURES = [
     "home_sp_abs_vulnerability",   # called K3 / all K3 — ump-reliance penalty under ABS
     "away_sp_abs_vulnerability",
     "sp_abs_vulnerability_diff",
+    # Times Through Order (TTO) features — from pitcher_profiles_2026; NaN for 2023-2025
+    "home_sp_tto1_xwoba",      # xwOBA allowed first time through order (innings ~1-3)
+    "away_sp_tto1_xwoba",
+    "home_sp_tto2_xwoba",      # xwOBA allowed second time through order (innings ~4-6)
+    "away_sp_tto2_xwoba",
+    "home_sp_tto_xwoba_climb", # tto2 - tto1: degradation magnitude
+    "away_sp_tto_xwoba_climb",
+    "sp_tto2_xwoba_diff",      # home_tto2_xwoba - away_tto2_xwoba (most F5-relevant)
+    "sp_tto_xwoba_climb_diff", # who degrades faster
+    # F5-window (innings 1-5) ABS pitch metrics (2026 only; NaN for prior years)
+    "home_sp_f5_whiff_pct",    # whiff rate specifically in innings 1-5
+    "away_sp_f5_whiff_pct",
+    "sp_f5_whiff_pct_diff",
+    "home_sp_f5_abs_vulnerability",  # ump-reliance in F5 window (now ABS-corrected)
+    "away_sp_f5_abs_vulnerability",
+    "sp_f5_abs_vulnerability_diff",
 ]
 
 
@@ -581,6 +598,9 @@ def build_dataset(include_2026: bool = False) -> tuple[pd.DataFrame, list[str]]:
             "game_pk",
             "home_sp_whiff_pct",        "away_sp_whiff_pct",        "sp_whiff_pct_diff",
             "home_sp_abs_vulnerability", "away_sp_abs_vulnerability", "sp_abs_vulnerability_diff",
+            # F5-window (innings 1-5) ABS features
+            "home_sp_f5_whiff_pct",     "away_sp_f5_whiff_pct",     "sp_f5_whiff_pct_diff",
+            "home_sp_f5_abs_vulnerability", "away_sp_f5_abs_vulnerability", "sp_f5_abs_vulnerability_diff",
         ]
         abs_df = pd.read_parquet(ABS_FEATURES_2026, columns=abs_cols)
         fm = fm.merge(abs_df, on="game_pk", how="left")
@@ -589,6 +609,39 @@ def build_dataset(include_2026: bool = False) -> tuple[pd.DataFrame, list[str]]:
               f"({fm.shape[0] - n_matched} rows NaN — correct for 2023-2025)")
     else:
         print(f"    [WARN] {ABS_FEATURES_2026} not found — ABS features skipped")
+
+    # Merge TTO features (2026 only; NaN for prior years — temporal leakage guard)
+    if TTO_PROFILES_2026.exists():
+        tto_cols = ["pitcher_name_upper",
+                    "tto1_xwoba", "tto2_xwoba", "tto_xwoba_climb"]
+        pp = pd.read_parquet(TTO_PROFILES_2026, columns=tto_cols).dropna(subset=["pitcher_name_upper"])
+        pp["pitcher_name_upper"] = pp["pitcher_name_upper"].str.upper().str.strip()
+        # Home SP join
+        home_tto = pp.rename(columns={
+            "pitcher_name_upper": "home_starter_name",
+            "tto1_xwoba":  "home_sp_tto1_xwoba",
+            "tto2_xwoba":  "home_sp_tto2_xwoba",
+            "tto_xwoba_climb": "home_sp_tto_xwoba_climb",
+        })
+        fm["home_starter_name"] = fm["home_starter_name"].str.upper().str.strip()
+        fm = fm.merge(home_tto, on="home_starter_name", how="left")
+        # Away SP join
+        away_tto = pp.rename(columns={
+            "pitcher_name_upper": "away_starter_name",
+            "tto1_xwoba":  "away_sp_tto1_xwoba",
+            "tto2_xwoba":  "away_sp_tto2_xwoba",
+            "tto_xwoba_climb": "away_sp_tto_xwoba_climb",
+        })
+        fm["away_starter_name"] = fm["away_starter_name"].str.upper().str.strip()
+        fm = fm.merge(away_tto, on="away_starter_name", how="left")
+        # Diff features
+        fm["sp_tto2_xwoba_diff"]      = fm["home_sp_tto2_xwoba"]      - fm["away_sp_tto2_xwoba"]
+        fm["sp_tto_xwoba_climb_diff"] = fm["home_sp_tto_xwoba_climb"] - fm["away_sp_tto_xwoba_climb"]
+        n_tto = fm["home_sp_tto1_xwoba"].notna().sum()
+        print(f"    TTO features merged: {n_tto} rows with 2026 TTO data "
+              f"({fm.shape[0] - n_tto} rows NaN — correct for 2023-2025)")
+    else:
+        print(f"    [WARN] {TTO_PROFILES_2026} not found — TTO features skipped")
 
     # Check whether MC F5 residual columns are present
     missing_mc = [c for c in MC_F5_RESIDUAL_COLS if c not in fm.columns]

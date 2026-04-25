@@ -32,7 +32,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 _ROOT = Path(__file__).resolve().parent
 
 MATRIX_PATH    = _ROOT / "data/batter_features/final_training_matrix.parquet"
-MODEL_PATH     = _ROOT / "models/tb_stacker_v37.json"
+MODEL_PATH     = _ROOT / "models/tb_stacker_v60.json"
 CONTEXT_PATH   = _ROOT / "data/orchestrator/daily_context.parquet"
 BURN_PATH      = _ROOT / "data/batter_features/bullpen_burn_by_game.parquet"
 CATCHER_PATH   = _ROOT / "data/statcast/catcher_iq_by_team_2026.parquet"
@@ -368,7 +368,7 @@ def print_report(gain_df: pd.DataFrame,
         print("  " + "-" * 62)
         for _, r in gain_df.head(10).iterrows():
             # Flag if this is a PA-opportunity feature (order/exp_pa)
-            flag = " ← PA-OPP" if r["feature"] in ("batting_order", "exp_pa_heuristic") else ""
+            flag = " [PA-OPP]" if r["feature"] in ("batting_order", "exp_pa_heuristic") else ""
             print(f"  {int(r.get('rank', _)):>4}  {r['feature']:<30}  "
                   f"{r['gain']:>10.2f}  {r['pct_gain']:>6.2f}%  "
                   f"{r['cumulative_gain_pct']:>8.1f}%{flag}")
@@ -379,9 +379,9 @@ def print_report(gain_df: pd.DataFrame,
         physics_pct = gain_df[gain_df["feature"].isin(
             ["pull_side_wind_vector", "wind_mph", "wind_bearing",
              "temp_f", "velocity_decay_risk"])]["pct_gain"].sum()
-        print(f"\n  ⚠  PA-opportunity features (batting_order + exp_pa): "
+        print(f"\n  [!] PA-opportunity features (batting_order + exp_pa): "
               f"{pa_pct:.1f}% of total gain")
-        print(f"  ⚠  Physics features (wind/temp/velo):          "
+        print(f"  [!] Physics features (wind/temp/velo):          "
               f"{physics_pct:.1f}% of total gain")
         if pa_pct > 15:
             print(f"\n  FINDING: PA-opportunity features are drowning out physics context "
@@ -395,7 +395,7 @@ def print_report(gain_df: pd.DataFrame,
         print(f"  {'Rank':>4}  {'Feature':<30}  {'Mean AUC Drop':>13}  {'Std':>6}")
         print("  " + "-" * 55)
         for _, r in perm_df.head(12).iterrows():
-            sign = " ← DRAG" if r["perm_mean"] < 0 else ""
+            sign = " [DRAG]" if r["perm_mean"] < 0 else ""
             print(f"  {int(r['rank']):>4}  {r['feature']:<30}  "
                   f"{r['perm_mean']:>+13.5f}  {r['perm_std']:>6.5f}{sign}")
 
@@ -412,14 +412,14 @@ def print_report(gain_df: pd.DataFrame,
         if not np.isnan(incr.get("v60_auc", np.nan)):
             print(f"    v6.0 AUC (+ new feats):  {incr['v60_auc']:.4f}")
             delta = incr.get("auc_delta", 0)
-            tag   = "↑ GAIN" if delta > 0.001 else ("↓ LOSS" if delta < -0.001 else "≈ FLAT")
+            tag   = "GAIN" if delta > 0.001 else ("LOSS" if delta < -0.001 else "FLAT")
             print(f"    Delta:                   {delta:+.5f}  [{tag}]")
             print(f"    New features used:       {incr.get('new_features_used', [])}")
             if delta > 0.002:
-                print(f"\n  ✓ New features provide measurable signal. "
+                print(f"\n  [OK] New features provide measurable signal. "
                       f"Proceed with v6.0 retrain.")
             else:
-                print(f"\n  ⚠  New features show minimal AUC lift. "
+                print(f"\n  [!] New features show minimal AUC lift. "
                       f"Physics features may need richer game-level join.")
         else:
             print(f"    v6.0 AUC: N/A — new features not available in matrix")

@@ -130,7 +130,9 @@ def _safe_div(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
     return np.where(denominator > 0, numerator / denominator, np.nan)
 
 
-def compute_pitcher_game_features(sc: pd.DataFrame, inning_filter: int | None = None) -> pd.DataFrame:
+def compute_pitcher_game_features(sc: pd.DataFrame,
+                                   inning_filter: int | None = None,
+                                   inning_max: int | None = None) -> pd.DataFrame:
     """
     Compute per-pitcher-per-game pitch features from raw Statcast data.
 
@@ -139,8 +141,11 @@ def compute_pitcher_game_features(sc: pd.DataFrame, inning_filter: int | None = 
     sc : pd.DataFrame
         Full statcast dataframe (statcast_2026.parquet).
     inning_filter : int or None
-        If an integer, restrict computation to that inning only.
+        If an integer, restrict computation to that inning (or inning range min) only.
         Pass None for full-game stats.
+    inning_max : int or None
+        If set along with inning_filter, filter to innings inning_filter..inning_max
+        (inclusive). E.g. inning_filter=1, inning_max=5 for F5 window.
 
     Returns
     -------
@@ -151,7 +156,10 @@ def compute_pitcher_game_features(sc: pd.DataFrame, inning_filter: int | None = 
     df = sc.copy()
 
     if inning_filter is not None:
-        df = df[df["inning"] == inning_filter]
+        if inning_max is not None:
+            df = df[(df["inning"] >= inning_filter) & (df["inning"] <= inning_max)]
+        else:
+            df = df[df["inning"] == inning_filter]
         if df.empty:
             return pd.DataFrame()
 
@@ -262,6 +270,7 @@ def pivot_to_game_level(
     starters: pd.DataFrame,
     full_game_feats: pd.DataFrame,
     fi_feats: pd.DataFrame,
+    f5_feats: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Join pitcher-level stats to each game's home/away SP and compute
@@ -272,6 +281,7 @@ def pivot_to_game_level(
     starters        : output of identify_starters()
     full_game_feats : output of compute_pitcher_game_features(sc)
     fi_feats        : output of compute_pitcher_game_features(sc, inning_filter=1)
+    f5_feats        : output of compute_pitcher_game_features(sc, inning_filter=1, inning_max=5)
 
     Returns
     -------
@@ -285,8 +295,12 @@ def pivot_to_game_level(
     fi = fi_feats[["pitcher", "game_pk"] + base_cols].copy()
     fi = fi.rename(columns={c: f"fi_{c}" for c in base_cols})
 
-    # Combine full-game and first-inning stats
+    # Combine full-game, first-inning, and F5-window stats
     pitcher_stats = fg.merge(fi, on=["pitcher", "game_pk"], how="left")
+    if f5_feats is not None and not f5_feats.empty:
+        f5 = f5_feats[["pitcher", "game_pk"] + base_cols].copy()
+        f5 = f5.rename(columns={c: f"f5_{c}" for c in base_cols})
+        pitcher_stats = pitcher_stats.merge(f5, on=["pitcher", "game_pk"], how="left")
 
     def _attach_sp(df: pd.DataFrame, sp_id_col: str, prefix: str) -> pd.DataFrame:
         renamed = pitcher_stats.rename(
@@ -303,10 +317,13 @@ def pivot_to_game_level(
     # Differential features  (home − away, positive = home SP more exposed)
     # -----------------------------------------------------------------------
     diff_map = {
-        "sp_edge_pct_diff":           ("home_sp_edge_pct",           "away_sp_edge_pct"),
-        "sp_whiff_pct_diff":          ("home_sp_whiff_pct",          "away_sp_whiff_pct"),
-        "sp_abs_vulnerability_diff":  ("home_sp_abs_vulnerability",  "away_sp_abs_vulnerability"),
-        "sp_zone_pct_diff":           ("home_sp_zone_pct",           "away_sp_zone_pct"),
+        "sp_edge_pct_diff":              ("home_sp_edge_pct",              "away_sp_edge_pct"),
+        "sp_whiff_pct_diff":             ("home_sp_whiff_pct",             "away_sp_whiff_pct"),
+        "sp_abs_vulnerability_diff":     ("home_sp_abs_vulnerability",     "away_sp_abs_vulnerability"),
+        "sp_zone_pct_diff":              ("home_sp_zone_pct",              "away_sp_zone_pct"),
+        # F5-window (innings 1-5) differentials
+        "sp_f5_whiff_pct_diff":          ("home_sp_f5_whiff_pct",          "away_sp_f5_whiff_pct"),
+        "sp_f5_abs_vulnerability_diff":  ("home_sp_f5_abs_vulnerability",  "away_sp_f5_abs_vulnerability"),
     }
     for new_col, (hcol, acol) in diff_map.items():
         if hcol in game.columns and acol in game.columns:
@@ -484,11 +501,15 @@ def main():
     fi = compute_pitcher_game_features(sc, inning_filter=1)
     print(f"        {len(fi)} pitcher-game rows (inning 1)")
 
+    print("      F5-window features (innings 1-5) …", flush=True)
+    f5w = compute_pitcher_game_features(sc, inning_filter=1, inning_max=5)
+    print(f"        {len(f5w)} pitcher-game rows (innings 1-5)")
+
     # ------------------------------------------------------------------
     # Part 3: Pivot to game level
     # ------------------------------------------------------------------
     print("      Pivoting to game level …", flush=True)
-    abs_features = pivot_to_game_level(starters, full_game, fi)
+    abs_features = pivot_to_game_level(starters, full_game, fi, f5_feats=f5w)
     print(f"        {len(abs_features)} game rows × {len(abs_features.columns)} columns")
 
     # ------------------------------------------------------------------
@@ -516,9 +537,11 @@ def main():
     key_feats = [
         "home_sp_edge_pct", "home_sp_zone_pct",
         "home_sp_whiff_pct", "home_sp_abs_vulnerability",
-        "away_sp_edge_pct", "away_sp_zone_pct",
         "away_sp_whiff_pct", "away_sp_abs_vulnerability",
         "sp_abs_vulnerability_diff",
+        "home_sp_f5_whiff_pct", "away_sp_f5_whiff_pct",
+        "home_sp_f5_abs_vulnerability", "away_sp_f5_abs_vulnerability",
+        "sp_f5_whiff_pct_diff", "sp_f5_abs_vulnerability_diff",
     ]
 
     print("\n" + "=" * 60)

@@ -58,9 +58,10 @@ XGB_CAL_PATH    = MODELS_DIR / "xgb_f5_calibrator.pkl"
 STACKER_PATH    = MODELS_DIR / "stacking_lr_f5.pkl"
 TEAM_MODEL_PATH = MODELS_DIR / "team_f5_model.json"
 TEAM_FEAT_PATH  = MODELS_DIR / "team_f5_feat_cols.json"
-POIS_HOME_PATH  = MODELS_DIR / "f5_pois_home.json"
-POIS_AWAY_PATH  = MODELS_DIR / "f5_pois_away.json"
-ACTUALS_2026    = DATA_DIR   / "actuals_2026.parquet"
+POIS_HOME_PATH    = MODELS_DIR / "f5_pois_home.json"
+POIS_AWAY_PATH    = MODELS_DIR / "f5_pois_away.json"
+TTO_PROFILES_2026 = DATA_DIR   / "pitcher_profiles_2026.parquet"
+ACTUALS_2026      = DATA_DIR   / "actuals_2026.parquet"
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +143,144 @@ def get_rolling_tie_rate(date_str: str) -> float:
         return float((window["f5_home_runs"] == window["f5_away_runs"]).mean())
 
     return _FALLBACK
+
+
+def load_tto_lookup() -> dict[str, dict]:
+    """
+    Build pitcher_name_upper → {tto1_xwoba, tto2_xwoba, tto_xwoba_climb} lookup
+    from pitcher_profiles_2026.parquet. Returns {} if file missing.
+    """
+    if not TTO_PROFILES_2026.exists():
+        return {}
+    tto_cols = ["pitcher_name_upper", "tto1_xwoba", "tto2_xwoba", "tto_xwoba_climb"]
+    pp = pd.read_parquet(TTO_PROFILES_2026, columns=tto_cols).dropna(subset=["pitcher_name_upper"])
+    pp["pitcher_name_upper"] = pp["pitcher_name_upper"].str.upper().str.strip()
+    lookup = {}
+    for _, row in pp.iterrows():
+        lookup[row["pitcher_name_upper"]] = {
+            "tto1_xwoba":  row["tto1_xwoba"],
+            "tto2_xwoba":  row["tto2_xwoba"],
+            "tto_xwoba_climb": row["tto_xwoba_climb"],
+        }
+    return lookup
+
+
+def load_abs_pitcher_history() -> dict[str, pd.DataFrame]:
+    """
+    Build pitcher_name_upper → DataFrame of (game_date, whiff_pct, abs_vulnerability)
+    from abs_features_2026.parquet. Used to compute trailing rolling ABS stats at inference.
+    Returns {} if file missing.
+    """
+    abs_path = DATA_DIR / "abs_features_2026.parquet"
+    if not abs_path.exists():
+        return {}
+    want_cols = ["game_date", "home_sp", "away_sp",
+                 "home_sp_whiff_pct", "away_sp_whiff_pct",
+                 "home_sp_abs_vulnerability", "away_sp_abs_vulnerability",
+                 "home_sp_f5_whiff_pct", "away_sp_f5_whiff_pct",
+                 "home_sp_f5_abs_vulnerability", "away_sp_f5_abs_vulnerability"]
+    try:
+        df_all = pd.read_parquet(abs_path)
+        df = df_all[[c for c in want_cols if c in df_all.columns]]
+    except Exception:
+        return {}
+    df["game_date"] = pd.to_datetime(df["game_date"])
+
+    # Build long-format: one row per SP per game
+    has_f5 = "home_sp_f5_whiff_pct" in df.columns
+    h_cols = ["game_date", "home_sp", "home_sp_whiff_pct", "home_sp_abs_vulnerability"]
+    a_cols = ["game_date", "away_sp", "away_sp_whiff_pct", "away_sp_abs_vulnerability"]
+    out_cols = ["game_date", "sp_name", "whiff_pct", "abs_vulnerability"]
+    if has_f5:
+        h_cols += ["home_sp_f5_whiff_pct", "home_sp_f5_abs_vulnerability"]
+        a_cols += ["away_sp_f5_whiff_pct", "away_sp_f5_abs_vulnerability"]
+        out_cols += ["f5_whiff_pct", "f5_abs_vulnerability"]
+    home_rows = df[h_cols].copy()
+    home_rows.columns = out_cols
+    away_rows = df[a_cols].copy()
+    away_rows.columns = out_cols
+
+    long = pd.concat([home_rows, away_rows], ignore_index=True)
+    long = long.dropna(subset=["sp_name"])
+    long["sp_name"] = long["sp_name"].str.upper().str.strip()
+    long = long.sort_values("game_date")
+
+    lookup = {}
+    for name, grp in long.groupby("sp_name"):
+        lookup[name] = grp[["game_date", "whiff_pct", "abs_vulnerability"]].reset_index(drop=True)
+    return lookup
+
+
+def get_rolling_abs_for_pitcher(name: str, date_str: str,
+                                 abs_history: dict, window_days: int = 30) -> dict:
+    """Return rolling trailing ABS stats for a pitcher before date_str."""
+    key = name.upper().strip() if name and not pd.isna(name) else ""
+    hist = abs_history.get(key)
+    if hist is None or hist.empty:
+        return {}
+    cutoff = pd.Timestamp(date_str)
+    window_start = cutoff - pd.Timedelta(days=window_days)
+    mask = (hist["game_date"] >= window_start) & (hist["game_date"] < cutoff)
+    recent = hist[mask]
+    if recent.empty:
+        return {}
+    result = {
+        "whiff_pct":         float(recent["whiff_pct"].mean()),
+        "abs_vulnerability": float(recent["abs_vulnerability"].mean()),
+    }
+    if "f5_whiff_pct" in recent.columns:
+        result["f5_whiff_pct"]         = float(recent["f5_whiff_pct"].mean())
+        result["f5_abs_vulnerability"] = float(recent["f5_abs_vulnerability"].mean())
+    return result
+
+
+def inject_abs_features(feat: "pd.Series", home_sp: str, away_sp: str,
+                         date_str: str, abs_history: dict) -> "pd.Series":
+    """Inject rolling ABS features into a feature Series."""
+    feat = feat.copy()
+    h = get_rolling_abs_for_pitcher(home_sp, date_str, abs_history)
+    a = get_rolling_abs_for_pitcher(away_sp, date_str, abs_history)
+    feat["home_sp_whiff_pct"]          = h.get("whiff_pct",           np.nan)
+    feat["away_sp_whiff_pct"]          = a.get("whiff_pct",           np.nan)
+    feat["home_sp_abs_vulnerability"]  = h.get("abs_vulnerability",   np.nan)
+    feat["away_sp_abs_vulnerability"]  = a.get("abs_vulnerability",   np.nan)
+    feat["home_sp_f5_whiff_pct"]       = h.get("f5_whiff_pct",        np.nan)
+    feat["away_sp_f5_whiff_pct"]       = a.get("f5_whiff_pct",        np.nan)
+    feat["home_sp_f5_abs_vulnerability"] = h.get("f5_abs_vulnerability", np.nan)
+    feat["away_sp_f5_abs_vulnerability"] = a.get("f5_abs_vulnerability", np.nan)
+
+    def _diff(k1, k2):
+        v1, v2 = feat[k1], feat[k2]
+        return v1 - v2 if pd.notna(v1) and pd.notna(v2) else np.nan
+
+    feat["sp_whiff_pct_diff"]             = _diff("home_sp_whiff_pct",       "away_sp_whiff_pct")
+    feat["sp_abs_vulnerability_diff"]     = _diff("home_sp_abs_vulnerability","away_sp_abs_vulnerability")
+    feat["sp_f5_whiff_pct_diff"]          = _diff("home_sp_f5_whiff_pct",    "away_sp_f5_whiff_pct")
+    feat["sp_f5_abs_vulnerability_diff"]  = _diff("home_sp_f5_abs_vulnerability","away_sp_f5_abs_vulnerability")
+    return feat
+
+
+def inject_tto_features(feat: "pd.Series", home_sp: str, away_sp: str,
+                        tto_lookup: dict) -> "pd.Series":
+    """Inject TTO features into a feature Series from the lookup dict."""
+    feat = feat.copy()
+    h_key = home_sp.upper().strip() if home_sp and not pd.isna(home_sp) else ""
+    a_key = away_sp.upper().strip() if away_sp and not pd.isna(away_sp) else ""
+    h_tto = tto_lookup.get(h_key, {})
+    a_tto = tto_lookup.get(a_key, {})
+    feat["home_sp_tto1_xwoba"]      = h_tto.get("tto1_xwoba",       np.nan)
+    feat["away_sp_tto1_xwoba"]      = a_tto.get("tto1_xwoba",       np.nan)
+    feat["home_sp_tto2_xwoba"]      = h_tto.get("tto2_xwoba",       np.nan)
+    feat["away_sp_tto2_xwoba"]      = a_tto.get("tto2_xwoba",       np.nan)
+    feat["home_sp_tto_xwoba_climb"] = h_tto.get("tto_xwoba_climb",  np.nan)
+    feat["away_sp_tto_xwoba_climb"] = a_tto.get("tto_xwoba_climb",  np.nan)
+    h2 = feat["home_sp_tto2_xwoba"]
+    a2 = feat["away_sp_tto2_xwoba"]
+    hc = feat["home_sp_tto_xwoba_climb"]
+    ac = feat["away_sp_tto_xwoba_climb"]
+    feat["sp_tto2_xwoba_diff"]      = h2 - a2 if pd.notna(h2) and pd.notna(a2) else np.nan
+    feat["sp_tto_xwoba_climb_diff"] = hc - ac if pd.notna(hc) and pd.notna(ac) else np.nan
+    return feat
 
 
 def compute_rolling_adj_f5_form_today(date_str: str, fm: pd.DataFrame) -> dict[str, float]:
@@ -371,6 +510,11 @@ def predict_games(date_str: str) -> pd.DataFrame:
     fm = pd.read_parquet(FEAT_MATRIX)
     fm["game_date"] = pd.to_datetime(fm["game_date"])
 
+    tto_lookup  = load_tto_lookup()
+    print(f"TTO lookup: {len(tto_lookup)} pitchers loaded")
+    abs_history = load_abs_pitcher_history()
+    print(f"ABS history: {len(abs_history)} pitchers loaded")
+
     rolling_tie = get_rolling_tie_rate(date_str)
     print(f"Rolling 30-day F5 tie rate: {rolling_tie:.4f}")
 
@@ -415,7 +559,13 @@ def predict_games(date_str: str) -> pd.DataFrame:
         feat["away_rolling_adj_f5_form"] = away_form
         feat["rolling_adj_f5_form_diff"] = home_form - away_form
 
-        # Ensure feat has all feat_cols (ABS features absent from enriched matrix → 0.0)
+        # Inject rolling ABS features (whiff_pct, abs_vulnerability) from game-level history
+        feat = inject_abs_features(feat, home_sp, away_sp, date_str, abs_history)
+
+        # Inject TTO features from pitcher_profiles_2026 lookup
+        feat = inject_tto_features(feat, home_sp, away_sp, tto_lookup)
+
+        # Ensure feat has all feat_cols (ABS/TTO features absent from enriched matrix → 0.0)
         feat = feat.copy()
         for _c in feat_cols:
             if _c not in feat.index:
