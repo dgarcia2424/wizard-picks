@@ -2,23 +2,23 @@ Correlation Matrix — v4.3
 ============================================================
 
 sp_k_vs_team_total
-  r=+0.1978***  n=4748  CI=[0.1704, 0.2250]
+  r=+0.1962***  n=5106  CI=[0.1697, 0.2225]
   High-K SP suppresses opposing runs. Positive r -> Under + K-Over legs are correlated.
 
 game_total_vs_home_score
-  r=+0.6795***  n=4748  CI=[0.6639, 0.6945]
+  r=+0.6837***  n=5106  CI=[0.6689, 0.6981]
   High-scoring games lift individual batter TB/Hits lines. Star-hitter Over and Game Over are positively correlated.
 
 both_sp_k_vs_close_game
-  r=+0.0436**  n=4821  CI=[0.0154, 0.0718]
+  r=+0.0489***  n=5180  CI=[0.0217, 0.0760]
   Dual-dominance keeps scores suppressed + balanced. Positive r -> Elite Duel script: Under + both K + RL cover.
 
 sp_k_vs_star_hitter_tb
-  r=+0.0264 (n.s.)  n=4748  CI=[-0.0020, 0.0548]
+  r=+0.0353*  n=5106  CI=[0.0079, 0.0627]
   High-K SP on home side correlates with SP dominating, which means less bullpen usage and the home lineup gets full at-bats. Star hitter TB = home score proxy (same direction as game_total_vs_home_score but conditioned on home SP dominance).
 
 f5_total_vs_game_total
-  r=+0.7402***  n=4821  CI=n/a
+  r=+0.7400***  n=5180  CI=n/a
   F5 total strongly predicts full game total (0.56 fraction assumption validity)
 
 f5_under_vs_game_over_conditional

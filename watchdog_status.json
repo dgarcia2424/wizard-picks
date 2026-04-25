@@ -1,26 +1,33 @@
 {
-  "last_run": "2026-04-25T03:30:21",
-  "elapsed_s": 20.0,
+  "last_run": "2026-04-25T05:30:48",
+  "elapsed_s": 44.7,
   "total_checks": 35,
-  "ok": 33,
-  "warn": 0,
-  "fail": 2,
-  "repaired": 2,
-  "overall": "fail",
+  "ok": 32,
+  "warn": 3,
+  "fail": 0,
+  "repaired": 3,
+  "overall": "warn",
   "issues": [
     {
-      "name": "odds_current",
-      "status": "fail",
-      "message": "FILE MISSING: data/statcast/odds_current_2026_04_25.parquet | REPAIRED via odds_current_pull.py --force",
+      "name": "lineup_quality",
+      "status": "warn",
+      "message": "STALE: 6.0h old (limit 5h) \u2014 data/statcast/lineup_quality_today.parquet | REPAIRED via build_lineup_quality.py",
       "repaired": true,
-      "repair_cmd": "odds_current_pull.py --force"
+      "repair_cmd": "build_lineup_quality.py"
     },
     {
-      "name": "k_props",
-      "status": "fail",
-      "message": "FILE MISSING: data/statcast/k_props_2026-04-25.parquet | REPAIRED via prizepicks_pull.py",
+      "name": "park_factors_2026",
+      "status": "warn",
+      "message": "STALE: 18.0h old (limit 5h) \u2014 data/statcast/park_factors_2026.parquet | REPAIRED via supplemental_pull.py --force-year 2026",
       "repaired": true,
-      "repair_cmd": "prizepicks_pull.py"
+      "repair_cmd": "supplemental_pull.py --force-year 2026"
+    },
+    {
+      "name": "standings_2026",
+      "status": "warn",
+      "message": "STALE: 18.0h old (limit 5h) \u2014 data/statcast/standings_2026.parquet | REPAIRED via supplemental_pull.py --force-year 2026",
+      "repaired": true,
+      "repair_cmd": "supplemental_pull.py --force-year 2026"
     }
   ]
 }
