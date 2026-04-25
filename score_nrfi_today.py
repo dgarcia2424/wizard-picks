@@ -243,6 +243,12 @@ def compute_team_log_odds(
         row_home[team_feat_cols].fillna(0).values.astype(np.float32)
     )[0, 1]
 
+    # Ensure all feat_cols exist in row_df before flipping — columns added to the
+    # training matrix after the enriched feature matrix was last built will be
+    # missing; fill with 0 so _flip_team_perspective can safely index them.
+    for c in feat_cols:
+        if c not in row_df.columns:
+            row_df[c] = 0.0
     row_flip = _flip_team_perspective(row_df, feat_cols)
     row_flip["is_home"] = 0
     for c in team_feat_cols:

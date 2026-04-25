@@ -2446,7 +2446,7 @@ def assemble_matrix(
             [{"team": t, "elo": r} for t, r in _elo_final.items()]
         ).to_parquet(_elo_state_path, index=False)
         if verbose:
-            print(f"      Elo: saved {len(_elo_final)} team ratings → {_elo_state_path}")
+            print(f"      Elo: saved {len(_elo_final)} team ratings -> {_elo_state_path}")
 
     # ── Bullpen quality (season-level, IP-weighted) ───────────────────────
     if not bullpen.empty:
@@ -2762,6 +2762,34 @@ def assemble_matrix(
             of = pd.read_parquet(op, engine="pyarrow")
             of["game_date"] = pd.to_datetime(of["game_date"])
             odds_frames.append(of)
+        else:
+            # Fallback: consolidate daily odds_history_{yr}_*.parquet snapshots
+            # produced by pull_odds_history_api.py when the annual file is not yet built.
+            daily_paths = sorted(DATA_DIR.glob(f"odds_history_{yr}_*.parquet"))
+            if daily_paths:
+                _daily = []
+                for dp in daily_paths:
+                    try:
+                        _df = pd.read_parquet(dp, engine="pyarrow")
+                        _df["game_date"] = pd.to_datetime(_df["game_date"])
+                        _daily.append(_df)
+                    except Exception:
+                        pass
+                if _daily:
+                    _combined = pd.concat(_daily, ignore_index=True)
+                    # Daily files use P_true_home/P_true_away; rename to match schema
+                    _combined = _combined.rename(columns={
+                        "P_true_home": "true_home_prob",
+                        "P_true_away": "true_away_prob",
+                    })
+                    # Keep latest snapshot per game before the outer dedup pass
+                    if "snapshot_time" in _combined.columns:
+                        _combined = _combined.sort_values("snapshot_time")
+                    odds_frames.append(_combined)
+                    if verbose:
+                        print(f"      Market lines fallback ({yr}): "
+                              f"{len(daily_paths)} daily files → {len(_combined)} rows "
+                              f"(run pull_odds_history_api.py --year {yr} to build annual file)")
     if odds_frames:
         odds_all = pd.concat(odds_frames, ignore_index=True)
         odds_all = odds_all.drop_duplicates(subset=["game_date", "home_team", "away_team"], keep="last")

@@ -310,6 +310,28 @@ STACKING_FEATURES = [
 ]
 
 # ---------------------------------------------------------------------------
+# MARKET-MISS SHRINKAGE CONSTANTS  (Bayesian posterior uncertainty widening)
+# ---------------------------------------------------------------------------
+# When the closing market line is absent, ml_model_vs_vegas_gap cannot be
+# populated with a real observed value.  Rather than filling with 0.0
+# (which falsely encodes perfect model-market agreement), the stacker's
+# output logit is shrunk toward 0 by lambda = 0.50.
+#
+# Derivation of lambda = 0.50:
+#   For P_final >= 0.7143 (−250 implied) after shrinkage we need:
+#       lambda * theta >= logit(0.7143) = ln(0.7143/0.2857) ≈ 0.916
+#   At lambda = 0.50:  theta >= 1.832  →  sigmoid(1.832) ≈ 0.862
+#   i.e. base XGBoost standalone conviction must exceed ~0.85 for the
+#   shrunk output to clear the −250 threshold — matching the stated gate.
+_MARKET_MISS_LOGIT_SHRINK: float        = 0.50
+_STANDALONE_CONVICTION_THRESHOLD: float = 0.85
+_THRESHOLD_250: float                   = 250.0 / (250.0 + 100.0)   # ≈ 0.71429
+
+# Features encoding model-vs-market gaps — must not receive training-median
+# fill when market data is absent; receive 0.0 (neutral) instead.
+_MARKET_GAP_FEATURES: frozenset[str] = frozenset({"ml_model_vs_vegas_gap"})
+
+# ---------------------------------------------------------------------------
 # SP HANDEDNESS MATCHUP SEGMENTS  (used by Bayesian hierarchical stacker)
 # ---------------------------------------------------------------------------
 # Encoding  home_sp_p_throws_R * 2 + away_sp_p_throws_R  → 4 groups:
@@ -766,28 +788,46 @@ class BayesianStacker:
         self.posterior_path     = posterior_path   # path to .npz trace file
 
     # ------------------------------------------------------------------
-    def _build_X_domain(self, feat_df: pd.DataFrame) -> np.ndarray:
+    def _build_X_domain(
+        self,
+        feat_df: pd.DataFrame,
+        market_data_missing: bool = False,
+    ) -> np.ndarray:
         X = pd.DataFrame(index=feat_df.index)
         for col in self.stacking_feature_names:
             if col in feat_df.columns:
                 X[col] = feat_df[col]
             else:
-                X[col] = self.fill_values.get(col, 0.0)   # missing at eval time — use training fill
+                if market_data_missing and col in _MARKET_GAP_FEATURES:
+                    # Neutral fill (0.0 = no observed divergence) rather than
+                    # training median.  The logit shrinkage in predict() then
+                    # attenuates the whole theta, so the specific gap value
+                    # matters less; 0.0 avoids claiming spurious market signal.
+                    X[col] = 0.0
+                else:
+                    X[col] = self.fill_values.get(col, 0.0)
         for col, val in self.fill_values.items():
             if col in X.columns:
-                X[col] = X[col].fillna(val)
+                if market_data_missing and col in _MARKET_GAP_FEATURES:
+                    X[col] = X[col].fillna(0.0)
+                else:
+                    X[col] = X[col].fillna(val)
         return X.values.astype(float)
 
     # ------------------------------------------------------------------
     def predict(self, xgb_raw, feat_df, segment_id=None,
-                lgbm_raw=None, cat_raw=None) -> np.ndarray:
+                lgbm_raw=None, cat_raw=None,
+                market_data_missing: bool = False) -> np.ndarray:
         """
         Returns calibrated P(home covers RL) for each row.
 
-        xgb_raw    : 1-D array of XGBoost raw probs, shape (n,)
-        feat_df    : DataFrame with domain features, n rows
-        segment_id : int array (n,) or scalar; None defaults to RvR=3
-        lgbm_raw, cat_raw : accepted for interface parity, not used
+        xgb_raw             : 1-D array of XGBoost raw probs, shape (n,)
+        feat_df             : DataFrame with domain features, n rows
+        segment_id          : int array (n,) or scalar; None defaults to RvR=3
+        lgbm_raw, cat_raw   : accepted for interface parity, not used
+        market_data_missing : when True, apply logit shrinkage (lambda=0.50)
+                              and enforce a -250 ceiling gate unless
+                              xgb_raw >= _STANDALONE_CONVICTION_THRESHOLD.
         """
         xgb_raw = np.asarray(xgb_raw, dtype=float).ravel()
         n = len(xgb_raw)
@@ -799,7 +839,7 @@ class BayesianStacker:
             if len(seg) == 1 and n > 1:
                 seg = np.full(n, int(seg[0]), dtype=int)
 
-        X_dom = self._build_X_domain(feat_df)
+        X_dom = self._build_X_domain(feat_df, market_data_missing=market_data_missing)
 
         logit_p = (np.log(np.clip(xgb_raw, 1e-6, 1.0 - 1e-6)) -
                    np.log(1.0 - np.clip(xgb_raw, 1e-6, 1.0 - 1e-6)))
@@ -807,11 +847,31 @@ class BayesianStacker:
                  + self.beta    * logit_p
                  + self.delta[seg]
                  + X_dom @ self.gamma)
-        return 1.0 / (1.0 + np.exp(-theta))
+
+        if market_data_missing:
+            # Shrink logit toward 0 (toward P=0.50) by lambda=0.50.
+            # Prevents the posterior from crossing the -250 threshold when
+            # market consensus is unobservable, unless base conviction is
+            # overwhelming (xgb_raw >= _STANDALONE_CONVICTION_THRESHOLD).
+            theta = theta * _MARKET_MISS_LOGIT_SHRINK
+
+        p_final = 1.0 / (1.0 + np.exp(-theta))
+
+        if market_data_missing:
+            standalone_ok = xgb_raw >= _STANDALONE_CONVICTION_THRESHOLD
+            p_final = np.where(
+                standalone_ok,
+                p_final,
+                np.minimum(p_final, _THRESHOLD_250 - 1e-4),
+            )
+
+        return p_final
 
     def predict_proba(self, xgb_raw, feat_df, segment_id=None,
-                      lgbm_raw=None, cat_raw=None) -> np.ndarray:
-        p = self.predict(xgb_raw, feat_df, segment_id, lgbm_raw, cat_raw)
+                      lgbm_raw=None, cat_raw=None,
+                      market_data_missing: bool = False) -> np.ndarray:
+        p = self.predict(xgb_raw, feat_df, segment_id, lgbm_raw, cat_raw,
+                         market_data_missing=market_data_missing)
         return np.column_stack([1.0 - p, p])
 
 

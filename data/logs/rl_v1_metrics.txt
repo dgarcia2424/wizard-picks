@@ -1,18 +1,18 @@
-RL v1 Stacker Metrics — 2026-04-24
-AUC:         0.6103
-Accuracy:    0.6455
-Cover rate:  0.3545
-Mean pred:   0.3630
-Best iter:   3
-Train rows:  4998
-Val rows:    189
+RL v1 Stacker Metrics â€” 2026-04-25
+AUC:         0.5788
+Accuracy:    0.6393
+Cover rate:  0.3607
+Mean pred:   0.3652
+Best iter:   31
+Train rows:  4149
+Val rows:    1037
 
 Feature importance (gain):
-  bullpen_burn_delta             10.15
-  away_sp_k_pct_10d              7.01
-  p_cover_poisson                5.86
-  p_script_c                     5.79
-  close_total                    5.10
-  wind_vector_out                4.58
-  home_sp_k_pct_10d              4.41
-  poisson_script_disagree        4.28
+  bullpen_burn_delta             7.46
+  away_sp_k_pct_10d              5.79
+  close_total                    5.38
+  p_cover_poisson                5.37
+  p_script_c                     5.05
+  wind_vector_out                4.36
+  poisson_script_disagree        4.35
+  home_sp_k_pct_10d              4.33

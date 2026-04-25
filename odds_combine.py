@@ -21,6 +21,7 @@ Usage:
 
 import argparse
 import logging
+import math
 import re
 from datetime import datetime
 from pathlib import Path
@@ -44,6 +45,67 @@ SOURCE_PRIORITY = {
 }
 DEFAULT_PRIORITY = 99  # unknown sources rank lowest
 
+# Tier classification — used for downstream market_tier column and vig logic.
+# Tier 1 (sharp):          OddsPortal / Pinnacle proxy — use directly.
+# Tier 2 (sharp_consensus): Circa / Bookmaker — stubs for future integration.
+# Tier 3 (recreational):   Odds API aggregates DK/FD (4–6% vig) — must strip.
+TIER_MAP: dict[str, str] = {
+    "oddsportal":    "sharp",
+    "odds_api":      "recreational",
+    "actionnetwork": "recreational",
+    "circa":         "sharp_consensus",   # stub: not yet in data architecture
+    "bookmaker":     "sharp_consensus",   # stub: not yet in data architecture
+}
+
+
+# ---------------------------------------------------------------------------
+# Vig-stripping helpers
+# ---------------------------------------------------------------------------
+
+def _american_to_prob(odds: float) -> float:
+    """Raw one-sided American odds → raw implied probability (vig included)."""
+    if odds < 0:
+        return abs(odds) / (abs(odds) + 100.0)
+    return 100.0 / (odds + 100.0)
+
+
+def strip_vig_multiplicative(
+    ml_home: float | int,
+    ml_away: float | int,
+) -> tuple[float, float]:
+    """
+    Multiplicative (Pinnacle-equivalent) vig removal.
+
+    Given the raw American odds for both sides of a market:
+        p_h_raw  = _american_to_prob(ml_home)
+        p_a_raw  = _american_to_prob(ml_away)
+        overround = p_h_raw + p_a_raw          # > 1.0 when vig present
+        true_h   = p_h_raw  / overround
+        true_a   = p_a_raw  / overround
+
+    Applied to all source tiers — even Pinnacle carries ~2–4% vig that must
+    be removed before computing model-vs-market gap features.
+
+    Returns (true_home_prob, true_away_prob).
+    Returns (nan, nan) when either input is NaN / None.
+    """
+    try:
+        h = float(ml_home)
+        a = float(ml_away)
+    except (TypeError, ValueError):
+        return float("nan"), float("nan")
+
+    if not (math.isfinite(h) and math.isfinite(a)):
+        return float("nan"), float("nan")
+
+    p_h = _american_to_prob(h)
+    p_a = _american_to_prob(a)
+    overround = p_h + p_a
+    if overround <= 0.0:
+        return float("nan"), float("nan")
+
+    return p_h / overround, p_a / overround
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -59,6 +121,11 @@ SCHEMA_COLS = [
     "open_ml_home", "close_ml_home", "open_ml_away", "close_ml_away",
     "open_total", "close_total", "runline_home", "runline_home_odds",
     "public_pct_home", "public_pct_over", "source", "pull_timestamp",
+    # Vig-stripped probabilities (multiplicative method, all tiers)
+    "true_home_prob", "true_away_prob",
+    # Market quality metadata
+    "market_tier",        # "sharp" | "sharp_consensus" | "recreational" | "unknown"
+    "market_data_missing",  # True when no closing line is available after dedup
 ]
 
 
@@ -151,6 +218,28 @@ def _coerce_types(df: pd.DataFrame) -> pd.DataFrame:
 
     df["pull_timestamp"] = pd.to_datetime(df["pull_timestamp"], errors="coerce")
     df["source"] = df["source"].fillna("unknown").astype(str)
+
+    # ── Market tier classification ────────────────────────────────────────
+    df["market_tier"] = df["source"].map(
+        lambda s: TIER_MAP.get(str(s).lower(), "unknown")
+    )
+
+    # ── Vig-stripped probabilities (multiplicative method) ────────────────
+    # Applied to all tiers — even Pinnacle/OddsPortal carries vig that must
+    # be removed before computing model-vs-market gap features.
+    # Uses close_ml_home / close_ml_away (Int64 — cast to float first).
+    close_h = pd.to_numeric(df["close_ml_home"], errors="coerce")
+    close_a = pd.to_numeric(df["close_ml_away"], errors="coerce")
+    stripped = [
+        strip_vig_multiplicative(h, a)
+        for h, a in zip(close_h, close_a)
+    ]
+    df["true_home_prob"] = [t[0] for t in stripped]
+    df["true_away_prob"] = [t[1] for t in stripped]
+
+    # market_data_missing is set post-dedup in process_year(); initialise False.
+    df["market_data_missing"] = False
+
     return df
 
 
@@ -293,6 +382,18 @@ def process_year(year: int) -> Optional[pd.DataFrame]:
     if sched is not None:
         combined = fill_game_pk_from_schedule(combined, sched)
         combined = _coerce_types(combined)  # re-coerce after merge
+
+    # ── market_data_missing: True when no closing line survived dedup ─────
+    # Evaluated after dedup so the flag reflects the final kept row, not
+    # any intermediate duplicate that may have had a line.
+    combined["market_data_missing"] = combined["close_ml_home"].isna()
+    n_missing = int(combined["market_data_missing"].sum())
+    if n_missing > 0:
+        log.warning(
+            "Year %d — %d game(s) have market_data_missing=True "
+            "(no closing moneyline from any source after dedup)",
+            year, n_missing,
+        )
 
     combined = combined.sort_values(["game_date", "home_team"]).reset_index(drop=True)
 

@@ -47,7 +47,7 @@
     "wr_small": 0.5548,
     "wr_full": 0.5573,
     "note": "n=155",
-    "last_optimized": "2026-04-24"
+    "last_optimized": "2026-04-25"
   },
   "f5_win_prob": {
     "watch": 0.5,
@@ -61,81 +61,81 @@
     "wr_small": 0.617,
     "wr_full": 0.5862,
     "note": "n=63 \u2014 directional only (target: 150+)",
-    "last_optimized": "2026-04-24"
+    "last_optimized": "2026-04-25"
   },
   "script_a": {
     "note": "no rows for script=A_Dominance",
-    "last_optimized": "2026-04-24"
+    "last_optimized": "2026-04-25"
   },
   "script_a2": {
     "watch": 0.1,
     "small": 0.3,
     "full": 0.75,
-    "n_games": 9,
-    "n_small": 8,
-    "n_full": 8,
+    "n_games": 24,
+    "n_small": 22,
+    "n_full": 22,
     "roi_small": -1.0,
     "roi_full": -1.0,
     "wr_small": 0.0,
     "wr_full": 0.0,
-    "note": "n=9 \u2014 directional only (target: 150+)",
-    "last_optimized": "2026-04-24"
+    "note": "n=24 \u2014 directional only (target: 150+)",
+    "last_optimized": "2026-04-25"
   },
   "script_b": {
     "watch": 0.1,
     "small": 0.3,
-    "full": 0.75,
-    "n_games": 9,
-    "n_small": 9,
+    "full": 2.0,
+    "n_games": 24,
+    "n_small": 24,
     "n_full": 9,
-    "roi_small": -1.0,
-    "roi_full": -1.0,
-    "wr_small": 0.0,
-    "wr_full": 0.0,
-    "note": "n=9 \u2014 directional only (target: 150+)",
-    "last_optimized": "2026-04-24"
+    "roi_small": -0.0909,
+    "roi_full": 0.1111,
+    "wr_small": 0.1667,
+    "wr_full": 0.2222,
+    "note": "n=24 \u2014 directional only (target: 150+)",
+    "last_optimized": "2026-04-25"
   },
   "script_c": {
     "watch": 0.1,
     "small": 0.3,
     "full": 0.75,
-    "n_games": 9,
-    "n_small": 8,
+    "n_games": 24,
+    "n_small": 20,
     "n_full": 0,
     "roi_small": -1.0,
     "roi_full": null,
     "wr_small": 0.0,
     "wr_full": null,
-    "note": "n=9 \u2014 directional only (target: 150+)",
-    "last_optimized": "2026-04-24"
+    "note": "n=24 \u2014 directional only (target: 150+)",
+    "last_optimized": "2026-04-25"
   },
   "script_d": {
     "watch": 0.1,
     "small": 0.3,
     "full": 2.0,
-    "n_games": 9,
+    "n_games": 24,
     "n_small": 0,
     "n_full": 0,
     "roi_small": null,
     "roi_full": null,
     "wr_small": null,
     "wr_full": null,
-    "note": "n=9 \u2014 directional only (target: 150+)",
-    "last_optimized": "2026-04-24"
+    "note": "n=24 \u2014 directional only (target: 150+)",
+    "last_optimized": "2026-04-25"
   },
   "ml_win_prob": {
     "watch": 0.5,
     "small": 0.52,
     "full": 0.65,
-    "n_games": 170,
-    "n_small": 39,
+    "n_games": 185,
+    "n_small": 41,
     "n_full": 3,
     "roi_small": null,
     "roi_full": null,
-    "wr_small": 0.5897,
+    "wr_small": 0.561,
     "wr_full": 0.6667,
-    "note": "n=170",
-    "last_optimized": "2026-04-24"
+    "note": "n=185",
+    "last_optimized": "2026-04-25"
   },
   "k_over_prob": {
     "watch": 0.5,
@@ -149,7 +149,7 @@
     "wr_small": 0.5556,
     "wr_full": 0.5455,
     "note": "n=73 \u2014 directional only (target: 150+)",
-    "last_optimized": "2026-04-24"
+    "last_optimized": "2026-04-25"
   },
   "rl_prob": {
     "watch": 0.5,
@@ -163,20 +163,20 @@
     "wr_small": 1.0,
     "wr_full": null,
     "note": "n=155",
-    "last_optimized": "2026-04-24"
+    "last_optimized": "2026-04-25"
   },
   "ou_prob": {
     "watch": 0.5,
     "small": 0.56,
-    "full": 0.58,
-    "n_games": 83,
-    "n_small": 30,
-    "n_full": 26,
-    "roi_small": -0.0455,
-    "roi_full": -0.0455,
-    "wr_small": 0.5,
-    "wr_full": 0.5,
-    "note": "n=83 \u2014 directional only (target: 150+)",
-    "last_optimized": "2026-04-24"
+    "full": 0.65,
+    "n_games": 92,
+    "n_small": 33,
+    "n_full": 17,
+    "roi_small": -0.0073,
+    "roi_full": 0.0107,
+    "wr_small": 0.5152,
+    "wr_full": 0.5294,
+    "note": "n=92 \u2014 directional only (target: 150+)",
+    "last_optimized": "2026-04-25"
   }
 }

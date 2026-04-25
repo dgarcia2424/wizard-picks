@@ -1,30 +1,32 @@
 TB Stacker v3.7 metrics
-rows_train: 103104
-rows_valid: 9008
-auc: 0.5374035499681346
-logloss: 0.6167048440919034
-brier: 0.21095553040504456
-ap: 0.3361323192132753
-best_iter: 19
-base_rate_valid: 0.29484902309058614
+rows_train: 60651
+rows_valid: 51461
+auc: 0.6128256026674207
+logloss: 0.6070971097561374
+brier: 0.20991772413253784
+ap: 0.39947173442322037
+best_iter: 61
+base_rate_valid: 0.321797089057733
 
-              feature       gain  rank
-        batting_order 253.536560     1
-     exp_pa_heuristic 207.887253     2
-              stand_R 121.195259     3
-              stand_L  64.049286     4
-              stand_S  22.513836     5
-             wind_mph  21.407494     6
-pull_side_wind_vector  18.226318     7
-               temp_f  13.408650     8
-    platoon_same_hand  12.337173     9
-       opp_sp_ff_velo   9.107139    10
-             est_woba   8.498999    11
-         wind_bearing   8.094889    12
-                   ba   7.435053    13
-     lineup_fragility   7.216945    14
-               est_ba   7.086440    15
-              est_slg   6.912500    16
-  velocity_decay_risk   6.591038    17
-                  slg   6.133751    18
-                 woba   5.076631    19
+              feature      gain  rank
+     exp_pa_heuristic 80.293404     1
+        batting_order 78.897408     2
+               est_ba 16.593372     3
+             est_woba 15.416835     4
+                 woba 14.792762     5
+                   ba 11.325060     6
+              stand_L 10.646959     7
+              stand_R 10.510540     8
+             wind_mph  9.835338     9
+               temp_f  9.145336    10
+pull_side_wind_vector  8.423650    11
+         wind_bearing  8.374693    12
+          bias_offset  6.369338    13
+  velocity_decay_risk  6.262491    14
+       opp_sp_ff_velo  6.008058    15
+                  slg  5.946964    16
+              stand_S  5.650099    17
+  projected_total_adj  5.488823    18
+     lineup_fragility  5.455127    19
+    platoon_same_hand  5.124224    20
+              est_slg  4.923323    21

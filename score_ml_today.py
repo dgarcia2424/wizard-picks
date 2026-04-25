@@ -43,6 +43,45 @@ from train_ml_model import (
 )
 
 # ---------------------------------------------------------------------------
+# MARKET-MISS SHRINKAGE CONSTANTS
+# ---------------------------------------------------------------------------
+# Applied when the closing market line is absent and ml_model_vs_vegas_gap
+# cannot be populated with a real value.
+#
+# Mathematical derivation of _MARKET_MISS_LOGIT_SHRINK = 0.50:
+#   For stacker output P to cross 0.7143 (logit = 0.916) after shrinkage:
+#       0.50 * theta >= 0.916  →  theta >= 1.832
+#   With beta ≈ 1.0 (posterior prior centre), theta ≈ logit(xgb_raw),
+#   so xgb_raw must satisfy logit(xgb_raw) >= 1.832  →  xgb_raw >= 0.862.
+#   This aligns with the stated standalone conviction threshold of 0.85.
+_MARKET_MISS_LOGIT_SHRINK: float       = 0.50
+_STANDALONE_CONVICTION_THRESHOLD: float = 0.85
+_THRESHOLD_250: float                   = 250.0 / (250.0 + 100.0)   # ≈ 0.71429
+
+# Features that encode model-vs-market gaps and must NOT be zero-filled.
+# Zero-fill hallucinate perfect agreement; NaN or neutral-0 with shrinkage
+# is the correct treatment.
+_MARKET_GAP_FEATURES: frozenset[str] = frozenset({"ml_model_vs_vegas_gap"})
+
+
+def _detect_market_missing(feat: "pd.Series") -> bool:
+    """
+    Return True when the closing market line is absent from the feature row.
+
+    true_home_prob is populated by pull_odds_history_api.py from the vig-
+    stripped closing Pinnacle line.  When it is NaN or absent, the stacker
+    cannot receive a real ml_model_vs_vegas_gap — market data is missing.
+    """
+    val = feat.get("true_home_prob") if hasattr(feat, "get") else None
+    if val is None:
+        return True
+    try:
+        return not np.isfinite(float(val))
+    except (TypeError, ValueError):
+        return True
+
+
+# ---------------------------------------------------------------------------
 # PATHS
 # ---------------------------------------------------------------------------
 BASE_DIR        = Path(".")
@@ -55,15 +94,15 @@ BP_BURN_PENALTY    = 0.05    # absolute win-prob adjustment when a side is gasse
 MODELS_DIR      = BASE_DIR / "models"
 FEAT_MATRIX     = BASE_DIR / "feature_matrix_enriched_v2.parquet"
 
-# ── v2 ML stack promoted to production (2026-04-23) ──────────────────────
-# Trained on feature_matrix_v2alpha.parquet with bullpen_xfip_diff and
-# thermal_aging learned natively. v1 artifacts retained for rollback.
-FEAT_COLS_PATH  = MODELS_DIR / "ml_feature_cols_v2.json"
-XGB_ML_PATH     = MODELS_DIR / "xgb_ml_v2.json"
-XGB_CAL_PATH    = MODELS_DIR / "xgb_ml_calibrator_v2.pkl"
-STACKER_PATH    = MODELS_DIR / "stacking_lr_ml_v2.pkl"
-TEAM_MODEL_PATH = MODELS_DIR / "team_ml_model_v2.json"
-TEAM_FEAT_PATH  = MODELS_DIR / "team_ml_feat_cols_v2.json"
+# ── ML stack: wired to train_ml_model.py outputs (regularized XGB_PARAMS) ──
+# v2 artifacts (retrain_v2.py, stale since 2026-04-23) are retired.
+# All paths now match OUTPUT_* constants in train_ml_model.py.
+FEAT_COLS_PATH  = MODELS_DIR / "ml_feature_cols.json"
+XGB_ML_PATH     = MODELS_DIR / "xgb_ml.json"
+XGB_CAL_PATH    = MODELS_DIR / "xgb_ml_calibrator.pkl"
+STACKER_PATH    = MODELS_DIR / "stacking_lr_ml.pkl"
+TEAM_MODEL_PATH = MODELS_DIR / "team_ml_model.json"
+TEAM_FEAT_PATH  = MODELS_DIR / "team_ml_feat_cols.json"
 ACTUALS_2026    = DATA_DIR   / "actuals_2026.parquet"
 
 
@@ -364,19 +403,34 @@ def predict_games(date_str: str) -> pd.DataFrame:
         feat["away_rolling_adj_ml_form"] = away_form
         feat["rolling_ml_form_diff"]     = home_form - away_form
 
+        # ── Detect market data availability before any inference ─────────
+        market_missing = _detect_market_missing(feat)
+        if market_missing:
+            print(
+                f"  [MARKET-MISS] {away}@{home}: true_home_prob absent — "
+                f"logit shrinkage ({_MARKET_MISS_LOGIT_SHRINK}x) will be applied."
+            )
+
         # ── L1 feature slice + validation ────────────────────────────────
-        # reindex instead of direct slice so columns absent from the historical
-        # feature matrix (e.g. wind_vector_out added post-train) fill to 0
-        feat_df = pd.DataFrame([feat.reindex(feat_cols, fill_value=0.0).fillna(0.0)], columns=feat_cols)
+        # Two-pass reindex: non-market features filled 0.0 for XGBoost's
+        # default-branch router; market-gap features left as NaN so they
+        # never silently encode false model-market agreement at L1.
+        # (ml_model_vs_vegas_gap is a stacking feature and not in feat_cols,
+        # so this guard is forward-compatible if feature sets drift.)
+        feat_reindexed = feat.reindex(feat_cols)
+        non_market_l1  = [c for c in feat_cols if c not in _MARKET_GAP_FEATURES]
+        feat_reindexed[non_market_l1] = feat_reindexed[non_market_l1].fillna(0.0)
+        feat_df = pd.DataFrame([feat_reindexed], columns=feat_cols)
 
         # --- START VALIDATION BLOCK ---
         expected_cols = json.load(open(FEAT_COLS_PATH))
         if expected_cols != list(feat_df.columns):
             print(f"[WARN] ML scorer: feature list mismatch for {home}@{away} — cols may have drifted")
-        nan_cols = feat_df.columns[feat_df.isnull().any()].tolist()
+        nan_cols = [c for c in feat_df.columns
+                    if feat_df[c].isnull().any() and c not in _MARKET_GAP_FEATURES]
         if nan_cols:
             print(f"[WARN] ML scorer: NaNs after reindex for {home}@{away} in {nan_cols} — filling 0")
-            feat_df = feat_df.fillna(0.0)
+            feat_df[nan_cols] = feat_df[nan_cols].fillna(0.0)
         # --- END VALIDATION BLOCK ---
 
         X_l1  = feat_df.values.astype(np.float32)
@@ -395,16 +449,34 @@ def predict_games(date_str: str) -> pd.DataFrame:
         seg   = _derive_segment_id(feat_row_df)
         stk_p = stacker.predict(np.array([raw]), feat_row_df, seg)[0]
 
+        # ── Market-miss logit shrinkage (applied externally for BayesianStackerML) ──
+        # When the closing market line is absent, the stacker's ml_model_vs_vegas_gap
+        # cannot be populated with a real value.  Shrinking the stacker's output
+        # logit by lambda=0.50 prevents false positives at the -250 threshold
+        # unless the base XGBoost conviction is overwhelming (>= 0.85).
+        if market_missing:
+            logit_stk = (
+                np.log(np.clip(stk_p, 1e-6, 1.0 - 1e-6))
+                - np.log(1.0 - np.clip(stk_p, 1e-6, 1.0 - 1e-6))
+            )
+            logit_stk = logit_stk * _MARKET_MISS_LOGIT_SHRINK
+            stk_p     = float(1.0 / (1.0 + np.exp(-logit_stk)))
+
+            # Ceiling gate: block -250 crossing unless standalone conviction
+            if raw < _STANDALONE_CONVICTION_THRESHOLD:
+                stk_p = min(stk_p, _THRESHOLD_250 - 1e-4)
+
         act_row = actuals.get(gk, {})
         rows.append({
-            "home_team":         home,
-            "away_team":         away,
-            "home_sp":           home_sp,
-            "away_sp":           away_sp,
-            "xgb_l1":            round(cal_p,  3),
-            "stacker_l2":        round(stk_p,  3),
-            "team_log_odds":     round(team_lo, 3),
-            "actual_home_win":   act_row.get("home_win"),
+            "home_team":           home,
+            "away_team":           away,
+            "home_sp":             home_sp,
+            "away_sp":             away_sp,
+            "xgb_l1":              round(cal_p,  3),
+            "stacker_l2":          round(stk_p,  3),
+            "team_log_odds":       round(team_lo, 3),
+            "actual_home_win":     act_row.get("home_win"),
+            "market_data_missing": market_missing,
         })
 
     df = pd.DataFrame(rows)

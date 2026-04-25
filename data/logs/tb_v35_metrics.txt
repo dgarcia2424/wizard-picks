@@ -1,30 +1,32 @@
 TB Stacker v3.5 leak-free metrics
-rows_train: 103104
-rows_valid: 9008
-auc: 0.5366539165161907
-logloss: 0.6272869670789348
-brier: 0.21375222504138947
-ap: 0.3365311411367924
-best_iter: 28
-base_rate_valid: 0.29484902309058614
+rows_train: 60651
+rows_valid: 51461
+auc: 0.6123331443238964
+logloss: 0.607313198865922
+brier: 0.2100057452917099
+ap: 0.39876237557037897
+best_iter: 61
+base_rate_valid: 0.321797089057733
 
 Feature importance (gain)
-              feature       gain  rank
-        batting_order 197.525864     1
-     exp_pa_heuristic 167.375824     2
-              stand_R 121.667870     3
-              stand_L 110.471252     4
-pull_side_wind_vector  35.923061     5
-              stand_S  33.382290     6
-    platoon_same_hand  17.954443     7
-             wind_mph  14.554490     8
-               temp_f  12.898080     9
-             est_woba   8.623097    10
-  velocity_decay_risk   7.680712    11
-     lineup_fragility   7.173709    12
-              est_slg   6.979040    13
-               est_ba   6.755712    14
-         wind_bearing   6.601530    15
-                  slg   6.513315    16
-                   ba   6.320385    17
-                 woba   6.135762    18
+              feature      gain  rank
+     exp_pa_heuristic 72.864960     1
+        batting_order 69.895142     2
+              stand_R 31.155611     3
+              stand_L 19.007351     4
+               est_ba 16.458298     5
+                 woba 12.465173     6
+pull_side_wind_vector 10.305748     7
+             wind_mph 10.034917     8
+                   ba  9.380165     9
+               temp_f  9.051393    10
+             est_woba  8.764517    11
+         wind_bearing  6.344015    12
+  velocity_decay_risk  6.336288    13
+                  slg  5.707785    14
+              est_slg  5.600524    15
+    platoon_same_hand  5.543995    16
+     lineup_fragility  5.375434    17
+  projected_total_adj  5.245233    18
+              stand_S  5.007137    19
+          bias_offset  4.603854    20
